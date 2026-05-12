@@ -58,10 +58,10 @@ build/sus2-sh train \
 
 Current limitations:
 
-- linear energy-only normal-equation smoke trainer;
+- E/F/S normal-equation smoke harness;
 - fixed initial radial scaling slots per `k`;
-- force chain-rule path is present in `check-grad`, but force/stress loss is not
-  wired into the SUS2 optimizer yet;
+- force/stress chain-rule paths are present, but the production SUS2-MLIP BFGS
+  path is not wired yet;
 - no GPUMD runtime kernel yet.
 
 ## Chain-Rule Check

@@ -35,6 +35,10 @@ Important limitation:
   architecture. The production implementation should reuse the existing
   SUS2-MLIP C++ model/trainer interfaces and replace only the angular basis,
   scalar generation, and reverse-mode derivative path.
+- The production BFGS path still needs the SH equivalent of
+  `AccumulateCombinationGrad`, including analytic gradients with respect to
+  radial coefficients and scaling parameters. Linear normal equations are only a
+  check around the linear coefficient surface.
 
 ## Server Smoke Install
 
@@ -94,3 +98,24 @@ Notes:
 - A Wigner-3j factorial bug was found by the first chain-rule check. The
   four-factor path can use intermediate `L=6`, so factorial support must exceed
   12. The prototype now uses `tgamma`.
+
+## E/F/S Harness Update
+
+The smoke harness now includes:
+
+- energy rows from scalar features;
+- force rows from the same reverse-mode SH chain rule;
+- stress rows using the SUS2 sign convention
+  `stress[a][b] -= dE_site/d r_ij[a] * r_ij[b]`.
+
+The Cu-Zr file at `/work/phy-weigw/hyx/cu-zr/sus2-sh/train.cfg` has no
+`PlusStress`, `Stress`, or `Virial` blocks, so `stress_rows=0` for that data.
+
+Queue-33 validation job:
+
+```text
+job_id = 3657525
+queue = 33
+workdir = /work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+script = scripts/cuzr_l3k3_b5_efs_33.lsf
+```

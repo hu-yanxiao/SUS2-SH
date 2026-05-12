@@ -41,6 +41,8 @@ struct Config {
   std::array<Vec3, 3> lattice{};
   std::vector<Atom> atoms;
   double energy = 0.0;
+  bool has_stress = false;
+  std::array<std::array<double, 3>, 3> stress{};
 };
 
 struct Options {
@@ -57,6 +59,9 @@ struct Options {
   int max_iter = 1000;
   double ridge = 1.0e-10;
   double fd_step = 1.0e-5;
+  double energy_weight = 1.0;
+  double force_weight = 1.0;
+  double stress_weight = 0.0;
 };
 
 std::vector<std::string> Split(const std::string& s) {
@@ -108,6 +113,27 @@ std::vector<Config> ReadCfgs(const std::string& path, int max_configs) {
       } else if (toks[0] == "Energy") {
         std::getline(in, line);
         cfg.energy = std::stod(Split(line).at(0));
+      } else if (toks[0] == "PlusStress:" || toks[0] == "Virial:" || toks[0] == "Stress:") {
+        auto keys = toks;
+        keys.erase(keys.begin());
+        std::getline(in, line);
+        auto vals = Split(line);
+        if (vals.size() < keys.size()) throw std::runtime_error("broken stress row");
+        cfg.has_stress = true;
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+          const double value = std::stod(vals[i]);
+          const std::string& key = keys[i];
+          if (key == "xx") cfg.stress[0][0] = value;
+          else if (key == "yy") cfg.stress[1][1] = value;
+          else if (key == "zz") cfg.stress[2][2] = value;
+          else if (key == "xy") cfg.stress[0][1] = cfg.stress[1][0] = value;
+          else if (key == "xz") cfg.stress[0][2] = cfg.stress[2][0] = value;
+          else if (key == "yz") cfg.stress[1][2] = cfg.stress[2][1] = value;
+        }
+        if (toks[0] == "Stress:") {
+          for (auto& row : cfg.stress)
+            for (double& v : row) v *= -1.0;
+        }
       }
     }
     if (!cfg.atoms.empty()) cfgs.push_back(std::move(cfg));
@@ -486,12 +512,17 @@ class Evaluator {
     return total;
   }
 
-  double EnergyAndForces(const Config& cfg, const std::vector<double>& coeffs,
-                         std::vector<Vec3>* forces) const {
+  double EnergyForcesStress(const Config& cfg, const std::vector<double>& coeffs,
+                            std::vector<Vec3>* forces,
+                            std::array<std::array<double, 3>, 3>* stress) const {
     if (static_cast<int>(coeffs.size()) != feature_count_) {
       throw std::runtime_error("coefficient count does not match topology");
     }
     if (forces != nullptr) forces->assign(cfg.atoms.size(), Vec3{});
+    if (stress != nullptr) {
+      for (auto& row : *stress)
+        for (double& v : row) v = 0.0;
+    }
     double total_energy = 0.0;
 
     for (std::size_t center = 0; center < cfg.atoms.size(); ++center) {
@@ -499,12 +530,55 @@ class Evaluator {
       std::vector<VecC> adj;
       const double site_e = SiteEnergyAndBasicAdjoints(basic, coeffs, &adj);
       total_energy += site_e;
-      if (forces != nullptr) {
-        AccumulateForcesFromBasicAdjoints(cfg, static_cast<int>(center), adj, forces);
+      if (forces != nullptr || stress != nullptr) {
+        AccumulateEfsFromBasicAdjoints(cfg, static_cast<int>(center), adj, forces, stress);
       }
     }
     return total_energy;
   }
+
+  double EnergyAndForces(const Config& cfg, const std::vector<double>& coeffs,
+                         std::vector<Vec3>* forces) const {
+    return EnergyForcesStress(cfg, coeffs, forces, nullptr);
+  }
+
+  std::vector<std::vector<double>> ForceDesignRows(const Config& cfg) const {
+    const int rows = static_cast<int>(cfg.atoms.size()) * 3;
+    std::vector<std::vector<double>> out(rows, std::vector<double>(feature_count_, 0.0));
+    std::vector<double> coeffs(feature_count_, 0.0);
+    std::vector<Vec3> forces;
+    for (int p = 1; p < feature_count_; ++p) {
+      coeffs[p] = 1.0;
+      EnergyForcesStress(cfg, coeffs, &forces, nullptr);
+      for (std::size_t atom = 0; atom < cfg.atoms.size(); ++atom) {
+        out[3 * atom + 0][p] = forces[atom].x;
+        out[3 * atom + 1][p] = forces[atom].y;
+        out[3 * atom + 2][p] = forces[atom].z;
+      }
+      coeffs[p] = 0.0;
+    }
+    return out;
+  }
+
+  std::vector<std::vector<double>> StressDesignRows(const Config& cfg) const {
+    std::vector<std::vector<double>> out(6, std::vector<double>(feature_count_, 0.0));
+    std::vector<double> coeffs(feature_count_, 0.0);
+    std::array<std::array<double, 3>, 3> stress{};
+    for (int p = 1; p < feature_count_; ++p) {
+      coeffs[p] = 1.0;
+      EnergyForcesStress(cfg, coeffs, nullptr, &stress);
+      out[0][p] = stress[0][0];
+      out[1][p] = stress[1][1];
+      out[2][p] = stress[2][2];
+      out[3][p] = stress[1][2];
+      out[4][p] = stress[0][2];
+      out[5][p] = stress[0][1];
+      coeffs[p] = 0.0;
+    }
+    return out;
+  }
+
+  const std::vector<std::pair<double, double>>& RadialScaling() const { return radial_scaling_; }
 
  private:
   using VecC = std::vector<Cplx>;
@@ -550,9 +624,10 @@ class Evaluator {
     return out;
   }
 
-  void AccumulateForcesFromBasicAdjoints(const Config& cfg, int center,
-                                         const std::vector<VecC>& adj,
-                                         std::vector<Vec3>* forces) const {
+  void AccumulateEfsFromBasicAdjoints(const Config& cfg, int center,
+                                      const std::vector<VecC>& adj,
+                                      std::vector<Vec3>* forces,
+                                      std::array<std::array<double, 3>, 3>* stress) const {
     double min_len = 1.0e100;
     for (const auto& a : cfg.lattice) min_len = std::min(min_len, Norm(a));
     const int image_range = std::max(1, static_cast<int>(std::ceil(opts_.cutoff / min_len)) + 1);
@@ -593,12 +668,23 @@ class Evaluator {
                 grad_e_disp.z += (a * dz).real();
               }
             }
-            (*forces)[j].x -= grad_e_disp.x;
-            (*forces)[j].y -= grad_e_disp.y;
-            (*forces)[j].z -= grad_e_disp.z;
-            (*forces)[center].x += grad_e_disp.x;
-            (*forces)[center].y += grad_e_disp.y;
-            (*forces)[center].z += grad_e_disp.z;
+            if (forces != nullptr) {
+              (*forces)[j].x -= grad_e_disp.x;
+              (*forces)[j].y -= grad_e_disp.y;
+              (*forces)[j].z -= grad_e_disp.z;
+              (*forces)[center].x += grad_e_disp.x;
+              (*forces)[center].y += grad_e_disp.y;
+              (*forces)[center].z += grad_e_disp.z;
+            }
+            if (stress != nullptr) {
+              const double g[3] = {grad_e_disp.x, grad_e_disp.y, grad_e_disp.z};
+              const double rv[3] = {disp.x, disp.y, disp.z};
+              for (int a = 0; a < 3; ++a) {
+                for (int b = 0; b < 3; ++b) {
+                  (*stress)[a][b] -= g[a] * rv[b];
+                }
+              }
+            }
           }
         }
       }
@@ -784,7 +870,10 @@ std::vector<double> SolveLinearSystem(std::vector<std::vector<double>> a, std::v
 }
 
 void SaveModel(const std::string& path, const Options& opts, const Topology& top,
-               const std::vector<double>& coeffs, double mae) {
+               const Evaluator& eval, const std::vector<double>& coeffs,
+               double energy_mae, double energy_rmse, double force_mae, double force_rmse,
+               double stress_mae, double stress_rmse, int stress_rows,
+               const std::vector<int>& species) {
   std::ofstream out(path);
   if (!out) throw std::runtime_error("cannot write model: " + path);
   out << std::setprecision(17);
@@ -799,8 +888,48 @@ void SaveModel(const std::string& path, const Options& opts, const Topology& top
   out << "  \"radial_basis_type\": \"" << opts.radial_basis_type << "\",\n";
   out << "  \"radial_basis_size\": " << opts.radial_basis_size << ",\n";
   out << "  \"cutoff\": " << opts.cutoff << ",\n";
+  out << "  \"energy_weight\": " << opts.energy_weight << ",\n";
+  out << "  \"force_weight\": " << opts.force_weight << ",\n";
+  out << "  \"stress_weight\": " << opts.stress_weight << ",\n";
+  out << "  \"max_configs\": " << opts.max_configs << ",\n";
   out << "  \"scalar_count_without_bias\": " << top.couplings.size() << ",\n";
-  out << "  \"energy_mae_eV_per_atom\": " << mae << ",\n";
+  out << "  \"energy_mae_eV_per_atom\": " << energy_mae << ",\n";
+  out << "  \"energy_rmse_eV_per_atom\": " << energy_rmse << ",\n";
+  out << "  \"force_mae_eV_A\": " << force_mae << ",\n";
+  out << "  \"force_rmse_eV_A\": " << force_rmse << ",\n";
+  out << "  \"stress_rows\": " << stress_rows << ",\n";
+  out << "  \"stress_mae\": " << stress_mae << ",\n";
+  out << "  \"stress_rmse\": " << stress_rmse << ",\n";
+  out << "  \"species\": [";
+  for (std::size_t i = 0; i < species.size(); ++i) {
+    if (i) out << ", ";
+    out << species[i];
+  }
+  out << "],\n";
+  out << "  \"radial_scaling_by_k\": [";
+  const auto& scaling = eval.RadialScaling();
+  for (std::size_t i = 0; i < scaling.size(); ++i) {
+    if (i) out << ", ";
+    out << "{\"k\": " << i + 1 << ", \"scale\": " << scaling[i].first
+        << ", \"shift\": " << scaling[i].second << "}";
+  }
+  out << "],\n";
+  out << "  \"channels\": [";
+  for (std::size_t i = 0; i < top.channels.size(); ++i) {
+    if (i) out << ", ";
+    out << "{\"id\": " << i << ", \"l\": " << top.channels[i].l
+        << ", \"k\": " << top.channels[i].k << "}";
+  }
+  out << "],\n";
+  out << "  \"couplings\": [";
+  for (std::size_t i = 0; i < top.couplings.size(); ++i) {
+    const auto& c = top.couplings[i];
+    if (i) out << ", ";
+    out << "{\"feature\": " << i + 1 << ", \"order\": " << c.order
+        << ", \"q\": [" << c.q[0] << ", " << c.q[1] << ", " << c.q[2]
+        << ", " << c.q[3] << "], \"intermediate_l\": " << c.intermediate_l << "}";
+  }
+  out << "],\n";
   out << "  \"coefficients\": [";
   for (std::size_t i = 0; i < coeffs.size(); ++i) {
     if (i) out << ", ";
@@ -808,6 +937,19 @@ void SaveModel(const std::string& path, const Options& opts, const Topology& top
   }
   out << "]\n";
   out << "}\n";
+}
+
+void AddNormalRow(std::vector<std::vector<double>>& normal, std::vector<double>& rhs,
+                  const std::vector<double>& row, double target, double weight) {
+  if (weight == 0.0) return;
+  const double s = std::sqrt(weight);
+  const double y = s * target;
+  const int n = static_cast<int>(row.size());
+  for (int i = 0; i < n; ++i) {
+    const double xi = s * row[i];
+    rhs[i] += xi * y;
+    for (int j = 0; j <= i; ++j) normal[i][j] += xi * (s * row[j]);
+  }
 }
 
 void PrintTopology(const Options& opts) {
@@ -842,22 +984,51 @@ void Train(const Options& opts) {
 
   std::vector<std::vector<double>> x_cache;
   std::vector<double> y_cache;
+  std::vector<std::vector<std::vector<double>>> force_row_cache;
+  std::vector<std::vector<std::vector<double>>> stress_row_cache;
   x_cache.reserve(cfgs.size());
   y_cache.reserve(cfgs.size());
+  force_row_cache.reserve(cfgs.size());
+  stress_row_cache.reserve(cfgs.size());
+  std::vector<int> species;
   for (const auto& cfg : cfgs) {
     x_cache.push_back(eval.Features(cfg));
     y_cache.push_back(cfg.energy / std::max<std::size_t>(1, cfg.atoms.size()));
+    if (opts.force_weight != 0.0) force_row_cache.push_back(eval.ForceDesignRows(cfg));
+    if (opts.stress_weight != 0.0 && cfg.has_stress) {
+      stress_row_cache.push_back(eval.StressDesignRows(cfg));
+    } else {
+      stress_row_cache.push_back({});
+    }
+    for (const auto& atom : cfg.atoms) {
+      if (std::find(species.begin(), species.end(), atom.type) == species.end()) {
+        species.push_back(atom.type);
+      }
+    }
   }
+  std::sort(species.begin(), species.end());
 
   const int p_count = eval.FeatureCount();
   std::vector<std::vector<double>> normal(p_count, std::vector<double>(p_count, 0.0));
   std::vector<double> rhs(p_count, 0.0);
   for (std::size_t row = 0; row < x_cache.size(); ++row) {
-    const auto& x = x_cache[row];
-    const double y = y_cache[row];
-    for (int i = 0; i < p_count; ++i) {
-      rhs[i] += x[i] * y;
-      for (int j = 0; j <= i; ++j) normal[i][j] += x[i] * x[j];
+    AddNormalRow(normal, rhs, x_cache[row], y_cache[row], opts.energy_weight);
+    if (opts.force_weight != 0.0) {
+      int comp = 0;
+      for (const auto& atom : cfgs[row].atoms) {
+        const double targets[3] = {atom.force.x, atom.force.y, atom.force.z};
+        for (int a = 0; a < 3; ++a, ++comp) {
+          AddNormalRow(normal, rhs, force_row_cache[row][comp], targets[a], opts.force_weight);
+        }
+      }
+    }
+    if (opts.stress_weight != 0.0 && cfgs[row].has_stress) {
+      const double targets[6] = {cfgs[row].stress[0][0], cfgs[row].stress[1][1],
+                                 cfgs[row].stress[2][2], cfgs[row].stress[1][2],
+                                 cfgs[row].stress[0][2], cfgs[row].stress[0][1]};
+      for (int a = 0; a < 6; ++a) {
+        AddNormalRow(normal, rhs, stress_row_cache[row][a], targets[a], opts.stress_weight);
+      }
     }
   }
   for (int i = 0; i < p_count; ++i) {
@@ -867,12 +1038,59 @@ void Train(const Options& opts) {
   w = SolveLinearSystem(std::move(normal), std::move(rhs));
 
   double mae = 0.0;
+  double mse = 0.0;
+  double force_mae = 0.0;
+  double force_mse = 0.0;
+  int force_count = 0;
+  double stress_mae = 0.0;
+  double stress_mse = 0.0;
+  int stress_count = 0;
   for (std::size_t i = 0; i < x_cache.size(); ++i) {
-    mae += std::abs(DotVec(w, x_cache[i]) - y_cache[i]);
+    const double e_err = DotVec(w, x_cache[i]) - y_cache[i];
+    mae += std::abs(e_err);
+    mse += e_err * e_err;
+    std::vector<Vec3> pred_forces;
+    std::array<std::array<double, 3>, 3> pred_stress{};
+    eval.EnergyForcesStress(cfgs[i], w, &pred_forces, &pred_stress);
+    for (std::size_t atom = 0; atom < cfgs[i].atoms.size(); ++atom) {
+      const double diffs[3] = {
+          pred_forces[atom].x - cfgs[i].atoms[atom].force.x,
+          pred_forces[atom].y - cfgs[i].atoms[atom].force.y,
+          pred_forces[atom].z - cfgs[i].atoms[atom].force.z};
+      for (double d : diffs) {
+        force_mae += std::abs(d);
+        force_mse += d * d;
+        ++force_count;
+      }
+    }
+    if (cfgs[i].has_stress) {
+      const double pred[6] = {pred_stress[0][0], pred_stress[1][1], pred_stress[2][2],
+                              pred_stress[1][2], pred_stress[0][2], pred_stress[0][1]};
+      const double target[6] = {cfgs[i].stress[0][0], cfgs[i].stress[1][1], cfgs[i].stress[2][2],
+                                cfgs[i].stress[1][2], cfgs[i].stress[0][2], cfgs[i].stress[0][1]};
+      for (int a = 0; a < 6; ++a) {
+        const double d = pred[a] - target[a];
+        stress_mae += std::abs(d);
+        stress_mse += d * d;
+        ++stress_count;
+      }
+    }
   }
   mae /= x_cache.size();
-  SaveModel(opts.model_out, opts, top, w, mae);
+  const double rmse = std::sqrt(mse / x_cache.size());
+  force_mae /= std::max(1, force_count);
+  const double force_rmse = std::sqrt(force_mse / std::max(1, force_count));
+  if (stress_count > 0) stress_mae /= stress_count;
+  const double stress_rmse = stress_count > 0 ? std::sqrt(stress_mse / stress_count) : 0.0;
+  SaveModel(opts.model_out, opts, top, eval, w, mae, rmse, force_mae, force_rmse,
+            stress_mae, stress_rmse, stress_count, species);
   std::cout << "final_train_energy_mae_eV_per_atom=" << mae << "\n";
+  std::cout << "final_train_energy_rmse_eV_per_atom=" << rmse << "\n";
+  std::cout << "final_train_force_mae_eV_A=" << force_mae << "\n";
+  std::cout << "final_train_force_rmse_eV_A=" << force_rmse << "\n";
+  std::cout << "final_train_stress_rows=" << stress_count << "\n";
+  std::cout << "final_train_stress_mae=" << stress_mae << "\n";
+  std::cout << "final_train_stress_rmse=" << stress_rmse << "\n";
   std::cout << "wrote_model=" << opts.model_out << "\n";
 }
 
@@ -939,6 +1157,9 @@ Options ParseOptions(int argc, char** argv) {
     else if (key == "--max-configs") opts.max_configs = std::stoi(need_value(key));
     else if (key == "--max-iter") opts.max_iter = std::stoi(need_value(key));
     else if (key == "--fd-step") opts.fd_step = std::stod(need_value(key));
+    else if (key == "--energy-weight") opts.energy_weight = std::stod(need_value(key));
+    else if (key == "--force-weight") opts.force_weight = std::stod(need_value(key));
+    else if (key == "--stress-weight") opts.stress_weight = std::stod(need_value(key));
     else throw std::runtime_error("unknown option: " + key);
   }
   if ((opts.command == "train" || opts.command == "check-grad") && opts.train_cfg.empty()) {
