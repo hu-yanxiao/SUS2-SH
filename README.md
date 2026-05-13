@@ -44,6 +44,21 @@ bin/mlp-sus2 init-sh untrained_sus2sh_l3k3_b5_l3322.mtp \
   --radial-basis-type=RBChebyshev_sss
 ```
 
+For 6body models, pass five body-specific l cutoffs. The current 6body
+generator uses the rank-diagonal standard-tree rule:
+
+```bash
+bin/mlp-sus2 init-sh untrained_sus2sh_l3k3_b6_l33222.mtp \
+  --species-count=2 \
+  --l-max=3 \
+  --k-max=3 \
+  --body-order=6 \
+  --body-l-max=3,3,2,2,2 \
+  --cutoff=7.5 \
+  --radial-basis-size=10 \
+  --radial-basis-type=RBChebyshev_sss
+```
+
 Then train through the normal SUS2 path:
 
 ```bash

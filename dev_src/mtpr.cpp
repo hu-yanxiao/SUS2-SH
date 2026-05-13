@@ -571,7 +571,7 @@ void MLMTPR::Load(const string& filename)
 	potential_tag = "";
 	is_sh_potential_ = false;
 	sh_products_.clear();
-	sh_body_l_max_.assign(6, 0);
+	sh_body_l_max_.assign(7, 0);
 	if (tmpstr == "potential_tag")
 	{
 		getline(ifs, tmpstr);
@@ -603,14 +603,15 @@ void MLMTPR::Load(const string& filename)
 		ifs >> tmpstr;
 		if (tmpstr == "sh_body_l_max") {
 			std::vector<int> body_values;
-			ReadIntList(ifs, body_values, 4);
-			sh_body_l_max_.assign(6, sh_l_max_);
-			for (int body = 2; body <= 5; ++body)
+			const int body_lmax_count = sh_body_order_ >= 6 ? 5 : 4;
+			ReadIntList(ifs, body_values, body_lmax_count);
+			sh_body_l_max_.assign(7, sh_l_max_);
+			for (int body = 2; body <= 1 + body_lmax_count; ++body)
 				sh_body_l_max_[body] = body_values[body - 2];
 			ifs.ignore(1000, '\n');
 			ifs >> tmpstr;
 		} else {
-			sh_body_l_max_.assign(6, sh_l_max_);
+			sh_body_l_max_.assign(7, sh_l_max_);
 		}
 	}
 
@@ -752,13 +753,13 @@ void MLMTPR::Load(const string& filename)
 			ERROR("SUS2-SH L header is inconsistent with sh_l_max");
 		if (radial_func_count != sh_k_max_ * L)
 			ERROR("SUS2-SH radial_funcs_count must equal sh_k_max * (sh_l_max + 1)");
-		if (sh_body_order_ < 2 || sh_body_order_ > 5)
-			ERROR("SUS2-SH sh_body_order should be in [2,5]");
+		if (sh_body_order_ < 2 || sh_body_order_ > 6)
+			ERROR("SUS2-SH sh_body_order should be in [2,6]");
 		if (sh_parity_ != "even")
 			ERROR("SUS2-SH currently supports even parity only");
-		if (sh_body_l_max_.size() < 6)
-			sh_body_l_max_.assign(6, sh_l_max_);
-		for (int body = 2; body <= 5; ++body)
+		if (sh_body_l_max_.size() < 7)
+			sh_body_l_max_.assign(7, sh_l_max_);
+		for (int body = 2; body <= sh_body_order_; ++body)
 			if (sh_body_l_max_[body] < 0 || sh_body_l_max_[body] > sh_l_max_)
 				ERROR("SUS2-SH sh_body_l_max entry is out of range");
 	}
@@ -1199,10 +1200,13 @@ void MLMTPR::Save(const string& filename)
 		ofs << "sh_body_order = " << sh_body_order_ << endl;
 		ofs << "sh_parity = " << sh_parity_ << endl;
 		std::vector<int> body_lmax = sh_body_l_max_;
-		if (body_lmax.size() < 6)
-			body_lmax.assign(6, sh_l_max_);
+		if (body_lmax.size() < 7)
+			body_lmax.assign(7, sh_l_max_);
 		ofs << "sh_body_l_max = {" << body_lmax[2] << ", " << body_lmax[3]
-		    << ", " << body_lmax[4] << ", " << body_lmax[5] << "}" << endl;
+		    << ", " << body_lmax[4] << ", " << body_lmax[5];
+		if (sh_body_order_ >= 6)
+			ofs << ", " << body_lmax[6];
+		ofs << "}" << endl;
 	}
 	else
 		ofs << "potential_tag = " << "" << endl;

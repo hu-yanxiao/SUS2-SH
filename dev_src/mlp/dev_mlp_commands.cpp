@@ -127,7 +127,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("init-sh",
 		"writes an untrained SUS2-SH model",
-		"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=5 --body-l-max=3,3,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
+		"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 	) {
 		if (args.size() != 1) {
 			std::cout << "mlp-sus2 init-sh: 1 output .mtp argument is required\n";

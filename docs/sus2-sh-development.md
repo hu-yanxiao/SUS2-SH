@@ -16,9 +16,20 @@ The product graph stores real-basis Clebsch-Gordan contractions as `sh_products 
 
 ## l/k/body enumeration
 
-Use `--body-l-max=body2,body3,body4,body5` for body-specific angular truncation. For example, `--l-max=3 --body-l-max=3,3,2,2` keeps 2-body and 3-body terms through `l=3`, while 4-body and 5-body terms use `l<=2`.
+Use `--body-l-max=body2,body3,body4,body5` for body-specific angular truncation through 5body, and `--body-l-max=body2,body3,body4,body5,body6` when `--body-order=6`. For example, `--l-max=3 --body-l-max=3,3,2,2,2` keeps 2-body and 3-body terms through `l=3`, while 4-body, 5body, and 6body terms use `l<=2`.
 
 Factors are enumerated in canonical order with both `l1 >= l2 >= ...` and `k1 >= k2 >= ...`. Only even parity scalar paths are kept. The graph is built as the minimal shared DAG closure of the selected scalar targets; unused `(k,l,m)` channels and unused tensor-product intermediates are not generated.
+
+The 6body path uses five SH factors and the rank-diagonal standard tree:
+
+```text
+A = (q0 x q1) -> L
+B = (q2 x q3) -> L
+C = (B  x q4) -> L
+S = (A  x C ) -> 0
+```
+
+This is an intentional truncation of the full 2+3 tree. It preserves the scalar construction in a standard CG tree while reducing the number of 6body scalar paths by enforcing the same intermediate rank `L` on the pair and triple branches.
 
 ## l3k3 scalar counts
 
@@ -26,6 +37,7 @@ With `k=3`, `l=3`, even parity, and all body orders through 5:
 
 - `--body-l-max=3,3,3,3`: 2-body 3, 3-body 24, 4-body 80, 5-body 615, total 722 scalars.
 - `--body-l-max=3,3,2,2`: the raw enumeration has 317 candidate scalars. After removing CG paths with zero intermediate tensors, the active model has 261 scalar basis functions.
+- `--body-order=6 --body-l-max=3,3,2,2,2`: the rank-diagonal 6body extension generates 621 active scalar basis functions in total. This keeps the 261 active 2body-through-5body scalars and adds the rank-diagonal 6body scalars after the same zero-path pruning.
 
 Zero intermediate tensors can arise when identical tensor factors are coupled into an exchange-antisymmetric rank. For example, `(q10_l2_k2 x q10_l2_k2) -> L=1` is zero because swapping the two identical `l=2` factors gives the CG phase `(-1)^(2+2-1) = -1`. The generator must combine CG records before allocating nodes, and must not keep scalars depending on these zero tensors.
 

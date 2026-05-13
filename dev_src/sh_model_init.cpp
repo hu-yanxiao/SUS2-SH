@@ -57,6 +57,7 @@ struct ScalarSpec {
 	int q1;
 	int q2;
 	int q3;
+	int q4;
 	int intermediate_l;
 };
 
@@ -84,9 +85,11 @@ std::string StringOpt(const std::map<std::string, std::string>& opts, const std:
 	return it->second;
 }
 
-std::vector<int> ParseBodyLMax(const std::map<std::string, std::string>& opts, int global_lmax)
+std::vector<int> ParseBodyLMax(const std::map<std::string, std::string>& opts,
+                               int global_lmax,
+                               int body_order)
 {
-	std::vector<int> body_lmax(6, global_lmax);
+	std::vector<int> body_lmax(7, global_lmax);
 	std::map<std::string, std::string>::const_iterator it = opts.find("body-l-max");
 	if (it != opts.end() && !it->second.empty()) {
 		std::vector<int> values;
@@ -96,12 +99,13 @@ std::vector<int> ParseBodyLMax(const std::map<std::string, std::string>& opts, i
 			if (!token.empty())
 				values.push_back(std::stoi(token));
 		}
-		if (values.size() != 4)
-			ERROR("--body-l-max should contain four comma-separated integers for body 2,3,4,5.");
-		for (int body = 2; body <= 5; ++body)
+		const size_t expected = body_order >= 6 ? 5 : 4;
+		if (values.size() != expected)
+			ERROR("--body-l-max should contain four values for body 2..5, or five values for body 2..6.");
+		for (int body = 2; body <= 1 + static_cast<int>(values.size()); ++body)
 			body_lmax[body] = values[body - 2];
 	}
-	for (int body = 2; body <= 5; ++body) {
+	for (int body = 2; body <= 6; ++body) {
 		const std::string opt = "body" + std::to_string(body) + "-l-max";
 		std::map<std::string, std::string>::const_iterator one = opts.find(opt);
 		if (one != opts.end() && !one->second.empty())
@@ -390,9 +394,9 @@ public:
 		rec(0, lmax_, kmax_ - 1);
 	}
 
-	void AddScalarSpec(int body_order, int q0, int q1, int q2, int q3, int intermediate_l)
+	void AddScalarSpec(int body_order, int q0, int q1, int q2, int q3, int q4, int intermediate_l)
 	{
-		ScalarSpec spec = {body_order, q0, q1, q2, q3, intermediate_l};
+		ScalarSpec spec = {body_order, q0, q1, q2, q3, q4, intermediate_l};
 		scalar_specs_.push_back(spec);
 		required_q_[q0] = true;
 		if (body_order >= 3)
@@ -401,6 +405,8 @@ public:
 			required_q_[q2] = true;
 		if (body_order >= 5)
 			required_q_[q3] = true;
+		if (body_order >= 6)
+			required_q_[q4] = true;
 	}
 
 	void CollectScalarSpecs(int body_order)
@@ -411,13 +417,13 @@ public:
 		if (body_order >= 2) {
 			EnumerateFactorTuples(1, 2, [&](const std::vector<int>& qids) {
 				if (q_[qids[0]].l == 0)
-					AddScalarSpec(2, qids[0], -1, -1, -1, 0);
+					AddScalarSpec(2, qids[0], -1, -1, -1, -1, 0);
 			});
 		}
 		if (body_order >= 3) {
 			EnumerateFactorTuples(2, 3, [&](const std::vector<int>& qids) {
 				if (q_[qids[0]].l == q_[qids[1]].l)
-					AddScalarSpec(3, qids[0], qids[1], -1, -1, 0);
+					AddScalarSpec(3, qids[0], qids[1], -1, -1, -1, 0);
 			});
 		}
 		if (body_order >= 4) {
@@ -426,7 +432,7 @@ public:
 				const int l1 = q_[qids[1]].l;
 				const int l2 = q_[qids[2]].l;
 				if (((l0 + l1 + l2) % 2) == 0 && Triangle(l0, l1, l2))
-					AddScalarSpec(4, qids[0], qids[1], qids[2], -1, l2);
+					AddScalarSpec(4, qids[0], qids[1], qids[2], -1, -1, l2);
 			});
 		}
 		if (body_order >= 5) {
@@ -440,7 +446,23 @@ public:
 				const int lo = std::max(std::abs(l0 - l1), std::abs(l2 - l3));
 				const int hi = std::min(l0 + l1, l2 + l3);
 				for (int L = lo; L <= hi; ++L)
-					AddScalarSpec(5, qids[0], qids[1], qids[2], qids[3], L);
+					AddScalarSpec(5, qids[0], qids[1], qids[2], qids[3], -1, L);
+			});
+		}
+		if (body_order >= 6) {
+			EnumerateFactorTuples(5, 6, [&](const std::vector<int>& qids) {
+				const int l0 = q_[qids[0]].l;
+				const int l1 = q_[qids[1]].l;
+				const int l2 = q_[qids[2]].l;
+				const int l3 = q_[qids[3]].l;
+				const int l4 = q_[qids[4]].l;
+				if (((l0 + l1 + l2 + l3 + l4) % 2) != 0)
+					return;
+				const int lo = std::max(std::abs(l0 - l1), std::abs(l2 - l3));
+				const int hi = std::min(l0 + l1, l2 + l3);
+				for (int L = lo; L <= hi; ++L)
+					if (Triangle(L, l4, L))
+						AddScalarSpec(6, qids[0], qids[1], qids[2], qids[3], qids[4], L);
 			});
 		}
 	}
@@ -469,7 +491,20 @@ public:
 		}
 		const Tensor t3 = BasicTensor(spec.q3);
 		const Tensor left = Couple(t0, t1, spec.intermediate_l);
-		const Tensor right = Couple(t2, t3, spec.intermediate_l);
+		const Tensor right_pair = Couple(t2, t3, spec.intermediate_l);
+		if (spec.body_order == 6) {
+			const Tensor t4 = BasicTensor(spec.q4);
+			if (left.zero || right_pair.zero)
+				return -1;
+			const Tensor right = Couple(right_pair, t4, spec.intermediate_l);
+			if (right.zero)
+				return -1;
+			const Tensor scalar = Couple(left, right, 0);
+			if (scalar.zero)
+				return -1;
+			return scalar.node[0];
+		}
+		const Tensor right = right_pair;
 		if (left.zero || right.zero)
 			return -1;
 		const Tensor scalar = Couple(left, right, 0);
@@ -556,15 +591,17 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const double max_dist = DoubleOpt(opts, "cutoff", DoubleOpt(opts, "max-dist", 7.5));
 	const double scaling = DoubleOpt(opts, "scaling", 0.01);
 	const std::string rbasis = StringOpt(opts, "radial-basis-type", "RBChebyshev_sss");
-	const std::string name = StringOpt(opts, "potential-name", "sus2sh_l3k3_b5");
-	const std::vector<int> body_lmax = ParseBodyLMax(opts, lmax);
+	std::ostringstream default_name;
+	default_name << "sus2sh_l" << lmax << "k" << kmax << "_b" << body_order;
+	const std::string name = StringOpt(opts, "potential-name", default_name.str());
+	const std::vector<int> body_lmax = ParseBodyLMax(opts, lmax, body_order);
 
 	if (lmax < 0 || lmax > 4)
 		ERROR("init-sh currently supports --l-max from 0 to 4.");
 	if (kmax <= 0)
 		ERROR("init-sh requires --k-max > 0.");
-	if (body_order < 2 || body_order > 5)
-		ERROR("init-sh supports --body-order from 2 to 5.");
+	if (body_order < 2 || body_order > 6)
+		ERROR("init-sh supports --body-order from 2 to 6.");
 	if (rbasis != "RBChebyshev_sss")
 		ERROR("init-sh currently writes RBChebyshev_sss models; use --radial-basis-type=RBChebyshev_sss.");
 
@@ -591,7 +628,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	ofs << "sh_body_order = " << body_order << "\n";
 	ofs << "sh_parity = even\n";
 	ofs << "sh_body_l_max = {" << body_lmax[2] << ", " << body_lmax[3]
-	    << ", " << body_lmax[4] << ", " << body_lmax[5] << "}\n";
+	    << ", " << body_lmax[4] << ", " << body_lmax[5];
+	if (body_order >= 6)
+		ofs << ", " << body_lmax[6];
+	ofs << "}\n";
 	ofs << "radial_basis_type = " << rbasis << "\n";
 	ofs << "\tmin_dist = " << min_dist << "\n";
 	ofs << "\tmax_dist = " << max_dist << "\n";
