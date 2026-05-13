@@ -13,6 +13,7 @@ bench*/
 *.so
 *.dylib
 *.tar.gz
+.tmp*
 current.mtp
 trained.mtp
 p.mtp
