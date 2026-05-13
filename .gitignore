@@ -14,6 +14,9 @@ bench*/
 *.dylib
 *.tar.gz
 .tmp*
+._*
+*.swp
+/*.mtp
 current.mtp
 trained.mtp
 p.mtp
