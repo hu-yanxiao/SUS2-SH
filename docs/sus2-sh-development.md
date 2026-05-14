@@ -79,6 +79,30 @@ Model initialization:
   --radial-basis-type=RBChebyshev_sss
 ```
 
+As of the inline-init update, `init-sh` writes zero linear coefficient
+placeholders instead of initializing `species_coeffs` and `moment_coeffs` to
+`1e-3`. Training can also build the same topology directly:
+
+```bash
+../bin/mlp-sus2 train train.cfg --init-sh \
+  --species-count=2 \
+  --l-max=3 \
+  --k-max=3 \
+  --body-order=5 \
+  --body-l-max=3,3,2,2 \
+  --cutoff=7.5 \
+  --radial-basis-size=10 \
+  --radial-basis-type=RBChebyshev_sss \
+  --energy-weight=1 \
+  --force-weight=0.01 \
+  --stress-weight=0 \
+  --do-samp \
+  --do-lin \
+  --do-lin-rescale \
+  --curr-pot-name=current.mtp \
+  --trained-pot-name=p.mtp
+```
+
 The corrected generated model has 48 basic SH channels, 1416 product graph records, 525 total moment nodes, and 261 scalar basis functions. The previous bad graph with 317 scalar basis functions was archived as `untrained_sus2sh_l3k3_b5_l3322.bad-shgraph.mtp`; it kept zero intermediate tensors such as nodes 171/172/173 and produced structural zero descriptor columns.
 
 The l=4 probe model was generated with:

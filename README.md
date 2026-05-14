@@ -72,6 +72,30 @@ bin/mlp-sus2 train untrained_sus2sh_l3k3_b5_l3322.mtp train.cfg \
   --curr-pot-name=current.mtp \
   --trained-pot-name=p.mtp
 ```
+
+The same SH topology can also be created directly from the `train` command.
+This avoids a separate untrained model file while keeping the original SUS2
+training flow:
+
+```bash
+bin/mlp-sus2 train train.cfg --init-sh \
+  --species-count=2 \
+  --l-max=3 \
+  --k-max=3 \
+  --body-order=5 \
+  --body-l-max=3,3,2,2 \
+  --cutoff=7.5 \
+  --radial-basis-size=10 \
+  --radial-basis-type=RBChebyshev_sss \
+  --energy-weight=1 \
+  --force-weight=0.01 \
+  --stress-weight=0 \
+  --do-samp \
+  --do-lin \
+  --do-lin-rescale \
+  --curr-pot-name=current.mtp \
+  --trained-pot-name=p.mtp
+```
 # Format of Datasets
 Like the original MLIP package, SUS2-MLIP reads material structures and their properties from `cfg` files.
 

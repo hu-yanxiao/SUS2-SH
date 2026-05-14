@@ -13,10 +13,12 @@
 #include <limits>
 #include <numeric>
 #include <random>
+#include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include "mtpr_train.h"
+#include "../sh_model_init.h"
 
 using namespace std;
 
@@ -316,6 +318,83 @@ bool ShouldCacheNeighborhoods(const std::vector<Configuration>& configs, double 
 			return true;
 	}
 	return bytes <= kNeighborhoodCacheBudgetBytesPerRank;
+}
+
+bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& opts)
+{
+	const char* names[] = {
+		"init-sh",
+		"species-count",
+		"l-max",
+		"k-max",
+		"body-order",
+		"body-l-max",
+		"body2-l-max",
+		"body3-l-max",
+		"body4-l-max",
+		"body5-l-max",
+		"body6-l-max",
+		"cutoff",
+		"max-dist",
+		"min-dist",
+		"radial-basis-size",
+		"radial-basis-type",
+		"scaling",
+		"potential-name",
+		"inline-sh-model"
+	};
+	for (const char* name : names) {
+		std::map<std::string, std::string>::const_iterator it = opts.find(name);
+		if (it != opts.end() && !it->second.empty())
+			return true;
+	}
+	return false;
+}
+
+std::string InlineSHModelFilename(const std::map<std::string, std::string>& opts)
+{
+	std::map<std::string, std::string>::const_iterator requested = opts.find("inline-sh-model");
+	if (requested != opts.end() && !requested->second.empty())
+		return requested->second;
+
+	std::ostringstream oss;
+	oss << ".sus2sh_inline_init_"
+	    << static_cast<long long>(std::time(nullptr))
+	    << "_"
+	    << static_cast<long long>(getpid())
+	    << ".mtp";
+	return oss.str();
+}
+
+void BroadcastString(std::string& value);
+
+bool PrepareInlineSphericalHarmonicModel(std::vector<std::string>& args,
+										 std::map<std::string, std::string>& opts)
+{
+	const bool explicit_inline = opts.find("init-sh") != opts.end() && !opts["init-sh"].empty();
+	const bool implicit_inline = args.size() == 1 && HasSphericalHarmonicInitOptions(opts);
+	if (!explicit_inline && !implicit_inline)
+		return false;
+	if (args.size() != 1)
+		ERROR("inline SUS2-SH training expects exactly one train_set.cfg argument");
+
+	int world_rank = 0;
+#ifdef MLIP_MPI
+	MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+#endif
+	std::string model_filename;
+	if (world_rank == 0) {
+		model_filename = InlineSHModelFilename(opts);
+		WriteSphericalHarmonicModel(model_filename, opts);
+		std::cout << "SUS2-SH inline initial model written to "
+		          << model_filename << std::endl;
+	}
+	BroadcastString(model_filename);
+#ifdef MLIP_MPI
+	MPI_Barrier(MPI_COMM_WORLD);
+#endif
+	args.insert(args.begin(), model_filename);
+	return true;
 }
 
 std::vector<size_t> BuildRescaleSubsetIndices(const std::vector<Configuration>& source
@@ -733,6 +812,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 {
 	//args[0] - potname
 	//args[1] - ts_name
+	const bool inline_sh_model = PrepareInlineSphericalHarmonicModel(args, opts);
 
 	double weight_energy = 1.0;
 	if (opts["energy-weight"] != "")
@@ -888,6 +968,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		std::cout << "SUS2-MLIP developer version (2026-04-17)"
 		          << " | potential from " << args[0]
 		          << ", database: " << args[1] << std::endl;
+	if (prank == 0 && inline_sh_model)
+		std::cout << "SUS2-SH model topology was built from train command options" << std::endl;
 	if (prank == 0 && custom_scal_range)
 		std::cout << "scal-range override: " << scal_range.first << ", " << scal_range.second << std::endl;
 	if (prank == 0 && custom_s_range)

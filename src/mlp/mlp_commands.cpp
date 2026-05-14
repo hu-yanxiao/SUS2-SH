@@ -27,6 +27,40 @@ const char version_str[] = "2026-04-17 developer version";
 
 using namespace std;
 
+namespace {
+
+bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
+{
+	const char* names[] = {
+		"init-sh",
+		"species-count",
+		"l-max",
+		"k-max",
+		"body-order",
+		"body-l-max",
+		"body2-l-max",
+		"body3-l-max",
+		"body4-l-max",
+		"body5-l-max",
+		"body6-l-max",
+		"cutoff",
+		"max-dist",
+		"min-dist",
+		"radial-basis-size",
+		"radial-basis-type",
+		"scaling",
+		"potential-name",
+		"inline-sh-model"
+	};
+	for (const char* name : names) {
+		map<string, string>::const_iterator it = opts.find(name);
+		if (it != opts.end() && !it->second.empty())
+			return true;
+	}
+	return false;
+}
+
+} // namespace
 
 // does a number of unit tests (not dev)
 // returns true if all tests are successful
@@ -495,6 +529,9 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 		"fits a SUS2 potential",
 		"mlp-sus2 train potential.mtp train_set.cfg [options]:\n"
 		"  trains potential.mtp on the training set from train_set.cfg\n"
+		"mlp-sus2 train train_set.cfg --init-sh [SH model options] [training options]:\n"
+		"  builds the initial SUS2-SH model from the same options as init-sh,\n"
+		"  then runs the ordinary SUS2 training flow\n"
 		"  Options include:\n"
 		"    --energy-weight=<double>: weight of energies in the fitting. Default=1\n"
 		"    --force-weight=<double>: weight of forces in the fitting. Default=0.01\n"
@@ -538,8 +575,16 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 		"                      minimal interatomic distance in the training set\n"
 	) {
 
-		if (args.size() < 2) {
-			cout << "mlp-sus2 train: at least 2 arguments are required\n";
+		const bool explicit_inline_sh = opts["init-sh"] != "";
+		const bool implicit_inline_sh = args.size() == 1 && HasSphericalHarmonicInitOptions(opts);
+		if (explicit_inline_sh || implicit_inline_sh) {
+			if (args.size() != 1) {
+				cout << "mlp-sus2 train: inline SUS2-SH mode expects exactly one train_set.cfg argument\n";
+				return 1;
+			}
+			opts["init-sh"] = "true";
+		} else if (args.size() < 2) {
+			cout << "mlp-sus2 train: at least 2 arguments are required, or use train_set.cfg --init-sh [SH model options]\n";
 			return 1;
 		}
                 
