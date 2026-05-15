@@ -74,3 +74,20 @@ Use a clean CMake build directory and submit the GPU rebuild on a GPU node throu
 ```bash
 /work/phy-weigw/hyx/ma/l3k3/jacobi/lmp
 ```
+
+## SUS2-SH Current Line
+
+Current SUS2-SH LAMMPS runtime/build tree:
+
+```bash
+/work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex
+```
+
+Current validated binaries:
+
+```bash
+/work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex/bin/lmp.sus2_sh_kk_sm80
+/work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex/bin/lmp.sus2_sh_cpu_avx2
+```
+
+Use `RBChebyshev_sss_lmp` to enable the radial table path. The default `tabstep` is `1.0e-4 A`.

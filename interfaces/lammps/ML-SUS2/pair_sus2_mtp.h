@@ -66,6 +66,9 @@ class PairSUS2MTP : public Pair {
   void read_file(FILE *);                     //Parsing file using LAMMPS utils
   std::string potential_name = "Untitled";    //An optional name which isn't currently used.
   std::string potential_tag = "";    //An optional tag/description which isn't currently used.
+  bool is_sh_model = false;           // SUS2-SH uses real spherical harmonics for angular channels
+  int sh_l_max = 0;
+  int sh_k_max = 0;
 
   int species_count = 0;     // Number of species (initialize to 0 to prevent uninitialized memory usage)
   double scaling =1;    // All forces are multiplied by scaling (global scaling)   // Initialize to 0
@@ -130,6 +133,7 @@ class PairSUS2MTP : public Pair {
   int *alpha_times_a0;          // Cached lhs moment index for each alpha-times entry
   int *alpha_times_a1;          // Cached rhs moment index for each alpha-times entry
   int *alpha_times_multiplier;  // Cached multiplier for each alpha-times entry
+  double *alpha_times_coeff;    // Cached tensor-product coefficient for each alpha-times entry
   int *alpha_times_out;         // Cached output moment index for each alpha-times entry
 
   // Other working buffers

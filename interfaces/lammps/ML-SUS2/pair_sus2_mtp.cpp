@@ -128,6 +128,122 @@ bool basis_requires_per_mu_sigma(int basis_type)
   return basis_type == SUS2RadialMTPBasis::JACOBI_SSS_LMP;
 }
 
+constexpr int kMaxSHComponents = 25;
+const double kPi = std::acos(-1.0);
+const double kRealY00 = 0.5 / std::sqrt(kPi);
+const double kRealY1 = 0.5 * std::sqrt(3.0 / kPi);
+const double kRealY2A = 0.5 * std::sqrt(15.0 / kPi);
+const double kRealY20 = 0.25 * std::sqrt(5.0 / kPi);
+const double kRealY22 = 0.25 * std::sqrt(15.0 / kPi);
+const double kRealY33 = 0.125 * std::sqrt(70.0 / kPi);
+const double kRealY32 = 0.5 * std::sqrt(105.0 / kPi);
+const double kRealY31 = 0.125 * std::sqrt(42.0 / kPi);
+const double kRealY30 = 0.25 * std::sqrt(7.0 / kPi);
+const double kRealY3p2 = 0.25 * std::sqrt(105.0 / kPi);
+const double kRealY44m = 0.75 * std::sqrt(35.0 / kPi);
+const double kRealY43 = 0.375 * std::sqrt(70.0 / kPi);
+const double kRealY42m = 0.75 * std::sqrt(5.0 / kPi);
+const double kRealY41 = 0.375 * std::sqrt(10.0 / kPi);
+const double kRealY40 = 0.1875 / std::sqrt(kPi);
+const double kRealY42 = 0.375 * std::sqrt(5.0 / kPi);
+const double kRealY44 = 0.1875 * std::sqrt(35.0 / kPi);
+
+int sh_flat_index(int l, int m)
+{
+  return l * l + (m + l);
+}
+
+double sh_inv_power(int l, double r)
+{
+  const double inv_r = 1.0 / r;
+  const double inv_r2 = inv_r * inv_r;
+  if (l == 0) return 1.0;
+  if (l == 1) return inv_r;
+  if (l == 2) return inv_r2;
+  if (l == 3) return inv_r2 * inv_r;
+  if (l == 4) return inv_r2 * inv_r2;
+  return std::pow(r, -l);
+}
+
+void add_real_sh(int l, int m, double coeff, double poly,
+                 double dpx, double dpy, double dpz,
+                 const double *rvec, double r, double *values, double *ders)
+{
+  const int idx = sh_flat_index(l, m);
+  const double inv_r = 1.0 / r;
+  const double inv_pow = sh_inv_power(l, r);
+  const double inv_pow_der = (l == 0) ? 0.0 : -static_cast<double>(l) * inv_pow * inv_r * inv_r;
+  values[idx] = coeff * poly * inv_pow;
+  ders[3 * idx + 0] = coeff * (dpx * inv_pow + poly * inv_pow_der * rvec[0]);
+  ders[3 * idx + 1] = coeff * (dpy * inv_pow + poly * inv_pow_der * rvec[1]);
+  ders[3 * idx + 2] = coeff * (dpz * inv_pow + poly * inv_pow_der * rvec[2]);
+}
+
+void eval_real_sh(const double *rvec, double r, int lmax, double *values, double *ders)
+{
+  const int count = (lmax + 1) * (lmax + 1);
+  for (int i = 0; i < count; ++i) {
+    values[i] = 0.0;
+    ders[3 * i + 0] = 0.0;
+    ders[3 * i + 1] = 0.0;
+    ders[3 * i + 2] = 0.0;
+  }
+
+  const double x = rvec[0];
+  const double y = rvec[1];
+  const double z = rvec[2];
+  const double x2 = x * x;
+  const double y2 = y * y;
+  const double z2 = z * z;
+
+  add_real_sh(0, 0, kRealY00, 1.0, 0.0, 0.0, 0.0, rvec, r, values, ders);
+  if (lmax == 0) return;
+
+  add_real_sh(1, -1, kRealY1, y, 0.0, 1.0, 0.0, rvec, r, values, ders);
+  add_real_sh(1, 0, kRealY1, z, 0.0, 0.0, 1.0, rvec, r, values, ders);
+  add_real_sh(1, 1, kRealY1, x, 1.0, 0.0, 0.0, rvec, r, values, ders);
+  if (lmax == 1) return;
+
+  add_real_sh(2, -2, kRealY2A, x * y, y, x, 0.0, rvec, r, values, ders);
+  add_real_sh(2, -1, kRealY2A, y * z, 0.0, z, y, rvec, r, values, ders);
+  const double p20 = 2.0 * z2 - x2 - y2;
+  add_real_sh(2, 0, kRealY20, p20, -2.0 * x, -2.0 * y, 4.0 * z, rvec, r, values, ders);
+  add_real_sh(2, 1, kRealY2A, x * z, z, 0.0, x, rvec, r, values, ders);
+  add_real_sh(2, 2, kRealY22, x2 - y2, 2.0 * x, -2.0 * y, 0.0, rvec, r, values, ders);
+  if (lmax == 2) return;
+
+  const double a31 = 4.0 * z2 - x2 - y2;
+  const double p3m3 = 3.0 * x2 * y - y * y2;
+  add_real_sh(3, -3, kRealY33, p3m3, 6.0 * x * y, 3.0 * x2 - 3.0 * y2, 0.0, rvec, r, values, ders);
+  add_real_sh(3, -2, kRealY32, x * y * z, y * z, x * z, x * y, rvec, r, values, ders);
+  add_real_sh(3, -1, kRealY31, y * a31, -2.0 * x * y, a31 - 2.0 * y2, 8.0 * y * z, rvec, r, values, ders);
+  const double p30 = z * (2.0 * z2 - 3.0 * x2 - 3.0 * y2);
+  add_real_sh(3, 0, kRealY30, p30, -6.0 * x * z, -6.0 * y * z, 6.0 * z2 - 3.0 * x2 - 3.0 * y2, rvec, r, values, ders);
+  add_real_sh(3, 1, kRealY31, x * a31, a31 - 2.0 * x2, -2.0 * x * y, 8.0 * x * z, rvec, r, values, ders);
+  const double p32 = z * (x2 - y2);
+  add_real_sh(3, 2, kRealY3p2, p32, 2.0 * x * z, -2.0 * y * z, x2 - y2, rvec, r, values, ders);
+  const double p33 = x * x2 - 3.0 * x * y2;
+  add_real_sh(3, 3, kRealY33, p33, 3.0 * x2 - 3.0 * y2, -6.0 * x * y, 0.0, rvec, r, values, ders);
+  if (lmax == 3) return;
+
+  const double rho2 = x2 + y2;
+  const double a42 = 6.0 * z2 - rho2;
+  const double a41 = 4.0 * z2 - 3.0 * rho2;
+  const double p44base = x2 - y2;
+  const double p4m4 = x * y * p44base;
+  add_real_sh(4, -4, kRealY44m, p4m4, y * (3.0 * x2 - y2), x * (x2 - 3.0 * y2), 0.0, rvec, r, values, ders);
+  add_real_sh(4, -3, kRealY43, z * p3m3, 6.0 * x * y * z, z * (3.0 * x2 - 3.0 * y2), p3m3, rvec, r, values, ders);
+  add_real_sh(4, -2, kRealY42m, x * y * a42, y * a42 - 2.0 * x2 * y, x * a42 - 2.0 * x * y2, 12.0 * x * y * z, rvec, r, values, ders);
+  add_real_sh(4, -1, kRealY41, y * z * a41, -6.0 * x * y * z, z * (a41 - 6.0 * y2), y * (12.0 * z2 - 3.0 * rho2), rvec, r, values, ders);
+  const double p40 = 8.0 * z2 * z2 - 24.0 * z2 * rho2 + 3.0 * rho2 * rho2;
+  add_real_sh(4, 0, kRealY40, p40, 12.0 * x * (rho2 - 4.0 * z2), 12.0 * y * (rho2 - 4.0 * z2), 16.0 * z * (2.0 * z2 - 3.0 * rho2), rvec, r, values, ders);
+  add_real_sh(4, 1, kRealY41, x * z * a41, z * (a41 - 6.0 * x2), -6.0 * x * y * z, x * (12.0 * z2 - 3.0 * rho2), rvec, r, values, ders);
+  add_real_sh(4, 2, kRealY42, p44base * a42, 2.0 * x * a42 - 2.0 * x * p44base, -2.0 * y * a42 - 2.0 * y * p44base, 12.0 * z * p44base, rvec, r, values, ders);
+  add_real_sh(4, 3, kRealY43, z * p33, z * (3.0 * x2 - 3.0 * y2), -6.0 * x * y * z, p33, rvec, r, values, ders);
+  const double p44 = x2 * x2 - 6.0 * x2 * y2 + y2 * y2;
+  add_real_sh(4, 4, kRealY44, p44, 4.0 * x * x2 - 12.0 * x * y2, -12.0 * x2 * y + 4.0 * y * y2, 0.0, rvec, r, values, ders);
+}
+
 }    // namespace
 
 PairSUS2MTP::PairSUS2MTP(LAMMPS *lmp) : Pair(lmp)
@@ -175,6 +291,7 @@ PairSUS2MTP::~PairSUS2MTP()
     memory->destroy(alpha_times_a0);
     memory->destroy(alpha_times_a1);
     memory->destroy(alpha_times_multiplier);
+    memory->destroy(alpha_times_coeff);
     memory->destroy(alpha_times_out);
     memory->destroy(moment_jacobian_x);
     memory->destroy(moment_jacobian_y);
@@ -487,64 +604,98 @@ void PairSUS2MTP::compute(int eflag, int vflag)
 
 
       //Calculate the alpha basics
-      
-      for (int k = 0; k < alpha_index_basic_count; k++) {
-        const size_t jac_idx = static_cast<size_t>(jj) * alpha_index_basic_count + k;
-        
-        double val = 0;
-        double der = 0;
-        const int mu = alpha_basic_mu[k];
+      if (is_sh_model) {
+        double sh_values[kMaxSHComponents];
+        double sh_ders[3 * kMaxSHComponents];
+        eval_real_sh(r, dist, sh_l_max, sh_values, sh_ders);
 
-        val = radial_vals[mu];
-        der = radial_ders[mu];
-        // Normalize by the rank of alpha's corresponding tensor
-        const int norm_rank = alpha_basic_norm_rank[k];
-        double norm_fac = inv_dist_powers[norm_rank];
-        val *= norm_fac;
-        der = der * norm_fac - norm_rank * val * inv_dist;
+        for (int k = 0; k < alpha_index_basic_count; k++) {
+          const size_t jac_idx = static_cast<size_t>(jj) * alpha_index_basic_count + k;
+          const int mu = alpha_basic_mu[k];
+          const int l = alpha_basic_a0[k];
+          const int m = alpha_basic_a1[k];
+          const int sh_idx = sh_flat_index(l, m);
+          const double radial_val = radial_vals[mu];
+          const double radial_der = radial_ders[mu];
+          const double ylm = sh_values[sh_idx];
+          const double raw_contrib = radial_val * ylm;
+          const double radial_der_pref = radial_der * inv_dist * ylm;
+          double raw_jac_x = radial_der_pref * r[0] + radial_val * sh_ders[3 * sh_idx + 0];
+          double raw_jac_y = radial_der_pref * r[1] + radial_val * sh_ders[3 * sh_idx + 1];
+          double raw_jac_z = radial_der_pref * r[2] + radial_val * sh_ders[3 * sh_idx + 2];
 
-        const int a0 = alpha_basic_a0[k];
-        const int a1 = alpha_basic_a1[k];
-        const int a2 = alpha_basic_a2[k];
-        double pow0 = coord_powers_x[a0];
-        double pow1 = coord_powers_y[a1];
-        double pow2 = coord_powers_z[a2];
-        const double pow = pow0 * pow1 * pow2;
-        const double raw_contrib = val * pow;
+          if (env_gate_enabled) {
+            const double activation_der_factor =
+                -env_screen_strength * env_activation_der * raw_contrib * inv_dist;
+            env_activation_basic_vals[k] += env_activation * raw_contrib;
+            moment_tensor_vals[k] += pair_gate * raw_contrib;
+            moment_jacobian_x[jac_idx] = pair_gate * raw_jac_x + activation_der_factor * r[0];
+            moment_jacobian_y[jac_idx] = pair_gate * raw_jac_y + activation_der_factor * r[1];
+            moment_jacobian_z[jac_idx] = pair_gate * raw_jac_z + activation_der_factor * r[2];
+          } else {
+            moment_tensor_vals[k] += raw_contrib;
+            moment_jacobian_x[jac_idx] = raw_jac_x;
+            moment_jacobian_y[jac_idx] = raw_jac_y;
+            moment_jacobian_z[jac_idx] = raw_jac_z;
+          }
+        }
+      } else {
+        for (int k = 0; k < alpha_index_basic_count; k++) {
+          const size_t jac_idx = static_cast<size_t>(jj) * alpha_index_basic_count + k;
 
-        // Get the component's derivatives too
-        // Simplified derivative calculation - full implementation with scaling would be more complex
-        const double radial_der_pref = pow * der / dist;
-        double raw_jac_x = radial_der_pref * r[0];
-        double raw_jac_y = radial_der_pref * r[1];
-        double raw_jac_z = radial_der_pref * r[2];
+          double val = 0;
+          double der = 0;
+          const int mu = alpha_basic_mu[k];
 
-        if (a0 != 0) {
-          raw_jac_x += val * a0 *
-              coord_powers_x[a0 - 1] * pow1 * pow2;
-        }    //Chain rule for nonzero rank
-        if (a1 != 0) {
-          raw_jac_y += val * a1 * pow0 *
-              coord_powers_y[a1 - 1] * pow2;
-        }    //Chain rule for nonzero rank
-        if (a2 != 0) {
-          raw_jac_z += val * a2 * pow0 * pow1 *
-              coord_powers_z[a2 - 1];
-        }    //Chain rule for nonzero rank
+          val = radial_vals[mu];
+          der = radial_ders[mu];
+          // Normalize by the rank of alpha's corresponding tensor
+          const int norm_rank = alpha_basic_norm_rank[k];
+          double norm_fac = inv_dist_powers[norm_rank];
+          val *= norm_fac;
+          der = der * norm_fac - norm_rank * val * inv_dist;
 
-        if (env_gate_enabled) {
-          const double activation_der_factor =
-              -env_screen_strength * env_activation_der * raw_contrib * inv_dist;
-          env_activation_basic_vals[k] += env_activation * raw_contrib;
-          moment_tensor_vals[k] += pair_gate * raw_contrib;
-          moment_jacobian_x[jac_idx] = pair_gate * raw_jac_x + activation_der_factor * r[0];
-          moment_jacobian_y[jac_idx] = pair_gate * raw_jac_y + activation_der_factor * r[1];
-          moment_jacobian_z[jac_idx] = pair_gate * raw_jac_z + activation_der_factor * r[2];
-        } else {
-          moment_tensor_vals[k] += raw_contrib;
-          moment_jacobian_x[jac_idx] = raw_jac_x;
-          moment_jacobian_y[jac_idx] = raw_jac_y;
-          moment_jacobian_z[jac_idx] = raw_jac_z;
+          const int a0 = alpha_basic_a0[k];
+          const int a1 = alpha_basic_a1[k];
+          const int a2 = alpha_basic_a2[k];
+          double pow0 = coord_powers_x[a0];
+          double pow1 = coord_powers_y[a1];
+          double pow2 = coord_powers_z[a2];
+          const double pow = pow0 * pow1 * pow2;
+          const double raw_contrib = val * pow;
+
+          const double radial_der_pref = pow * der / dist;
+          double raw_jac_x = radial_der_pref * r[0];
+          double raw_jac_y = radial_der_pref * r[1];
+          double raw_jac_z = radial_der_pref * r[2];
+
+          if (a0 != 0) {
+            raw_jac_x += val * a0 *
+                coord_powers_x[a0 - 1] * pow1 * pow2;
+          }
+          if (a1 != 0) {
+            raw_jac_y += val * a1 * pow0 *
+                coord_powers_y[a1 - 1] * pow2;
+          }
+          if (a2 != 0) {
+            raw_jac_z += val * a2 * pow0 * pow1 *
+                coord_powers_z[a2 - 1];
+          }
+
+          if (env_gate_enabled) {
+            const double activation_der_factor =
+                -env_screen_strength * env_activation_der * raw_contrib * inv_dist;
+            env_activation_basic_vals[k] += env_activation * raw_contrib;
+            moment_tensor_vals[k] += pair_gate * raw_contrib;
+            moment_jacobian_x[jac_idx] = pair_gate * raw_jac_x + activation_der_factor * r[0];
+            moment_jacobian_y[jac_idx] = pair_gate * raw_jac_y + activation_der_factor * r[1];
+            moment_jacobian_z[jac_idx] = pair_gate * raw_jac_z + activation_der_factor * r[2];
+          } else {
+            moment_tensor_vals[k] += raw_contrib;
+            moment_jacobian_x[jac_idx] = raw_jac_x;
+            moment_jacobian_y[jac_idx] = raw_jac_y;
+            moment_jacobian_z[jac_idx] = raw_jac_z;
+          }
         }
       }
     }
@@ -552,14 +703,14 @@ void PairSUS2MTP::compute(int eflag, int vflag)
     // ------------ Contruct Other Alphas  ------------
     const int * __restrict times_a0 = alpha_times_a0;
     const int * __restrict times_a1 = alpha_times_a1;
-    const int * __restrict times_mult = alpha_times_multiplier;
+    const double * __restrict times_coeff = alpha_times_coeff;
     const int * __restrict times_out = alpha_times_out;
     double * __restrict moments = moment_tensor_vals;
 
     for (int k = 0; k < alpha_index_times_count; k++) {
       double val0 = moments[times_a0[k]];
       double val1 = moments[times_a1[k]];
-      int val2 = times_mult[k];
+      double val2 = times_coeff[k];
 
       moments[times_out[k]] += val2 * val0 * val1;
     }
@@ -584,22 +735,22 @@ void PairSUS2MTP::compute(int eflag, int vflag)
     //------------ Step 2: Propogate chain rule through the alpha times to the alpha basics ------------
     const int * __restrict times_a0_back = alpha_times_a0;
     const int * __restrict times_a1_back = alpha_times_a1;
-    const int * __restrict times_mult_back = alpha_times_multiplier;
+    const double * __restrict times_coeff_back = alpha_times_coeff;
     const int * __restrict times_out_back = alpha_times_out;
     double * __restrict moment_ders = nbh_energy_ders_wrt_moments;
 
     for (int k = alpha_index_times_count - 1; k >= 0; k--) {
       int a0 = times_a0_back[k];
       int a1 = times_a1_back[k];
-      int multipiler = times_mult_back[k];
+      double multiplier = times_coeff_back[k];
       int a3 = times_out_back[k];
 
       double val0 = moment_tensor_vals[a0];
       double val1 = moment_tensor_vals[a1];
       double val3 = moment_ders[a3];
 
-      moment_ders[a1] += val3 * multipiler * val0;
-      moment_ders[a0] += val3 * multipiler * val1;
+      moment_ders[a1] += val3 * multiplier * val0;
+      moment_ders[a0] += val3 * multiplier * val1;
     }
     const double species_weight = species_coeffs[itype];
     for (int k = 0; k < alpha_index_basic_count; k++)
@@ -782,6 +933,7 @@ void PairSUS2MTP::read_file(FILE *mtp_file)
 with the MLIP-3 package. The alpha indicies in this format are all in one line, requiring
 access to the buffer size that is not provided in PFR.
 */
+  std::vector<double> alpha_times_coeff_buffer;
 
   //Open the MTP file on proc 0
   if (comm->me == 0) {
@@ -880,8 +1032,33 @@ access to the buffer size that is not provided in PFR.
       } catch (TokenizerException e) {
         potential_tag = "";
       }
+      is_sh_model = (potential_tag == "SUS2-SH");
       line_tokens = ValueTokenizer(tfr.next_line(), separators);
       keyword = line_tokens.next_string();
+    }
+    if (is_sh_model) {
+      if (keyword != "sh_l_max")
+        error->one(FLERR, "SUS2-SH model is missing sh_l_max.");
+      sh_l_max = line_tokens.next_int();
+      if (sh_l_max < 0 || sh_l_max > 4)
+        error->one(FLERR, "LAMMPS SUS2-SH interface currently supports 0 <= sh_l_max <= 4, got {}.", sh_l_max);
+
+      line_tokens = ValueTokenizer(tfr.next_line(), separators);
+      keyword = line_tokens.next_string();
+      if (keyword != "sh_k_max")
+        error->one(FLERR, "SUS2-SH model is missing sh_k_max.");
+      sh_k_max = line_tokens.next_int();
+      if (sh_k_max <= 0)
+        error->one(FLERR, "Invalid SUS2-SH sh_k_max: {}.", sh_k_max);
+      if (L_max != sh_l_max + 1)
+        error->one(FLERR, "SUS2-SH L header is inconsistent with sh_l_max.");
+      if (scaling_map != "LK")
+        error->one(FLERR, "SUS2-SH requires scaling_map = LK.");
+
+      do {
+        line_tokens = ValueTokenizer(tfr.next_line(), separators);
+        keyword = line_tokens.next_string();
+      } while (keyword.rfind("sh_", 0) == 0 && keyword != "radial_basis_type");
     }
 
     // Read the radial basis type
@@ -948,6 +1125,12 @@ access to the buffer size that is not provided in PFR.
     if (keyword != "radial_funcs_count")
       lmp->error->one(FLERR, "Error in reading MTP file. Cannot read radial function count.");
     radial_func_count = line_tokens.next_int();    // Assuming count is an int
+    if (is_sh_model) {
+      const int expected_radial_count = sh_k_max * (sh_l_max + 1);
+      if (radial_func_count != expected_radial_count)
+        error->one(FLERR, "SUS2-SH radial_funcs_count mismatch: got {}, expected sh_k_max*(sh_l_max+1) = {}.",
+                   radial_func_count, expected_radial_count);
+    }
 
     // Compute K_scaling based on scaling_map
     if (scaling_map == "K") {
@@ -1479,9 +1662,23 @@ access to the buffer size that is not provided in PFR.
       error->one(FLERR, "Error reading MTP file. Alpha index basic not found.");
     memory->create(alpha_index_basic, alpha_index_basic_count, 4, "alpha_index_basic");
     for (int i = 0; i < alpha_index_basic_count; i++) {
-      for (int j = 0; j < 4; j++) {
-        int index = line_tokens.next_int();
-        alpha_index_basic[i][j] = index;
+      if (is_sh_model) {
+        const int k_index = line_tokens.next_int();
+        const int l_index = line_tokens.next_int();
+        const int m_index = line_tokens.next_int();
+        if (k_index < 0 || k_index >= sh_k_max || l_index < 0 || l_index > sh_l_max ||
+            m_index < -l_index || m_index > l_index)
+          error->one(FLERR, "Invalid SUS2-SH alpha_index_basic entry ({}, {}, {}).",
+                     k_index, l_index, m_index);
+        alpha_index_basic[i][0] = k_index * (sh_l_max + 1) + l_index;
+        alpha_index_basic[i][1] = l_index;
+        alpha_index_basic[i][2] = m_index;
+        alpha_index_basic[i][3] = 0;
+      } else {
+        for (int j = 0; j < 4; j++) {
+          int index = line_tokens.next_int();
+          alpha_index_basic[i][j] = index;
+        }
       }
       if (alpha_index_basic[i][0] > radial_func_max) radial_func_max = alpha_index_basic[i][0];
     }
@@ -1489,23 +1686,28 @@ access to the buffer size that is not provided in PFR.
       error->one(FLERR, "Wrong number of radial functions specified!");
 
     //Precompute the maximum alpha basic index
-    max_alpha_index_basic = 0;
-    for (int i = 0; i < alpha_index_basic_count; i++)
-      max_alpha_index_basic =
-          std::max(max_alpha_index_basic,
-                   alpha_index_basic[i][1] + alpha_index_basic[i][2] + alpha_index_basic[i][3]);
-    max_alpha_index_basic++;    // Add 1 to account for zeroth order indicies
+    if (is_sh_model) {
+      max_alpha_index_basic = 1;
+    } else {
+      max_alpha_index_basic = 0;
+      for (int i = 0; i < alpha_index_basic_count; i++)
+        max_alpha_index_basic =
+            std::max(max_alpha_index_basic,
+                     alpha_index_basic[i][1] + alpha_index_basic[i][2] + alpha_index_basic[i][3]);
+      max_alpha_index_basic++;    // Add 1 to account for zeroth order indicies
+    }
 
     // Get the alpha times count
     line_tokens = ValueTokenizer(tfr.next_line(), separators);
     keyword = line_tokens.next_string();
     if (keyword != "alpha_index_times_count")
       error->one(FLERR, "Error reading MTP file. Alpha index times count not found.");
-    alpha_index_times_count = line_tokens.next_int();
+    const int legacy_alpha_index_times_count = line_tokens.next_int();
 
-    // Read the alphas times
+    // Read the legacy alpha-times line. SUS2-SH keeps this empty and stores the
+    // canonical real-SH tensor product graph in sh_products.
     tfr.set_bufsize(
-        (alpha_index_times_count * 32 + 20) *
+        std::max(std::max(legacy_alpha_index_times_count, 1) * 32 + 20, 128) *
         sizeof(
             char));    // Adjust the buffer size. This needed to ensure cross-compatability since the MLIP files stores all the alpha indicies on the same line.
     line_tokens = ValueTokenizer(tfr.next_line(), separators + "{},");
@@ -1513,9 +1715,39 @@ access to the buffer size that is not provided in PFR.
     keyword = line_tokens.next_string();
     if (keyword != "alpha_index_times")
       error->one(FLERR, "Error reading MTP file. Alpha index times not found.");
-    memory->create(alpha_index_times, alpha_index_times_count, 4, "alpha_index_times");
-    for (int i = 0; i < alpha_index_times_count; i++) {
-      for (int j = 0; j < 4; j++) { alpha_index_times[i][j] = line_tokens.next_int(); }
+    if (is_sh_model) {
+      if (legacy_alpha_index_times_count != 0)
+        error->one(FLERR, "SUS2-SH model should use sh_products instead of alpha_index_times.");
+
+      line_tokens = ValueTokenizer(tfr.next_line(), separators);
+      keyword = line_tokens.next_string();
+      if (keyword != "sh_product_count")
+        error->one(FLERR, "SUS2-SH model is missing sh_product_count.");
+      alpha_index_times_count = line_tokens.next_int();
+
+      tfr.set_bufsize((std::max(alpha_index_times_count, 1) * 64 + 20) * sizeof(char));
+      line_tokens = ValueTokenizer(tfr.next_line(), separators + "{},");
+      keyword = line_tokens.next_string();
+      if (keyword != "sh_products")
+        error->one(FLERR, "SUS2-SH model is missing sh_products.");
+
+      memory->create(alpha_index_times, alpha_index_times_count, 4, "alpha_index_times");
+      alpha_times_coeff_buffer.assign(alpha_index_times_count, 0.0);
+      for (int i = 0; i < alpha_index_times_count; i++) {
+        alpha_index_times[i][0] = line_tokens.next_int();
+        alpha_index_times[i][1] = line_tokens.next_int();
+        alpha_index_times[i][3] = line_tokens.next_int();
+        alpha_index_times[i][2] = 0;
+        alpha_times_coeff_buffer[i] = line_tokens.next_double();
+      }
+    } else {
+      alpha_index_times_count = legacy_alpha_index_times_count;
+      memory->create(alpha_index_times, alpha_index_times_count, 4, "alpha_index_times");
+      alpha_times_coeff_buffer.assign(alpha_index_times_count, 0.0);
+      for (int i = 0; i < alpha_index_times_count; i++) {
+        for (int j = 0; j < 4; j++) { alpha_index_times[i][j] = line_tokens.next_int(); }
+        alpha_times_coeff_buffer[i] = static_cast<double>(alpha_index_times[i][2]);
+      }
     }
 
     // Get the alpha scalar count
@@ -1565,6 +1797,11 @@ access to the buffer size that is not provided in PFR.
   MPI_Bcast(&species_count, 1, MPI_INT, 0, world);
   MPI_Bcast(&L_max, 1, MPI_INT, 0, world);
   MPI_Bcast(&K_scaling, 1, MPI_INT, 0, world);
+  int is_sh_model_int = is_sh_model ? 1 : 0;
+  MPI_Bcast(&is_sh_model_int, 1, MPI_INT, 0, world);
+  is_sh_model = (is_sh_model_int != 0);
+  MPI_Bcast(&sh_l_max, 1, MPI_INT, 0, world);
+  MPI_Bcast(&sh_k_max, 1, MPI_INT, 0, world);
   MPI_Bcast(&radial_basis_size, 1, MPI_INT, 0, world);
   MPI_Bcast(&radial_func_count, 1, MPI_INT, 0, world);
   MPI_Bcast(&alpha_moment_count, 1, MPI_INT, 0, world);
@@ -1603,6 +1840,11 @@ access to the buffer size that is not provided in PFR.
   memory->create(alpha_times_a0, alpha_index_times_count, "alpha_times_a0");
   memory->create(alpha_times_a1, alpha_index_times_count, "alpha_times_a1");
   memory->create(alpha_times_multiplier, alpha_index_times_count, "alpha_times_multiplier");
+  memory->create(alpha_times_coeff, alpha_index_times_count, "alpha_times_coeff");
+  if (comm->me == 0) {
+    for (int i = 0; i < alpha_index_times_count; i++)
+      alpha_times_coeff[i] = alpha_times_coeff_buffer[i];
+  }
   memory->create(alpha_times_out, alpha_index_times_count, "alpha_times_out");
   memory->create(weighted_basic_moment_ders, alpha_index_basic_count, "weighted_basic_moment_ders");
   
@@ -1714,7 +1956,10 @@ access to the buffer size that is not provided in PFR.
 
   // Alphas
   MPI_Bcast(&alpha_index_basic[0][0], alpha_index_basic_count * 4, MPI_INT, 0, world);
-  MPI_Bcast(&alpha_index_times[0][0], alpha_index_times_count * 4, MPI_INT, 0, world);
+  if (alpha_index_times_count > 0) {
+    MPI_Bcast(&alpha_index_times[0][0], alpha_index_times_count * 4, MPI_INT, 0, world);
+    MPI_Bcast(alpha_times_coeff, alpha_index_times_count, MPI_DOUBLE, 0, world);
+  }
   MPI_Bcast(alpha_moment_mapping, alpha_scalar_count, MPI_INT, 0, world);
   for (int i = 0; i < alpha_index_basic_count; i++) {
     alpha_basic_mu[i] = alpha_index_basic[i][0];
@@ -1727,6 +1972,7 @@ access to the buffer size that is not provided in PFR.
     alpha_times_a0[i] = alpha_index_times[i][0];
     alpha_times_a1[i] = alpha_index_times[i][1];
     alpha_times_multiplier[i] = alpha_index_times[i][2];
+    if (!is_sh_model) alpha_times_coeff[i] = static_cast<double>(alpha_times_multiplier[i]);
     alpha_times_out[i] = alpha_index_times[i][3];
   }
 

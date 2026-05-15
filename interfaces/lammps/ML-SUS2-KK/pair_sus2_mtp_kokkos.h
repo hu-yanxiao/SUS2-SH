@@ -33,6 +33,11 @@ PairStyle(sus2mtp/kk/host,PairSUS2MTPKokkos<LMPHostType>);
 
 namespace LAMMPS_NS {
 
+struct SUS2MTPKokkosRadialTableEntry {
+  double value;
+  double deriv;
+};
+
 template <class DeviceType> class PairSUS2MTPKokkos : public PairSUS2MTP {
  public:
   // Structs for kernels
@@ -158,6 +163,7 @@ template <class DeviceType> class PairSUS2MTPKokkos : public PairSUS2MTP {
   // Alphas indicies
   Kokkos::View<int **, DeviceType> d_alpha_index_basic;      // For constructing of basic alphas.
   Kokkos::View<int **, DeviceType> d_alpha_index_times;      // For combining alphas
+  Kokkos::View<double *, DeviceType> d_alpha_times_coeff;     // Tensor-product coefficients
   Kokkos::View<int *, DeviceType> d_alpha_moment_mapping;    // Maps alphas to basis functions.
 
   // SUS2-MLIP mapping arrays
@@ -187,12 +193,9 @@ template <class DeviceType> class PairSUS2MTPKokkos : public PairSUS2MTP {
   using radial_table_value_type = double;
   bool do_list = false;                                      // Enable/disable preinterpolation table
   double inv_dr = 0.0;                                       // 1/dr for table indexing
-  Kokkos::View<radial_table_value_type***, DeviceType,
+  Kokkos::View<SUS2MTPKokkosRadialTableEntry *, DeviceType,
                Kokkos::MemoryTraits<Kokkos::RandomAccess>>
-      d_radial_list;                                         // Values: [species_pairs][grid_size][basic_mu_group_count]
-  Kokkos::View<radial_table_value_type***, DeviceType,
-               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
-      d_radial_der_list;                                     // Derivatives: [species_pairs][grid_size][basic_mu_group_count]
+      d_radial_vd_list;                                      // Packed {value, derivative}: [species_pair][grid][mu]
   Kokkos::View<radial_table_value_type***, DeviceType,
                Kokkos::MemoryTraits<Kokkos::RandomAccess>>
       d_env_gate_radial_list;                                 // Values: [species_pairs][grid_size][6]
