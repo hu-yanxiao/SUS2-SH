@@ -1369,25 +1369,21 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
       const int last_interval = list_grid_size - 2;
       if (r_list < 0) r_list = 0;
       if (r_list > last_interval) r_list = last_interval;
-      int r_next = r_list + 1;
       int shift = itype * species_count + jtype;  // Species pair index
       int table_index = d_pair_to_table_index(shift);
       if (table_index >= 0) {
         double ddr = dist * inv_dr - r_list;
         if (ddr < 0.0) ddr = 0.0;
         if (ddr > 1.0) ddr = 1.0;
+        const size_t entry_base0 =
+            (static_cast<size_t>(table_index) * static_cast<size_t>(list_grid_size) +
+             static_cast<size_t>(r_list)) *
+            static_cast<size_t>(basic_mu_group_count);
+        const size_t entry_base1 = entry_base0 + static_cast<size_t>(basic_mu_group_count);
 
         for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
-          const size_t entry0 =
-              (static_cast<size_t>(table_index) * static_cast<size_t>(list_grid_size) +
-               static_cast<size_t>(r_list)) *
-                  static_cast<size_t>(basic_mu_group_count) +
-              static_cast<size_t>(mu_group);
-          const size_t entry1 =
-              (static_cast<size_t>(table_index) * static_cast<size_t>(list_grid_size) +
-               static_cast<size_t>(r_next)) *
-                  static_cast<size_t>(basic_mu_group_count) +
-              static_cast<size_t>(mu_group);
+          const size_t entry0 = entry_base0 + static_cast<size_t>(mu_group);
+          const size_t entry1 = entry_base1 + static_cast<size_t>(mu_group);
           const SUS2MTPKokkosRadialTableEntry e0 = d_radial_vd_list(entry0);
           const SUS2MTPKokkosRadialTableEntry e1 = d_radial_vd_list(entry1);
           s_radial_vals(thread, mu_group) = e0.value + ddr * (e1.value - e0.value);
@@ -1601,6 +1597,7 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
     const F_FLOAT rsq = Kokkos::fma(r[0], r[0], Kokkos::fma(r[1], r[1], r[2] * r[2]));
     if (rsq >= max_cutoff_sq) continue;
     const F_FLOAT dist = Kokkos::sqrt(rsq);
+    const F_FLOAT inv_dist = static_cast<F_FLOAT>(1.0) / dist;
     F_FLOAT temp_force[3] = {0, 0, 0};
     F_FLOAT env_rho_dr = 0.0;
     F_FLOAT env_activation = 0.0;
@@ -1617,20 +1614,25 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
     }
     int table_index = -1;
     int r_list = 0;
-    int r_next = 0;
     F_FLOAT ddr = 0.0;
+    size_t entry_base0 = 0;
+    size_t entry_base1 = 0;
     if (do_list) {
       r_list = (int) Kokkos::floor(dist * inv_dr);
       const int last_interval = list_grid_size - 2;
       if (r_list < 0) r_list = 0;
       if (r_list > last_interval) r_list = last_interval;
-      r_next = r_list + 1;
       const int shift = itype * species_count + jtype;
       table_index = d_pair_to_table_index(shift);
       if (table_index >= 0) {
         ddr = dist * inv_dr - r_list;
         if (ddr < 0.0) ddr = 0.0;
         if (ddr > 1.0) ddr = 1.0;
+        entry_base0 =
+            (static_cast<size_t>(table_index) * static_cast<size_t>(list_grid_size) +
+             static_cast<size_t>(r_list)) *
+            static_cast<size_t>(basic_mu_group_count);
+        entry_base1 = entry_base0 + static_cast<size_t>(basic_mu_group_count);
       }
     }
     F_FLOAT sh_values[25];
@@ -1641,16 +1643,8 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
       F_FLOAT val = 0.0;
       F_FLOAT der = 0.0;
       if (table_index >= 0) {
-        const size_t entry0 =
-            (static_cast<size_t>(table_index) * static_cast<size_t>(list_grid_size) +
-             static_cast<size_t>(r_list)) *
-                static_cast<size_t>(basic_mu_group_count) +
-            static_cast<size_t>(mu_group);
-        const size_t entry1 =
-            (static_cast<size_t>(table_index) * static_cast<size_t>(list_grid_size) +
-             static_cast<size_t>(r_next)) *
-                static_cast<size_t>(basic_mu_group_count) +
-            static_cast<size_t>(mu_group);
+        const size_t entry0 = entry_base0 + static_cast<size_t>(mu_group);
+        const size_t entry1 = entry_base1 + static_cast<size_t>(mu_group);
         const SUS2MTPKokkosRadialTableEntry e0 = d_radial_vd_list(entry0);
         const SUS2MTPKokkosRadialTableEntry e1 = d_radial_vd_list(entry1);
         val = e0.value + ddr * (e1.value - e0.value);
@@ -1658,6 +1652,7 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
       } else {
         eval_radial_basic_mu_group(itype, jtype, dist, mu_group, val, der);
       }
+      const F_FLOAT der_inv_dist = der * inv_dist;
 
       for (int grouped_idx = d_basic_mu_offsets(mu_group);
            grouped_idx < d_basic_mu_offsets(mu_group + 1); grouped_idx++) {
@@ -1671,8 +1666,8 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
         if (is_sh_model) {
           const int sh_idx = d_basic_grouped_sh_index(grouped_idx);
           const F_FLOAT ylm = sh_values[sh_idx];
-          raw_contrib = val * ylm;
-          const F_FLOAT radial_der_pref = der * ylm / dist;
+          if (use_env_gate) raw_contrib = val * ylm;
+          const F_FLOAT radial_der_pref = der_inv_dist * ylm;
           jac0 = radial_der_pref * r[0] + val * sh_ders[3 * sh_idx + 0];
           jac1 = radial_der_pref * r[1] + val * sh_ders[3 * sh_idx + 1];
           jac2 = radial_der_pref * r[2] + val * sh_ders[3 * sh_idx + 2];
@@ -1691,8 +1686,8 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
           const F_FLOAT pow1 = int_pow(r[1], a1);
           const F_FLOAT pow2 = int_pow(r[2], a2);
           const F_FLOAT pow = pow0 * pow1 * pow2;
-          raw_contrib = val_scaled * pow;
-          F_FLOAT common = pow * der_scaled / dist;
+          if (use_env_gate) raw_contrib = val_scaled * pow;
+          F_FLOAT common = pow * der_scaled * inv_dist;
 
           jac0 = common * r[0];
           jac1 = common * r[1];
@@ -1707,7 +1702,6 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
         }
 
         if (use_env_gate) {
-          const F_FLOAT inv_dist = static_cast<F_FLOAT>(1.0) / dist;
           const F_FLOAT activation_der_factor =
               -env_screen_strength * env_activation_der * raw_contrib * inv_dist;
           temp_force[0] += coeff * (env_pair_gate * jac0 + activation_der_factor * r[0]);
