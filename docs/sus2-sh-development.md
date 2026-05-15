@@ -83,10 +83,13 @@ As of the inline-init update, `init-sh` writes only the SH topology and radial
 metadata. It intentionally omits `species_coeffs` and `moment_coeffs`, so
 `MLMTPR::Load()` treats the model as uninitialized and the ordinary training
 path initializes/fits parameters. Training can also build the same topology
-directly:
+directly. With `--inline-sh-model=<path>`, an existing file is used as the
+starting model for continued training; a missing file is created from the
+`init-sh` options:
 
 ```bash
 ../bin/mlp-sus2 train train.cfg --init-sh \
+  --inline-sh-model=untrained_sus2sh_l3k3_b5_l3322.mtp \
   --species-count=2 \
   --l-max=3 \
   --k-max=3 \

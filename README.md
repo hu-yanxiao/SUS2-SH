@@ -75,10 +75,13 @@ bin/mlp-sus2 train untrained_sus2sh_l3k3_b5_l3322.mtp train.cfg \
 
 The same SH topology can also be created directly from the `train` command.
 This avoids a separate untrained model file while keeping the original SUS2
-training flow:
+training flow. With `--inline-sh-model=<path>`, an existing file is used as the
+starting model for continued training; a missing file is created from the
+`init-sh` options:
 
 ```bash
 bin/mlp-sus2 train train.cfg --init-sh \
+  --inline-sh-model=untrained_sus2sh_l3k3_b5_l3322.mtp \
   --species-count=2 \
   --l-max=3 \
   --k-max=3 \

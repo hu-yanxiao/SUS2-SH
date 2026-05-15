@@ -366,6 +366,16 @@ std::string InlineSHModelFilename(const std::map<std::string, std::string>& opts
 	return oss.str();
 }
 
+bool RegularFileExists(const std::string& filename)
+{
+	struct stat st;
+	if (stat(filename.c_str(), &st) != 0)
+		return false;
+	if (!S_ISREG(st.st_mode))
+		ERROR("--inline-sh-model path exists but is not a regular file: " + filename);
+	return true;
+}
+
 void BroadcastString(std::string& value);
 
 bool PrepareInlineSphericalHarmonicModel(std::vector<std::string>& args,
@@ -385,9 +395,14 @@ bool PrepareInlineSphericalHarmonicModel(std::vector<std::string>& args,
 	std::string model_filename;
 	if (world_rank == 0) {
 		model_filename = InlineSHModelFilename(opts);
-		WriteSphericalHarmonicModel(model_filename, opts);
-		std::cout << "SUS2-SH inline initial model written to "
-		          << model_filename << std::endl;
+		if (RegularFileExists(model_filename)) {
+			std::cout << "SUS2-SH inline model exists; continuing training from "
+			          << model_filename << std::endl;
+		} else {
+			WriteSphericalHarmonicModel(model_filename, opts);
+			std::cout << "SUS2-SH inline initial model written to "
+			          << model_filename << std::endl;
+		}
 	}
 	BroadcastString(model_filename);
 #ifdef MLIP_MPI
