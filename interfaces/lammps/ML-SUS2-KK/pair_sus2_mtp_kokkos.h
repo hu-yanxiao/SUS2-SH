@@ -163,7 +163,10 @@ template <class DeviceType> class PairSUS2MTPKokkos : public PairSUS2MTP {
   // Alphas indicies
   Kokkos::View<int **, DeviceType> d_alpha_index_basic;      // For constructing of basic alphas.
   Kokkos::View<int **, DeviceType> d_alpha_index_times;      // For combining alphas
-  Kokkos::View<double *, DeviceType> d_alpha_times_coeff;     // Tensor-product coefficients
+  Kokkos::View<int *, DeviceType> d_alpha_times_a0;          // Cached lhs moment index
+  Kokkos::View<int *, DeviceType> d_alpha_times_a1;          // Cached rhs moment index
+  Kokkos::View<int *, DeviceType> d_alpha_times_out;         // Cached output moment index
+  Kokkos::View<double *, DeviceType> d_alpha_times_coeff;    // Tensor-product coefficients
   Kokkos::View<int *, DeviceType> d_alpha_moment_mapping;    // Maps alphas to basis functions.
 
   // SUS2-MLIP mapping arrays
@@ -178,6 +181,8 @@ template <class DeviceType> class PairSUS2MTPKokkos : public PairSUS2MTP {
   Kokkos::View<int *, DeviceType> d_basic_mu_values;      // Unique mu values appearing in alpha_index_basic
   Kokkos::View<int *, DeviceType> d_basic_grouped_indices;    // alpha_index_basic indices grouped by mu
   Kokkos::View<int *, DeviceType> d_alpha_basic_mu_group; // Compact basic-mu group index for each basic alpha
+  Kokkos::View<int *, DeviceType> d_alpha_basic_sh_index; // Flattened SH component for each basic alpha
+  Kokkos::View<int *, DeviceType> d_basic_grouped_sh_index; // Flattened SH component in grouped order
   Kokkos::View<int *, DeviceType> d_pair_to_table_index;  // Maps full species pair to sparse table index
 
   // The learned coefficients.

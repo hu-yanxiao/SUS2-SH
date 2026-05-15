@@ -162,6 +162,79 @@ KOKKOS_INLINE_FUNCTION void add_real_sh_kk(int l, int m, KK_FLOAT coeff,
   ders[3 * idx + 2] = coeff * (dpz * inv_pow + poly * inv_pow_der * rvec[2]);
 }
 
+KOKKOS_INLINE_FUNCTION void add_real_sh_value_kk(int l, int m, KK_FLOAT coeff,
+                                                 KK_FLOAT poly, KK_FLOAT r,
+                                                 KK_FLOAT *values)
+{
+  values[sh_flat_index_kk(l, m)] = coeff * poly * sh_inv_power_kk(l, r);
+}
+
+KOKKOS_INLINE_FUNCTION void eval_real_sh_values_kk(const KK_FLOAT *rvec, KK_FLOAT r,
+                                                   int lmax, KK_FLOAT *values)
+{
+  constexpr int max_components = 25;
+  for (int i = 0; i < max_components; ++i)
+    values[i] = static_cast<KK_FLOAT>(0.0);
+
+  const KK_FLOAT x = rvec[0];
+  const KK_FLOAT y = rvec[1];
+  const KK_FLOAT z = rvec[2];
+  const KK_FLOAT x2 = x * x;
+  const KK_FLOAT y2 = y * y;
+  const KK_FLOAT z2 = z * z;
+
+  add_real_sh_value_kk(0, 0, static_cast<KK_FLOAT>(0.28209479177387814), 1.0, r, values);
+  if (lmax == 0) return;
+
+  add_real_sh_value_kk(1, -1, static_cast<KK_FLOAT>(0.48860251190291992), y, r, values);
+  add_real_sh_value_kk(1, 0, static_cast<KK_FLOAT>(0.48860251190291992), z, r, values);
+  add_real_sh_value_kk(1, 1, static_cast<KK_FLOAT>(0.48860251190291992), x, r, values);
+  if (lmax == 1) return;
+
+  add_real_sh_value_kk(2, -2, static_cast<KK_FLOAT>(1.0925484305920792), x * y, r, values);
+  add_real_sh_value_kk(2, -1, static_cast<KK_FLOAT>(1.0925484305920792), y * z, r, values);
+  const KK_FLOAT p20 = static_cast<KK_FLOAT>(2.0) * z2 - x2 - y2;
+  add_real_sh_value_kk(2, 0, static_cast<KK_FLOAT>(0.31539156525252005), p20, r, values);
+  add_real_sh_value_kk(2, 1, static_cast<KK_FLOAT>(1.0925484305920792), x * z, r, values);
+  add_real_sh_value_kk(2, 2, static_cast<KK_FLOAT>(0.54627421529603959), x2 - y2, r, values);
+  if (lmax == 2) return;
+
+  const KK_FLOAT a31 = static_cast<KK_FLOAT>(4.0) * z2 - x2 - y2;
+  const KK_FLOAT p3m3 = static_cast<KK_FLOAT>(3.0) * x2 * y - y * y2;
+  add_real_sh_value_kk(3, -3, static_cast<KK_FLOAT>(0.59004358992664352), p3m3, r, values);
+  add_real_sh_value_kk(3, -2, static_cast<KK_FLOAT>(2.8906114426405538), x * y * z, r, values);
+  add_real_sh_value_kk(3, -1, static_cast<KK_FLOAT>(0.45704579946446577), y * a31, r, values);
+  const KK_FLOAT p30 = z * (static_cast<KK_FLOAT>(2.0) * z2 -
+                            static_cast<KK_FLOAT>(3.0) * x2 -
+                            static_cast<KK_FLOAT>(3.0) * y2);
+  add_real_sh_value_kk(3, 0, static_cast<KK_FLOAT>(0.3731763325901154), p30, r, values);
+  add_real_sh_value_kk(3, 1, static_cast<KK_FLOAT>(0.45704579946446577), x * a31, r, values);
+  const KK_FLOAT p32 = z * (x2 - y2);
+  add_real_sh_value_kk(3, 2, static_cast<KK_FLOAT>(1.4453057213202769), p32, r, values);
+  const KK_FLOAT p33 = x * x2 - static_cast<KK_FLOAT>(3.0) * x * y2;
+  add_real_sh_value_kk(3, 3, static_cast<KK_FLOAT>(0.59004358992664352), p33, r, values);
+  if (lmax == 3) return;
+
+  const KK_FLOAT rho2 = x2 + y2;
+  const KK_FLOAT a42 = static_cast<KK_FLOAT>(6.0) * z2 - rho2;
+  const KK_FLOAT a41 = static_cast<KK_FLOAT>(4.0) * z2 - static_cast<KK_FLOAT>(3.0) * rho2;
+  const KK_FLOAT p44base = x2 - y2;
+  const KK_FLOAT p4m4 = x * y * p44base;
+  add_real_sh_value_kk(4, -4, static_cast<KK_FLOAT>(2.5033429417967046), p4m4, r, values);
+  add_real_sh_value_kk(4, -3, static_cast<KK_FLOAT>(1.7701307697799304), z * p3m3, r, values);
+  add_real_sh_value_kk(4, -2, static_cast<KK_FLOAT>(0.94617469575756008), x * y * a42, r, values);
+  add_real_sh_value_kk(4, -1, static_cast<KK_FLOAT>(0.66904654355728921), y * z * a41, r, values);
+  const KK_FLOAT p40 = static_cast<KK_FLOAT>(8.0) * z2 * z2 -
+                       static_cast<KK_FLOAT>(24.0) * z2 * rho2 +
+                       static_cast<KK_FLOAT>(3.0) * rho2 * rho2;
+  add_real_sh_value_kk(4, 0, static_cast<KK_FLOAT>(0.10578554691520431), p40, r, values);
+  add_real_sh_value_kk(4, 1, static_cast<KK_FLOAT>(0.66904654355728921), x * z * a41, r, values);
+  add_real_sh_value_kk(4, 2, static_cast<KK_FLOAT>(0.47308734787878004), p44base * a42, r, values);
+  add_real_sh_value_kk(4, 3, static_cast<KK_FLOAT>(1.7701307697799304), z * p33, r, values);
+  const KK_FLOAT p44 = x2 * x2 - static_cast<KK_FLOAT>(6.0) * x2 * y2 + y2 * y2;
+  add_real_sh_value_kk(4, 4, static_cast<KK_FLOAT>(0.62583573544917614), p44, r, values);
+}
+
 KOKKOS_INLINE_FUNCTION void eval_real_sh_kk(const KK_FLOAT *rvec, KK_FLOAT r,
                                             int lmax, KK_FLOAT *values,
                                             KK_FLOAT *ders)
@@ -361,6 +434,12 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
                         4);
   MemKK::realloc_kokkos(d_alpha_index_times, "sus2mtp/kk:alpha_index_times", alpha_index_times_count,
                         4);
+  MemKK::realloc_kokkos(d_alpha_times_a0, "sus2mtp/kk:alpha_times_a0",
+                        alpha_index_times_count);
+  MemKK::realloc_kokkos(d_alpha_times_a1, "sus2mtp/kk:alpha_times_a1",
+                        alpha_index_times_count);
+  MemKK::realloc_kokkos(d_alpha_times_out, "sus2mtp/kk:alpha_times_out",
+                        alpha_index_times_count);
   MemKK::realloc_kokkos(d_alpha_times_coeff, "sus2mtp/kk:alpha_times_coeff",
                         alpha_index_times_count);
   MemKK::realloc_kokkos(d_alpha_moment_mapping, "sus2mtp/kk:moment_mapping", alpha_scalar_count);
@@ -406,6 +485,10 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
                         alpha_index_basic_count);
   MemKK::realloc_kokkos(d_alpha_basic_mu_group, "sus2mtp/kk:alpha_basic_mu_group",
                         alpha_index_basic_count);
+  MemKK::realloc_kokkos(d_alpha_basic_sh_index, "sus2mtp/kk:alpha_basic_sh_index",
+                        alpha_index_basic_count);
+  MemKK::realloc_kokkos(d_basic_grouped_sh_index, "sus2mtp/kk:basic_grouped_sh_index",
+                        alpha_index_basic_count);
   
   // Set offset pointers to match CPU version (direct assignment, no calculation)
   shift_coeffs_offset = PairSUS2MTP::shift_coeffs_offset;
@@ -425,6 +508,9 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   //Declare host arrays
   auto h_alpha_index_basic = Kokkos::create_mirror_view(d_alpha_index_basic);
   auto h_alpha_index_times = Kokkos::create_mirror_view(d_alpha_index_times);
+  auto h_alpha_times_a0 = Kokkos::create_mirror_view(d_alpha_times_a0);
+  auto h_alpha_times_a1 = Kokkos::create_mirror_view(d_alpha_times_a1);
+  auto h_alpha_times_out = Kokkos::create_mirror_view(d_alpha_times_out);
   auto h_alpha_times_coeff = Kokkos::create_mirror_view(d_alpha_times_coeff);
   auto h_alpha_moment_mapping = Kokkos::create_mirror_view(d_alpha_moment_mapping);
   auto h_species_coeffs = Kokkos::create_mirror_view(d_species_coeffs);
@@ -442,6 +528,8 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   auto h_basic_mu_values = Kokkos::create_mirror_view(d_basic_mu_values);
   auto h_basic_grouped_indices = Kokkos::create_mirror_view(d_basic_grouped_indices);
   auto h_alpha_basic_mu_group = Kokkos::create_mirror_view(d_alpha_basic_mu_group);
+  auto h_alpha_basic_sh_index = Kokkos::create_mirror_view(d_alpha_basic_sh_index);
+  auto h_basic_grouped_sh_index = Kokkos::create_mirror_view(d_basic_grouped_sh_index);
   auto h_pair_to_table_index = Kokkos::create_mirror_view(d_pair_to_table_index);
   auto h_regression_coeffs = Kokkos::create_mirror_view(d_regression_coeffs);
   auto h_shift_coeffs = Kokkos::create_mirror_view(d_shift_coeffs);
@@ -459,6 +547,16 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   }
   for (int i = 0; i < alpha_index_times_count; i++)
     h_alpha_times_coeff(i) = PairSUS2MTP::alpha_times_coeff[i];
+  for (int i = 0; i < alpha_index_times_count; i++) {
+    h_alpha_times_a0(i) = alpha_index_times[i][0];
+    h_alpha_times_a1(i) = alpha_index_times[i][1];
+    h_alpha_times_out(i) = alpha_index_times[i][3];
+  }
+  for (int i = 0; i < alpha_index_basic_count; i++) {
+    const int l = alpha_index_basic[i][1];
+    const int m = alpha_index_basic[i][2];
+    h_alpha_basic_sh_index(i) = l * l + l + m;
+  }
   for (int i = 0; i < species_count; i++) h_species_coeffs(i) = species_coeffs[i];
   
   // SUS2-MLIP: Copy from base class
@@ -496,7 +594,9 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
           h_mu_to_basic_group(mu) = basic_mu_cursor;
           found = true;
         }
-        h_basic_grouped_indices(grouped_basic_cursor++) = i;
+        h_basic_grouped_indices(grouped_basic_cursor) = i;
+        h_basic_grouped_sh_index(grouped_basic_cursor) = h_alpha_basic_sh_index(i);
+        grouped_basic_cursor++;
         h_alpha_basic_mu_group(i) = basic_mu_cursor;
       }
     }
@@ -521,6 +621,9 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   // Peform the copy from host to device
   Kokkos::deep_copy(d_alpha_index_basic, h_alpha_index_basic);
   Kokkos::deep_copy(d_alpha_index_times, h_alpha_index_times);
+  Kokkos::deep_copy(d_alpha_times_a0, h_alpha_times_a0);
+  Kokkos::deep_copy(d_alpha_times_a1, h_alpha_times_a1);
+  Kokkos::deep_copy(d_alpha_times_out, h_alpha_times_out);
   Kokkos::deep_copy(d_alpha_times_coeff, h_alpha_times_coeff);
   Kokkos::deep_copy(d_alpha_moment_mapping, h_alpha_moment_mapping);
   Kokkos::deep_copy(d_species_coeffs, h_species_coeffs);
@@ -538,6 +641,8 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   Kokkos::deep_copy(d_basic_mu_values, h_basic_mu_values);
   Kokkos::deep_copy(d_basic_grouped_indices, h_basic_grouped_indices);
   Kokkos::deep_copy(d_alpha_basic_mu_group, h_alpha_basic_mu_group);
+  Kokkos::deep_copy(d_alpha_basic_sh_index, h_alpha_basic_sh_index);
+  Kokkos::deep_copy(d_basic_grouped_sh_index, h_basic_grouped_sh_index);
   Kokkos::deep_copy(d_pair_to_table_index, h_pair_to_table_index);
   Kokkos::deep_copy(d_regression_coeffs, h_regression_coeffs);
   Kokkos::deep_copy(d_shift_coeffs, h_shift_coeffs);  // CRITICAL FIX: Copy shift_coeffs
@@ -1068,8 +1173,11 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
       int radial_scratch_count = basic_mu_group_count;
       int dist_scratch_count = max_alpha_index_basic;           // s_dist_powers
       int coord_scratch_count = 3 * max_alpha_index_basic;      // s_coord_powers (3 dimensions)
+      int basic_accum_scratch_count =
+          (env_gate_enabled ? 2 : 1) * alpha_index_basic_count;  // moment and optional env-gate accum
       int scratch_size = scratch_size_helper<F_FLOAT>(
-          team_size * (radial_scratch_count + dist_scratch_count + coord_scratch_count));
+          team_size * (radial_scratch_count + dist_scratch_count + coord_scratch_count) +
+          basic_accum_scratch_count);
       Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeAlphaBasic> policy_basic_alpha(team_count,
                                                                                      team_size,
                                                                                      vector_length);
@@ -1077,17 +1185,11 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
       Kokkos::parallel_for("ComputeAlphaBasic", policy_basic_alpha, *this);
     }
 
-    // ========== Calculate the non-elementary alphas  ==========
+    // ========== Calculate product alphas and nbh derivatives ==========
     {
       typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeAlphaTimes> policy_times(
           0, chunk_size);
       Kokkos::parallel_for("ComputeAlphaTimes", policy_times, *this);
-    }
-    // ========== Calc the nbh ders wrt moments ==========
-    {
-      typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeNbhDers> policy_nbh_calc(
-          0, chunk_size);
-      Kokkos::parallel_for("ComputeNbhDers", policy_nbh_calc, *this);
     }
     if (env_gate_enabled) {
       typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeEnvRhoChain>
@@ -1230,6 +1332,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
   shared_double_2d s_radial_vals(team.team_scratch(0), team.team_size(), basic_mu_group_count);
   shared_double_2d s_dist_powers(team.team_scratch(0), team.team_size(), max_alpha_index_basic);
   shared_double_3d s_coord_powers(team.team_scratch(0), team.team_size(), max_alpha_index_basic);
+  const int accum_row_count = env_gate_enabled ? 2 : 1;
+  shared_double_2d s_basic_accum(team.team_scratch(0), accum_row_count,
+                                 alpha_index_basic_count);
 
   const int ii = team.league_rank();
   if (ii >= chunk_size) return;
@@ -1239,6 +1344,14 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
   const int itype = type[i] - 1;    // switch to zero indexing
   const int jnum = d_numneigh(i);
   const int thread = team.team_rank();
+
+  Kokkos::parallel_for(Kokkos::TeamThreadRange(team, accum_row_count * alpha_index_basic_count),
+                       [&](const int idx) {
+    const int row = idx / alpha_index_basic_count;
+    const int col = idx - row * alpha_index_basic_count;
+    s_basic_accum(row, col) = 0.0;
+  });
+  team.team_barrier();
 
   Kokkos::parallel_for(Kokkos::TeamThreadRange(team, jnum), [&](const int jj) {
     const int j = d_neighbors(i, jj) & NEIGHMASK;
@@ -1303,21 +1416,17 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 
     if (is_sh_model) {
       F_FLOAT sh_values[25];
-      F_FLOAT sh_ders[75];
-      eval_real_sh_kk(r, dist, sh_l_max, sh_values, sh_ders);
+      eval_real_sh_values_kk(r, dist, sh_l_max, sh_values);
 
       Kokkos::parallel_for(Kokkos::ThreadVectorRange(team, alpha_index_basic_count), [&](const int k) {
         const int mu_group = d_alpha_basic_mu_group(k);
-        const int l = d_alpha_index_basic(k, 1);
-        const int m = d_alpha_index_basic(k, 2);
-        const int sh_idx = sh_flat_index_kk(l, m);
+        const int sh_idx = d_alpha_basic_sh_index(k);
         const F_FLOAT raw_contrib = s_radial_vals(thread, mu_group) * sh_values[sh_idx];
         if (env_gate_enabled) {
-          Kokkos::atomic_add(&d_moment_tensor_vals(ii, k), env_pair_gate * raw_contrib);
-          Kokkos::atomic_add(&d_env_gate_activation_basic_vals(ii, k),
-                             env_activation * raw_contrib);
+          Kokkos::atomic_add(&s_basic_accum(0, k), env_pair_gate * raw_contrib);
+          Kokkos::atomic_add(&s_basic_accum(1, k), env_activation * raw_contrib);
         } else {
-          Kokkos::atomic_add(&d_moment_tensor_vals(ii, k), raw_contrib);
+          Kokkos::atomic_add(&s_basic_accum(0, k), raw_contrib);
         }
       });
     } else {
@@ -1349,15 +1458,20 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
         F_FLOAT pow = pow0 * pow1 * pow2;
         const F_FLOAT raw_contrib = val * pow;
         if (env_gate_enabled) {
-          Kokkos::atomic_add(&d_moment_tensor_vals(ii, k), env_pair_gate * raw_contrib);
-          Kokkos::atomic_add(&d_env_gate_activation_basic_vals(ii, k),
-                             env_activation * raw_contrib);
+          Kokkos::atomic_add(&s_basic_accum(0, k), env_pair_gate * raw_contrib);
+          Kokkos::atomic_add(&s_basic_accum(1, k), env_activation * raw_contrib);
         } else {
-          Kokkos::atomic_add(&d_moment_tensor_vals(ii, k), raw_contrib);
+          Kokkos::atomic_add(&s_basic_accum(0, k), raw_contrib);
         }
 
       });
     }
+  });
+  team.team_barrier();
+
+  Kokkos::parallel_for(Kokkos::TeamThreadRange(team, alpha_index_basic_count), [&](const int k) {
+    d_moment_tensor_vals(ii, k) = s_basic_accum(0, k);
+    if (env_gate_enabled) d_env_gate_activation_basic_vals(ii, k) = s_basic_accum(1, k);
   });
 }
 
@@ -1366,17 +1480,38 @@ template <class DeviceType>
 KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(TagPairSUS2MTPComputeAlphaTimes,
                                                                   const int &ii) const
 {
-  // Traverse all edges in the alpha times compute graph
   for (int k = 0; k < alpha_index_times_count; k++) {
-    int a0 = d_alpha_index_times(k, 0);
-    int a1 = d_alpha_index_times(k, 1);
+    int a0 = d_alpha_times_a0(k);
+    int a1 = d_alpha_times_a1(k);
     F_FLOAT mult = d_alpha_times_coeff(k);
-    int a3 = d_alpha_index_times(k, 3);
+    int a3 = d_alpha_times_out(k);
 
     F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
     F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
 
     d_moment_tensor_vals(ii, a3) += mult * val0 * val1;
+  }
+
+  const int i = d_ilist[ii + chunk_offset];
+  const int itype = type[i] - 1;
+  const F_FLOAT species_coeff = d_species_coeffs[itype];
+
+  for (int k = 0; k < alpha_scalar_count; k++) {
+    d_nbh_energy_ders_wrt_moments(ii, d_alpha_moment_mapping(k)) = d_linear_coeffs(k) * species_coeff;
+  }
+
+  for (int k = alpha_index_times_count - 1; k >= 0; k--) {
+    int a0 = d_alpha_times_a0(k);
+    int a1 = d_alpha_times_a1(k);
+    F_FLOAT mult = d_alpha_times_coeff(k);
+    int a3 = d_alpha_times_out(k);
+
+    F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
+    F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
+    F_FLOAT val3 = d_nbh_energy_ders_wrt_moments(ii, a3);
+
+    d_nbh_energy_ders_wrt_moments(ii, a1) += val3 * mult * val0;
+    d_nbh_energy_ders_wrt_moments(ii, a0) += val3 * mult * val1;
   }
 }
 
@@ -1404,10 +1539,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(TagPairSUS
   }
 
   for (int k = alpha_index_times_count - 1; k >= 0; k--) {
-    int a0 = d_alpha_index_times(k, 0);
-    int a1 = d_alpha_index_times(k, 1);
+    int a0 = d_alpha_times_a0(k);
+    int a1 = d_alpha_times_a1(k);
     F_FLOAT mult = d_alpha_times_coeff(k);
-    int a3 = d_alpha_index_times(k, 3);
+    int a3 = d_alpha_times_out(k);
 
     F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
     F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
@@ -1534,9 +1669,7 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
         F_FLOAT jac2 = 0.0;
 
         if (is_sh_model) {
-          const int l = d_alpha_index_basic(k, 1);
-          const int m = d_alpha_index_basic(k, 2);
-          const int sh_idx = sh_flat_index_kk(l, m);
+          const int sh_idx = d_basic_grouped_sh_index(grouped_idx);
           const F_FLOAT ylm = sh_values[sh_idx];
           raw_contrib = val * ylm;
           const F_FLOAT radial_der_pref = der * ylm / dist;
