@@ -29,6 +29,7 @@ printed precision:
 | shscratch | Extra shared-memory SH handling around basic accumulation | Slower than simpler scratch accumulation. |
 | layerteam | Team-per-atom graph-layer product/reverse path | Math matched, but slower from team/block overhead. |
 | layerflat | Flattened atom-by-layer product/reverse kernels | Math matched, but much slower from kernel launches and global traffic. |
+| alphatmpl | Compile-time basic-alpha SH/env-gate specialization without scratch layout changes | Math matched, but slower than `forcetmpl` on the 10k test. |
 
 ## Current Direction
 
