@@ -134,6 +134,9 @@ template <class DeviceType> class PairSUS2MTPKokkos : public PairSUS2MTP {
   operator()(TagPairSUS2MTPComputeForce<NEIGHFLAG, EVFLAG>, const int &ii,
              EV_FLOAT &) const;    // With global energy reduction as needed
 
+  template <int NEIGHFLAG, int EVFLAG, bool SHMODEL, bool ENVGATE>
+  KOKKOS_INLINE_FUNCTION void compute_force_impl(const int &ii, EV_FLOAT &ev) const;
+
  protected:
   int input_chunk_size, chunk_size,
       chunk_offset;    // Needed to process the computation in batches to avoid running out of VRAM.

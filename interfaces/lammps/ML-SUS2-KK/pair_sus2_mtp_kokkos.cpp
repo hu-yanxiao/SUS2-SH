@@ -1561,12 +1561,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 }
 
 template <class DeviceType>
-template <int NEIGHFLAG, int EVFLAG>
+template <int NEIGHFLAG, int EVFLAG, bool SHMODEL, bool ENVGATE>
 KOKKOS_INLINE_FUNCTION void
-PairSUS2MTPKokkos<DeviceType>::operator()(
-    TagPairSUS2MTPComputeForce<NEIGHFLAG, EVFLAG>,
-    const int &ii,
-    EV_FLOAT &ev) const
+PairSUS2MTPKokkos<DeviceType>::compute_force_impl(const int &ii, EV_FLOAT &ev) const
 {
   // The f array is duplicated for OpenMP, atomic for GPU, and neither for Serial
   auto v_f =
@@ -1583,7 +1580,7 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
   const int itype = type[i] - 1;
   const F_FLOAT species_coeff = d_species_coeffs[itype];
   const F_FLOAT xi[3] = {x(i, 0), x(i, 1), x(i, 2)};
-  const bool use_env_gate = env_gate_enabled;
+  const bool use_env_gate = ENVGATE;
   const F_FLOAT env_screen_strength =
       use_env_gate ? d_env_gate_values(ii) : static_cast<F_FLOAT>(0.0);
   const F_FLOAT env_rho_chain_prefactor =
@@ -1637,7 +1634,7 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
     }
     F_FLOAT sh_values[25];
     F_FLOAT sh_ders[75];
-    if (is_sh_model) eval_real_sh_kk(r, dist, sh_l_max, sh_values, sh_ders);
+    if (SHMODEL) eval_real_sh_kk(r, dist, sh_l_max, sh_values, sh_ders);
 
     for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
       F_FLOAT val = 0.0;
@@ -1663,7 +1660,7 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
         F_FLOAT jac1 = 0.0;
         F_FLOAT jac2 = 0.0;
 
-        if (is_sh_model) {
+        if (SHMODEL) {
           const int sh_idx = d_basic_grouped_sh_index(grouped_idx);
           const F_FLOAT ylm = sh_values[sh_idx];
           if (use_env_gate) raw_contrib = val * ylm;
@@ -1754,6 +1751,27 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
 
     if (eflag_global) ev.evdwl += nbh_energy;
     if (eflag_atom) d_eatom[i] += nbh_energy;
+  }
+}
+
+template <class DeviceType>
+template <int NEIGHFLAG, int EVFLAG>
+KOKKOS_INLINE_FUNCTION void
+PairSUS2MTPKokkos<DeviceType>::operator()(
+    TagPairSUS2MTPComputeForce<NEIGHFLAG, EVFLAG>,
+    const int &ii,
+    EV_FLOAT &ev) const
+{
+  if (is_sh_model) {
+    if (env_gate_enabled)
+      compute_force_impl<NEIGHFLAG, EVFLAG, true, true>(ii, ev);
+    else
+      compute_force_impl<NEIGHFLAG, EVFLAG, true, false>(ii, ev);
+  } else {
+    if (env_gate_enabled)
+      compute_force_impl<NEIGHFLAG, EVFLAG, false, true>(ii, ev);
+    else
+      compute_force_impl<NEIGHFLAG, EVFLAG, false, false>(ii, ev);
   }
 }
 

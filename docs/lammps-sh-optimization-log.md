@@ -11,7 +11,8 @@ noted otherwise.
 | --- | --- | ---: | ---: | --- |
 | baseline before SH indexing | Previous formal Kokkos path | 29.0039 s | 28.371 s | Reference |
 | shidx | Precomputed flattened SH indices for basic and grouped force paths | 24.906-24.9695 s | 24.276-24.339 s | Accepted |
-| forcebase | Neighbor-level radial table base indices, edge-level `1/dist`, and skipped unused non-env `raw_contrib` | 24.3183-24.426 s | 23.687-23.793 s | Accepted candidate |
+| forcebase | Neighbor-level radial table base indices, edge-level `1/dist`, and skipped unused non-env `raw_contrib` | 24.3183-24.426 s | 23.687-23.793 s | Accepted |
+| forcetmpl | Compile-time force specialization for SH/non-SH and env-gate on/off paths | 22.4287-22.4583 s | 21.797-21.825 s | Accepted |
 
 The final thermo line for accepted candidates matched the `shidx` reference to
 printed precision:
@@ -33,6 +34,7 @@ printed precision:
 
 Further work should target generic, model-independent reductions in force/basic
 inner-loop cost and memory traffic. Avoid radial-basis-specific shortcuts. The
-next high-confidence candidate is compile-time specialization for the common
-SUS2-SH/no-env-gate path so that the force kernel does not carry runtime SH and
-environment-gate branches inside the innermost loops.
+next high-confidence candidates should focus on the basic-alpha kernel and
+table/memory layout. The force kernel now has compile-time specialization for
+the common SUS2-SH/no-env-gate path, so repeating that strategy elsewhere is
+more promising than graph-layer rewrites.
