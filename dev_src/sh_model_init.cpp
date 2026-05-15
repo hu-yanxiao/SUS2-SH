@@ -667,18 +667,4 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ofs << graph.scalars_[i];
 	}
 	ofs << "}\n";
-	ofs << "species_coeffs = {";
-	for (int i = 0; i < species_count; ++i) {
-		if (i != 0)
-			ofs << ", ";
-		ofs << "0.0";
-	}
-	ofs << "}\n";
-	ofs << "moment_coeffs = {";
-	for (size_t i = 0; i < graph.scalars_.size(); ++i) {
-		if (i != 0)
-			ofs << ", ";
-		ofs << "0.0";
-	}
-	ofs << "}\n";
 }

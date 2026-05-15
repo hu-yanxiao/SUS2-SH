@@ -79,9 +79,11 @@ Model initialization:
   --radial-basis-type=RBChebyshev_sss
 ```
 
-As of the inline-init update, `init-sh` writes zero linear coefficient
-placeholders instead of initializing `species_coeffs` and `moment_coeffs` to
-`1e-3`. Training can also build the same topology directly:
+As of the inline-init update, `init-sh` writes only the SH topology and radial
+metadata. It intentionally omits `species_coeffs` and `moment_coeffs`, so
+`MLMTPR::Load()` treats the model as uninitialized and the ordinary training
+path initializes/fits parameters. Training can also build the same topology
+directly:
 
 ```bash
 ../bin/mlp-sus2 train train.cfg --init-sh \
