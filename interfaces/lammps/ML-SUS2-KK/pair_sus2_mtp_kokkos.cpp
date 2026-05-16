@@ -172,10 +172,6 @@ KOKKOS_INLINE_FUNCTION void add_real_sh_value_kk(int l, int m, KK_FLOAT coeff,
 KOKKOS_INLINE_FUNCTION void eval_real_sh_values_kk(const KK_FLOAT *rvec, KK_FLOAT r,
                                                    int lmax, KK_FLOAT *values)
 {
-  constexpr int max_components = 25;
-  for (int i = 0; i < max_components; ++i)
-    values[i] = static_cast<KK_FLOAT>(0.0);
-
   const KK_FLOAT x = rvec[0];
   const KK_FLOAT y = rvec[1];
   const KK_FLOAT z = rvec[2];
@@ -239,16 +235,6 @@ KOKKOS_INLINE_FUNCTION void eval_real_sh_kk(const KK_FLOAT *rvec, KK_FLOAT r,
                                             int lmax, KK_FLOAT *values,
                                             KK_FLOAT *ders)
 {
-  constexpr int max_components = 25;
-  const int count = (lmax + 1) * (lmax + 1);
-  for (int i = 0; i < max_components; ++i) {
-    values[i] = static_cast<KK_FLOAT>(0.0);
-    ders[3 * i + 0] = static_cast<KK_FLOAT>(0.0);
-    ders[3 * i + 1] = static_cast<KK_FLOAT>(0.0);
-    ders[3 * i + 2] = static_cast<KK_FLOAT>(0.0);
-  }
-  (void) count;
-
   const KK_FLOAT x = rvec[0];
   const KK_FLOAT y = rvec[1];
   const KK_FLOAT z = rvec[2];

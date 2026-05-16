@@ -289,3 +289,24 @@ The clean Intel `-ipo` AVX2 build took 816 s, dominated by final IPO linking.
 Use that build for final promoted binaries, but prefer a temporary non-IPO or
 incremental build only for early CPU screening when many small variants need to
 be tested.
+
+On 2026-05-16, the GPU SUS2-SH Kokkos path was updated to avoid clearing the
+full local SH value/derivative arrays before each edge evaluation. This is valid
+because every `(l,m)` component referenced by the generated SH basic indices is
+written explicitly before use. The accepted formal binary is:
+
+```bash
+/work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex/bin/lmp.sus2_sh_kk_sm80
+```
+
+Validation on the 10,240-atom Cu-Zr SH 3322 `_lmp` case, 2,000 steps, one A100:
+
+```text
+formal before nozero: loop 22.5783 s, pair 21.931 s
+nozero:               loop 20.6481 s, pair 19.986 s
+nozero direct repeat: loop 20.5828 s, pair 19.932 s
+```
+
+The nozero-only binary was slightly faster than the combined nozero plus
+`r^{-l}` precompute experiment (`20.5828 s` versus `20.6136 s` in direct A/B),
+so the promoted source keeps only the nozero change.
