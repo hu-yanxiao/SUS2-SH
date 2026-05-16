@@ -53,6 +53,7 @@ only for early screening.
 | layerflat | Flattened atom-by-layer product/reverse kernels | Math matched, but much slower from kernel launches and global traffic. |
 | alphatmpl | Compile-time basic-alpha SH/env-gate specialization without scratch layout changes | Math matched, but slower than `forcetmpl` on the 10k test. |
 | shpow | Precompute `r^{-0..4}`/derivative powers inside SH evaluation | Math matched, but nozero-only was slightly faster in direct A/B testing. |
+| mucontract | For SH/no-env force, pre-sum `coeff * Y_lm` and `coeff * dY_lm` within each `mu_group` | Thermo matched to printed precision and was only about 0.3% faster than nozero; rejected for now because it changes floating-operation grouping and produced compiler unreachable-loop warnings. |
 
 ## Current Direction
 
