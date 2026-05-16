@@ -267,3 +267,25 @@ _lmp radial CPU AVX2:  loop 41.4773 s, pair avg 39.188 s
 ```
 
 The direct and `_lmp` final step-2000 thermodynamic lines matched to printed precision apart from last-digit pressure noise.
+
+On 2026-05-16, the CPU SUS2-SH basic-alpha path was updated to cache flattened
+SH indices, split the SH env-gate/no-env-gate branches, and skip moment-tensor
+coordinate/distance power tables on the SH path. Formal AVX2 validation used
+the current server binary:
+
+```bash
+/work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex/bin/lmp.sus2_sh_cpu_avx2
+```
+
+Two orderings on the 10,240-atom Cu-Zr SH 3322 `_lmp` case both matched final
+thermodynamics to printed precision:
+
+```text
+old then new: old loop 41.8932 s, pair avg 39.286 s; new loop 40.5244 s, pair avg 38.394 s
+new then old: new loop 40.5227 s, pair avg 38.394 s; old loop 41.549 s, pair avg 39.113 s
+```
+
+The clean Intel `-ipo` AVX2 build took 816 s, dominated by final IPO linking.
+Use that build for final promoted binaries, but prefer a temporary non-IPO or
+incremental build only for early CPU screening when many small variants need to
+be tested.

@@ -130,6 +130,7 @@ class PairSUS2MTP : public Pair {
   int *alpha_basic_a1;          // Cached y exponent for each basic alpha
   int *alpha_basic_a2;          // Cached z exponent for each basic alpha
   int *alpha_basic_norm_rank;   // Cached a0+a1+a2 for each basic alpha
+  int *alpha_basic_sh_index;    // Cached flattened real-SH component for each basic alpha
   int *alpha_times_a0;          // Cached lhs moment index for each alpha-times entry
   int *alpha_times_a1;          // Cached rhs moment index for each alpha-times entry
   int *alpha_times_multiplier;  // Cached multiplier for each alpha-times entry

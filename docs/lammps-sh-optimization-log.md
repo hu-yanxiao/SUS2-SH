@@ -1,11 +1,12 @@
 # SUS2-SH LAMMPS Optimization Log
 
-This note records tested LAMMPS Kokkos/GPU optimization attempts for the SUS2-SH
-interface. Timings below use the Cu-Zr 10k atom 3322 `_lmp` test, one A100
-(`sm_80`), `run 2000`, double precision, and direct radial table mode unless
-noted otherwise.
+This note records tested LAMMPS GPU and CPU optimization attempts for the
+SUS2-SH interface. GPU timings use the Cu-Zr 10k atom 3322 `_lmp` test, one
+A100 (`sm_80`), `run 2000`, double precision, and direct radial table mode
+unless noted otherwise. CPU timings use the same 10,240-atom Cu-Zr 3322
+`_lmp` model, `run 2000`, double precision, 40 MPI ranks, Intel AVX2 build.
 
-## Accepted Changes
+## Accepted GPU Changes
 
 | Label | Main change | Loop time | Pair time | Status |
 | --- | --- | ---: | ---: | --- |
@@ -21,7 +22,27 @@ printed precision:
 2000 10240 -62831.532 265.67795 -62565.854 200.73973 218.94537 183538.51 66.096749 52.901597 52.490212 0 0 0
 ```
 
-## Rejected Changes
+## Accepted CPU Changes
+
+| Label | Main change | Old loop | New loop | Old pair avg | New pair avg | Status |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| cpu-basic-shpath | Cache flattened SH component per basic alpha, split SH env-gate/no-env branches, and skip moment-tensor coordinate/distance power tables on the SUS2-SH path | 41.8932 s | 40.5244 s | 39.286 s | 38.394 s | Accepted |
+| cpu-basic-shpath reverse-order check | Same binaries, but run new first and old second to check ordering effects | 41.549 s | 40.5227 s | 39.113 s | 38.394 s | Accepted |
+
+The CPU final step-2000 thermodynamic line matched between the old and new
+AVX2 binaries to printed precision:
+
+```text
+2000 10240 -62829.148 264.53068 -62564.618 199.87288 -62.536088 183165.01 65.981795 53.037901 52.339801 0 0 0
+```
+
+CPU build note: the formal AVX2 binary is built with Intel `-ipo`; the clean
+build completed successfully but spent most of its 816 s runtime in the final
+single-process IPO link. For future CPU micro-optimizations, keep this formal
+build for final validation, but use a non-IPO or incremental experimental build
+only for early screening.
+
+## Rejected GPU Changes
 
 | Label | Main change | Reason rejected |
 | --- | --- | --- |
@@ -38,4 +59,7 @@ inner-loop cost and memory traffic. Avoid radial-basis-specific shortcuts. The
 next high-confidence candidates should focus on the basic-alpha kernel and
 table/memory layout. The force kernel now has compile-time specialization for
 the common SUS2-SH/no-env-gate path, so repeating that strategy elsewhere is
-more promising than graph-layer rewrites.
+more promising than graph-layer rewrites. On CPU, the accepted change shows that
+the SH path should avoid moment-tensor-only work entirely; larger gains likely
+require product-path or memory-layout changes rather than more small branch
+cleanup.
