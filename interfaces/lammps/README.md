@@ -1,6 +1,6 @@
 # ML-SUS2 LAMMPS Interface
 
-This directory is the maintained LAMMPS interface snapshot for SUS2-MLIP.
+This directory is the maintained LAMMPS interface snapshot for SUS2-SH models.
 It was refreshed from the server runtime tree:
 
 ```text
@@ -18,6 +18,13 @@ sus2mtp/kk/host
 
 Use `ML-SUS2` as the package name. Do not use the old `ML-SUS2-MTP`
 name for new builds.
+
+This is the spherical-harmonic line. It reads SUS2-SH model files with the SH
+metadata and evaluates real spherical-harmonic angular channels. The original
+moment-tensor LAMMPS interface remains in the `SUS2-MLIP` repository. Both
+interfaces intentionally keep the same user-facing `sus2mtp` pair-style names
+so existing LAMMPS input files need only point to the appropriate model file and
+installed binary.
 
 ## Layout
 

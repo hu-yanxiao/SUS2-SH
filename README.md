@@ -18,6 +18,27 @@ This repository is currently a developer project derived from SUS2-MLIP v1.1.
 For implementation notes, scalar enumeration rules, validation status, and the
 current GPUMD export plan, see `docs/sus2-sh-development.md`.
 
+## Repository Role
+
+`SUS2-SH` is the CPU/reference implementation for the spherical-harmonic line.
+Use it to define SH model topology, generate untrained SH `.mtp` files, train
+with the original SUS2 BFGS workflow, and validate the chain rule. Related
+repositories are split by runtime target:
+
+| Repository | Role |
+| --- | --- |
+| `SUS2-MLIP` | Original SUS2 v1.1 moment-tensor trainer and model core. |
+| `SUS2-SH` | This repository: real-SH model definition, CPU training, model I/O, and SH LAMMPS source. |
+| `SUS2-SH-GPU` | CUDA evaluator for SUS2-SH training, including GPU objective/gradient, GPU-built `do-lin` systems, and multi-GPU streaming. |
+| `GPUMD-SUS2-SH` | GPUMD inference backend for SUS2-SH models. |
+| `PySUS2SH` | Python/ASE/phonon workflow package for SUS2-SH models. |
+
+The SH line currently uses real spherical harmonics, even parity scalar
+selection, sorted `(l,k)` coupling rules, and body-specific angular cutoffs via
+`--body-l-max`. Current optimized paths are designed for `l <= 4` and
+`k <= 6`; unsupported topologies should remain on the conservative CPU path
+until separately validated.
+
 The inherited SUS2-MLIP documentation below remains relevant for CFG/MTP formats
 and ordinary `mlp-sus2` usage.
 ![image](https://github.com/user-attachments/assets/0aaaa76f-b4f8-459e-b8ec-1ddc08849693)
@@ -156,7 +177,7 @@ There are two new hyperparameters `L` and `scaling_map`.
 At `untrained_sus2mlip/`, we prepared 6 sets of untrained basis corresponding to `L∈{2,3} & k∈{1,3}`. In both model, the interactions are considered up to the 5-body. Further details regarding the scalar basis in each model are provided in the table below.
 ![QQ_1735905101839](https://github.com/user-attachments/assets/c2c17d17-81ab-4d2d-ab61-8eb3f0e9d882)
 
-More technical details about unvirsal scaling and super-linear radial function can be found in our paper:
+More technical details about universal scaling and super-linear radial function can be found in our paper:
 > Super-Linear Machine Learning Interatomic Potentials with Physics-Informed Universal Scaling and Ultra-Small Parameterization [https://doi/10.1073/pnas.2503439122](https://www.pnas.org/doi/10.1073/pnas.2503439122)
 
 # Usage
@@ -200,16 +221,16 @@ Notes:
 - `--do-samp=false` disables random sampling during the pre-training stage.
 - `--std-weight` and `--stdd-weight` control the two std-based regularization terms.
 * **Evaluating trained models**
-To evaluate a tarined model `trained_sus2mlip` on a specified dataset `target.cfg`, you run:
+To evaluate a trained model `trained_sus2mlip` on a specified dataset `target.cfg`, you run:
 ```bash
 mlp-sus2 calc-errors trained_sus2mlip target.cfg
 ```
 # External Tools
 ## LAMMPS
-The maintained LAMMPS interface is provided in `interfaces/lammps/` and as the
-historical `sus2-interface-20260410.tar.gz` archive included in this snapshot.
-The interface package name is `ML-SUS2`, and the LAMMPS runtime syntax remains
-`pair_style sus2mtp` / `pair_style sus2mtp/kk`.
+The maintained SH LAMMPS interface is provided in `interfaces/lammps/`. It uses
+the same package name and pair-style names as the SUS2-MLIP interface
+(`ML-SUS2`, `pair_style sus2mtp`, and `pair_style sus2mtp/kk`), but the reader
+and angular basis are SH-specific and expect a SUS2-SH model file.
 
 Quick install into a clean LAMMPS tree:
 
@@ -229,15 +250,18 @@ The optional `tabstep` keyword controls the table spacing, with a default of
 `1.0e-4` Angstrom. The preinterpolation table is built only for species pairs
 that actually appear in the current simulation atom types.
 ## GPUMD-SUS2
-The maintained GPUMD interface is hosted separately at
-[GPUMD-SUS2](https://github.com/hu-yanxiao/GPUMD-SUS2). It provides SUS2 v1.1
-GPU inference support for GPUMD, including the current table path, optional
-direct radial evaluation, product-assign optimization, and model-topology
-code-generation utilities. Use the GPUMD-SUS2 repository for GPUMD builds; this
-SUS2-MLIP repository remains the training/model-core source.
-## PySUS2
-PySUS2 is a comprehensive suite of tools and Python modules developed based on the SUS2-MLIP model, designed for atomistic simulations. It supports a range of functionalities including structure relaxation, phonon dispersion analysis, and lattice thermal conductivity calculations.
-(in progress)
+The SH GPUMD interface is hosted separately at
+[GPUMD-SUS2-SH](https://github.com/hu-yanxiao/GPUMD-SUS2-SH). It loads
+SUS2-SH `.mtp` files, evaluates real SH basic channels, and executes the saved
+SH product graph in GPUMD. The older
+[GPUMD-SUS2](https://github.com/hu-yanxiao/GPUMD-SUS2) repository remains the
+moment-tensor GPUMD line.
+## PySUS2SH
+[PySUS2SH](https://github.com/hu-yanxiao/PySUS2SH) is the Python/ASE workflow
+package for SUS2-SH models. It supports CPU inference, structure relaxation,
+phonon dispersion, lattice thermal conductivity, elastic constants,
+equation-of-state workflows, and related post-processing. The older PySUS2
+package remains the moment-tensor Python interface.
 ## CSO-AES
 [CSO-AES](https://github.com/hu-yanxiao/CSO-AES/tree/main) (Covering Set Optimization driven Atomic Environment Sampling) is a Python tool designed to facilitate active learning in SUS2-MLIP modeling. It also helps with the integration and optimization of the database, making it easier for researchers and developers to work with.
 (in progress)
