@@ -120,6 +120,33 @@ std::pair<double, double> ParseRangeOption(const std::string& value, const std::
 	}
 }
 
+std::vector<double> ParseDoubleListOption(const std::string& value, const std::string& opt_name)
+{
+	std::vector<double> values;
+	std::size_t begin = 0;
+	while (begin <= value.size()) {
+		const std::size_t comma = value.find(',', begin);
+		const std::size_t end = (comma == std::string::npos) ? value.size() : comma;
+		const std::string token = value.substr(begin, end - begin);
+		if (token.empty())
+			ERROR(opt_name + " should be a comma-separated list of finite doubles");
+		try {
+			const double parsed = std::stod(token);
+			if (!std::isfinite(parsed))
+				ERROR(opt_name + " should be a comma-separated list of finite doubles");
+			values.push_back(parsed);
+		} catch (const std::exception&) {
+			ERROR(opt_name + " should be a comma-separated list of finite doubles");
+		}
+		if (comma == std::string::npos)
+			break;
+		begin = comma + 1;
+	}
+	if (values.empty())
+		ERROR(opt_name + " should be a comma-separated list of finite doubles");
+	return values;
+}
+
 MomentCoeffStats ComputeMomentCoeffStats(const MLMTPR& mtpr)
 {
 	constexpr double kMomentCoeffEps = 1.0e-12;
@@ -928,6 +955,28 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		custom_s_range = true;
 	}
 
+	double radial_smooth = 1.0e-6;
+	if (opts["radial-smooth"] != "")
+		radial_smooth = stod(opts["radial-smooth"]);
+	if (!std::isfinite(radial_smooth) || radial_smooth < 0.0)
+		ERROR("--radial-smooth should be a finite non-negative value");
+
+	int radial_smooth_grid = 128;
+	if (opts["radial-smooth-grid"] != "")
+		radial_smooth_grid = stoi(opts["radial-smooth-grid"]);
+	if (radial_smooth_grid <= 0)
+		ERROR("--radial-smooth-grid should be > 0");
+
+	std::vector<double> fixed_atomic_energies;
+	if (opts["atomic-energies"] != "")
+		fixed_atomic_energies = ParseDoubleListOption(opts["atomic-energies"], "--atomic-energies");
+
+	double fixed_atomic_energy_weight = 1.0e8;
+	if (opts["atomic-energy-weight"] != "")
+		fixed_atomic_energy_weight = stod(opts["atomic-energy-weight"]);
+	if (!std::isfinite(fixed_atomic_energy_weight) || fixed_atomic_energy_weight < 0.0)
+		ERROR("--atomic-energy-weight should be a finite non-negative value");
+
 	if (opts["init-params"] == "")
 		opts["init-params"] = "random";
 	if (opts["init-params"] != "random" && opts["init-params"] != "same")
@@ -956,6 +1005,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	}
 	if (fine_tune && !mtpr.HasCompleteParameters())
 		ERROR("--fine-tune requires a complete trained model with shift/scal/radial/linear coefficients.");
+	if (!fixed_atomic_energies.empty() &&
+	    static_cast<int>(fixed_atomic_energies.size()) != mtpr.species_count)
+		ERROR("--atomic-energies count should match species_count");
 #ifdef MLIP_MPI
 	MPI_Comm_rank(MPI_COMM_WORLD, &prank);
 	MPI_Comm_size(MPI_COMM_WORLD, &psize);
@@ -978,6 +1030,10 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.linstop = bfgs_conv_tol;	//if in 100 iterations loss decreases less than this, BFGS is finished
 	trainer.curr_pot_name = curr_fnm;
 	trainer.bfgs_trace_file = bfgs_trace_fnm;
+	trainer.radial_smooth_regularization = radial_smooth;
+	trainer.radial_smooth_grid = radial_smooth_grid;
+	trainer.fixed_atomic_energies = fixed_atomic_energies;
+	trainer.fixed_atomic_energy_weight = fixed_atomic_energy_weight;
 
 	if (prank == 0)
 		std::cout << "SUS2-MLIP developer version (2026-04-17)"
@@ -989,6 +1045,15 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		std::cout << "scal-range override: " << scal_range.first << ", " << scal_range.second << std::endl;
 	if (prank == 0 && custom_s_range)
 		std::cout << "s-range override: " << s_range.first << ", " << s_range.second << std::endl;
+	if (prank == 0)
+		std::cout << "radial smoothness penalty: " << radial_smooth
+		          << " grid=" << radial_smooth_grid << std::endl;
+	if (prank == 0 && !fixed_atomic_energies.empty()) {
+		std::cout << "fixed atomic energies enabled:";
+		for (double value : fixed_atomic_energies)
+			std::cout << " " << value;
+		std::cout << " penalty_weight=" << fixed_atomic_energy_weight << std::endl;
+	}
 	if (prank == 0 && fine_tune)
 		std::cout << "fine-tune mode enabled: scal_coeffs frozen; initial rescale+linear solve will run before BFGS" << std::endl;
 

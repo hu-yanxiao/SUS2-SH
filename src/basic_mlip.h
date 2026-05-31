@@ -79,6 +79,14 @@ public:
 	virtual void AddPenaltyGrad(const double coeff,													// Must calculate penalty and optionally (if out_penalty_grad_accumulator != nullptr) its gradient w.r.t. coefficients multiplied by coeff to out_penalty
 								double& out_penalty_accumulator, 
 								Array1D* out_penalty_grad_accumulator = nullptr);
+	virtual void AddRadialSmoothnessPenalty(const double coeff,
+								const int grid_size,
+								double& out_penalty_accumulator,
+								Array1D* out_penalty_grad_accumulator = nullptr);
+	virtual void AddFixedAtomicEnergyPenalty(const std::vector<double>& atomic_energies,
+								const double coeff,
+								double& out_penalty_accumulator,
+								Array1D* out_penalty_grad_accumulator = nullptr);
 
 	// CalcEFS
 	virtual void CalcE(Configuration& cfg);

@@ -38,6 +38,7 @@ protected:
 	bool NeedStdTerms() const { return std_scaling != 0.0 || stdd_scaling != 0.0; }
 	void PrepareTypeScratch(const Configuration& cfg);
 	void ResetObjectiveAccumulators();
+	void AddGlobalRegularization(double local_multiplier, Array1D* grad_accumulator);
 	double loss_;											// result of AddLoss and AddLossGrad
 	double std_;
         double stdd_;
@@ -50,6 +51,10 @@ public:
 	int norm_by_forces = 0;									// whether to scale weight of E&F in configurations depending on the abs(F)
         double std_scaling = 0.2;
         double stdd_scaling = 0.00001;	
+	double radial_smooth_regularization = 1.0e-6;
+	int radial_smooth_grid = 128;
+	std::vector<double> fixed_atomic_energies;
+	double fixed_atomic_energy_weight = 1.0e8;
 
 	NonLinearRegression(AnyLocalMLIP* _p_mlip,				// Constructor requires MTP basis
 						double _wgt_energy = 1.0,			// Optional parameters are the weights coeficients of energy, forces and stresses equations in minimization problem

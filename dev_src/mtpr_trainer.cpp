@@ -269,10 +269,60 @@ void MTPR_trainer::LoadWeights(ifstream& ifs)
 
 }
 
+bool MTPR_trainer::HasFixedAtomicEnergies() const
+{
+	return !fixed_atomic_energies.empty();
+}
+
+void MTPR_trainer::ValidateFixedAtomicEnergies() const
+{
+	if (!HasFixedAtomicEnergies())
+		return;
+	if (static_cast<int>(fixed_atomic_energies.size()) != p_mlmtpr->species_count)
+		ERROR("--atomic-energies count should match species_count");
+	for (double value : fixed_atomic_energies)
+		if (!std::isfinite(value))
+			ERROR("--atomic-energies contains a non-finite value");
+	if (fixed_atomic_energy_weight < 0.0 || !std::isfinite(fixed_atomic_energy_weight))
+		ERROR("--atomic-energy-weight should be a finite non-negative value");
+}
+
+double MTPR_trainer::FixedAtomicEnergySum(const Configuration& cfg) const
+{
+	double energy = 0.0;
+	for (int i = 0; i < cfg.size(); ++i) {
+		const int type = cfg.type(i);
+		if (type < 0 || type >= static_cast<int>(fixed_atomic_energies.size()))
+			ERROR("Configuration atom type is out of range for --atomic-energies");
+		energy += fixed_atomic_energies[type];
+	}
+	return energy;
+}
+
+void MTPR_trainer::ApplyFixedAtomicEnergyGauge(int n)
+{
+	if (!HasFixedAtomicEnergies())
+		return;
+	ValidateFixedAtomicEnergies();
+	const int C = p_mlmtpr->species_count;
+	for (int type = 0; type < C; ++type) {
+		for (int j = 0; j < n; ++j) {
+			quad_opt_matr[type * n + j] = 0.0;
+			quad_opt_matr[j * n + type] = 0.0;
+		}
+		quad_opt_matr[type * n + type] = 1.0;
+		quad_opt_vec[type] = 1.0;
+	}
+}
+
 
 
 void MTPR_trainer::ClearSLAE()
 {
+	if (p_mlmtpr == nullptr)
+		p_mlmtpr = dynamic_cast<MLMTPR*>(p_mlip);
+	if (p_mlmtpr == nullptr)
+		ERROR("MTPR_trainer::ClearSLAE requires an MLMTPR potential");
 
 	int n = p_mlmtpr->alpha_count - 1 + p_mlmtpr->species_count;	// Matrix size
 
@@ -324,6 +374,7 @@ void MTPR_trainer::SolveSLAE()
 
 	for (int i = 0; i < n; i++)
 		quad_opt_matr[i*n + i] += gammareg*(1 + quad_opt_matr[i*n + i]);
+	ApplyFixedAtomicEnergyGauge(n);
 
 	p_mlmtpr->LinCoeff();	/// TO MOVE TO MLMTPR
 
@@ -378,8 +429,13 @@ void MTPR_trainer::SolveSLAE()
 //	std::default_random_engine generator(rand_device());
 //	std::uniform_real_distribution<> uniform(-0.05, 0.05);
 	for (int i = 0; i < p_mlmtpr->species_count; i++) {
-		p_mlmtpr->regression_coeffs[i] = p_mlmtpr->linear_coeffs[i] - 1.0;
-		p_mlmtpr->linear_coeffs[i] = 1.0;
+		if (HasFixedAtomicEnergies()) {
+			p_mlmtpr->linear_coeffs[i] = 1.0;
+			p_mlmtpr->regression_coeffs[i] = fixed_atomic_energies[i] - p_mlmtpr->linear_coeffs[i];
+		} else {
+			p_mlmtpr->regression_coeffs[i] = p_mlmtpr->linear_coeffs[i] - 1.0;
+			p_mlmtpr->linear_coeffs[i] = 1.0;
+		}
 	}
 	for (int i = 0; i < n; i++) {
 		p_mlmtpr->regression_coeffs[p_mlmtpr->regression_coeffs.size() - n + i] = p_mlmtpr->linear_coeffs[i];
@@ -409,6 +465,8 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 		p_mlmtpr->CalcEFSComponents(cfg, *neighborhoods, need_forces, need_stress);
 	else
 		p_mlmtpr->CalcEFSComponents(cfg, need_forces, need_stress);
+	if (HasFixedAtomicEnergies())
+		ValidateFixedAtomicEnergies();
 //        int w=p_mlmtpr->energy_cmpnts.size();
       //  {std::cout<<n<<" "<<std::endl;}
 
@@ -439,13 +497,22 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 	if (cfg.has_energy())
 	{
 		const double alpha = weight * wgt_energy * d / (d + fn*avef);
+		const double* energy_cmpnts = p_mlmtpr->energy_cmpnts;
+		double energy_rhs = cfg.energy;
+		if (HasFixedAtomicEnergies()) {
+			lin_energy_cmpnts_.assign(p_mlmtpr->energy_cmpnts, p_mlmtpr->energy_cmpnts + n);
+			for (int type = 0; type < p_mlmtpr->species_count; ++type)
+				lin_energy_cmpnts_[type] = 0.0;
+			energy_cmpnts = lin_energy_cmpnts_.data();
+			energy_rhs -= FixedAtomicEnergySum(cfg);
+		}
 		cblas_dger(CBLAS_ORDER::CblasRowMajor, n, n,
 			alpha,
-			p_mlmtpr->energy_cmpnts, 1,
-			p_mlmtpr->energy_cmpnts, 1,
+			energy_cmpnts, 1,
+			energy_cmpnts, 1,
 			quad_opt_matr, n);
-		cblas_daxpy(n, alpha * cfg.energy, p_mlmtpr->energy_cmpnts, 1, quad_opt_vec, 1);
-		quad_opt_scalar += alpha * cfg.energy * cfg.energy;
+		cblas_daxpy(n, alpha * energy_rhs, energy_cmpnts, 1, quad_opt_vec, 1);
+		quad_opt_scalar += alpha * energy_rhs * energy_rhs;
 
 		quad_opt_eqn_count += (weight > 0) ? 1 : ((weight < 0) ? -1 : 0);
 	}

@@ -17,6 +17,9 @@
 #include <ctime>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <map>
+#include <random>
 
 #ifdef MLIP_INTEL_MKL
 #include <mkl_cblas.h>
@@ -26,6 +29,7 @@
 
 #include "../sample_potentials.h"
 #include "../mtpr.h"
+#include "../sh_model_init.h"
 //#include "../mtpr2.h"
 #include "../eam.h"
 #include "../../src/drivers/relaxation.h"
@@ -2121,6 +2125,151 @@ TEST("check RBJacobi_sss_noweight_lmp matches full basis values and radial deriv
 					}
 				}
 			}
+		}
+	}
+} END_TEST;
+
+TEST("MTPR radial smoothness penalty gradient finite difference") {
+	const std::string model_path = "/tmp/sus2sh_radial_smooth_self_test.mtp";
+	std::map<std::string, std::string> sh_opts;
+	sh_opts["species-count"] = "1";
+	sh_opts["l-max"] = "1";
+	sh_opts["k-max"] = "1";
+	sh_opts["body-order"] = "2";
+	sh_opts["body-l-max"] = "1,1,1,1";
+	sh_opts["cutoff"] = "5.0";
+	sh_opts["radial-basis-size"] = "4";
+	sh_opts["radial-basis-type"] = "RBChebyshev_sss";
+	WriteSphericalHarmonicModel(model_path, sh_opts);
+
+	MLMTPR mtpr(model_path);
+	std::mt19937_64 generator(7);
+	mtpr.RandomizeNonlinearCoeffs(generator, 1.0e-2, true, 0.05);
+	mtpr.LinCoeff();
+
+	const double coeff = 1.0e-3;
+	const int grid_size = 16;
+	double penalty = 0.0;
+	Array1D grad(mtpr.CoeffCount());
+	FillWithZero(grad);
+	mtpr.AddRadialSmoothnessPenalty(coeff, grid_size, penalty, &grad);
+
+	std::vector<int> indices;
+	const int radial_begin = mtpr.RadialCoeffOffset();
+	const int radial_block = mtpr.RadialCoeffBlockSize();
+	const int R = mtpr.Get_RB_size();
+	if (mtpr.radial_func_count > 0 && R > 1) {
+		indices.push_back(radial_begin);
+		indices.push_back(radial_begin + 1);
+		if (mtpr.radial_func_count > 1)
+			indices.push_back(radial_begin + radial_block);
+	}
+	if (mtpr.K_ > 0 && mtpr.species_count > 0) {
+		indices.push_back(mtpr.ScalingSlopeOffset(0, 0, 0));
+		indices.push_back(mtpr.ScalingShiftOffset(0, 0, 0));
+		indices.push_back(radial_begin + R);
+	}
+
+	const double step = 1.0e-6;
+	double max_rel_err = 0.0;
+	double max_abs_err = 0.0;
+	for (int idx : indices) {
+		double original = mtpr.Coeff()[idx];
+		mtpr.Coeff()[idx] = original + step;
+		double penalty_p = 0.0;
+		mtpr.AddRadialSmoothnessPenalty(coeff, grid_size, penalty_p, nullptr);
+		mtpr.Coeff()[idx] = original - step;
+		double penalty_m = 0.0;
+		mtpr.AddRadialSmoothnessPenalty(coeff, grid_size, penalty_m, nullptr);
+		mtpr.Coeff()[idx] = original;
+
+		const double fd = (penalty_p - penalty_m) / (2.0 * step);
+		const double abs_err = fabs(fd - grad[idx]);
+		const double denom = std::max(1.0e-12, std::max(fabs(fd), fabs(grad[idx])));
+		const double rel_err = abs_err / denom;
+		max_abs_err = std::max(max_abs_err, abs_err);
+		max_rel_err = std::max(max_rel_err, rel_err);
+	}
+
+	if (max_abs_err > 5.0e-8 && max_rel_err > 2.0e-4) {
+		std::cerr << "max_abs_err=" << max_abs_err << " max_rel_err=" << max_rel_err;
+		FAIL()
+	}
+	std::remove(model_path.c_str());
+} END_TEST;
+
+TEST("MTPR fixed atomic energy penalty gradient finite difference") {
+	MLMTPR mtpr(PATH+"learned.mtp");
+	mtpr.LinCoeff();
+
+	std::vector<double> targets(mtpr.species_count, 0.0);
+	for (int type = 0; type < mtpr.species_count; ++type)
+		targets[type] = mtpr.regression_coeffs[type] + mtpr.linear_coeffs[type]
+		              + 0.25 * (type + 1);
+
+	const double coeff = 7.0;
+	double penalty = 0.0;
+	Array1D grad(mtpr.CoeffCount());
+	FillWithZero(grad);
+	mtpr.AddFixedAtomicEnergyPenalty(targets, coeff, penalty, &grad);
+
+	const int nlin = mtpr.alpha_count + mtpr.species_count - 1;
+	const int linear_begin = mtpr.CoeffCount() - nlin;
+	std::vector<int> indices;
+	for (int type = 0; type < mtpr.species_count; ++type) {
+		indices.push_back(type);
+		indices.push_back(linear_begin + type);
+	}
+
+	const double step = 1.0e-6;
+	double max_rel_err = 0.0;
+	double max_abs_err = 0.0;
+	for (int idx : indices) {
+		double original = mtpr.Coeff()[idx];
+		mtpr.Coeff()[idx] = original + step;
+		double penalty_p = 0.0;
+		mtpr.AddFixedAtomicEnergyPenalty(targets, coeff, penalty_p, nullptr);
+		mtpr.Coeff()[idx] = original - step;
+		double penalty_m = 0.0;
+		mtpr.AddFixedAtomicEnergyPenalty(targets, coeff, penalty_m, nullptr);
+		mtpr.Coeff()[idx] = original;
+
+		const double fd = (penalty_p - penalty_m) / (2.0 * step);
+		const double abs_err = fabs(fd - grad[idx]);
+		const double denom = std::max(1.0e-12, std::max(fabs(fd), fabs(grad[idx])));
+		const double rel_err = abs_err / denom;
+		max_abs_err = std::max(max_abs_err, abs_err);
+		max_rel_err = std::max(max_rel_err, rel_err);
+	}
+
+	if (max_abs_err > 5.0e-8 && max_rel_err > 2.0e-4) {
+		std::cerr << "max_abs_err=" << max_abs_err << " max_rel_err=" << max_rel_err;
+		FAIL()
+	}
+} END_TEST;
+
+TEST("MTPR TrainLinear keeps fixed atomic energies") {
+	MLMTPR mtpr(PATH+"unlearned.mtp");
+	MTPR_trainer trainer(&mtpr, 1.0, 0.01, 0.0, 0.0, 0.0);
+	trainer.fixed_atomic_energies.resize(mtpr.species_count);
+	for (int type = 0; type < mtpr.species_count; ++type)
+		trainer.fixed_atomic_energies[type] = -2.5 - 0.5 * type;
+
+	std::vector<Configuration> train_set;
+	Configuration cfg;
+	ifstream ifs(PATH+"2comp.cfgs", ios::binary);
+	for (int i = 0; i < 3 && cfg.Load(ifs); ++i)
+		train_set.push_back(cfg);
+	ifs.close();
+
+	trainer.TrainLinear(0, train_set, nullptr, "fixed atomic energy self-test");
+	mtpr.LinCoeff();
+	for (int type = 0; type < mtpr.species_count; ++type) {
+		const double actual = mtpr.regression_coeffs[type] + mtpr.linear_coeffs[type];
+		if (fabs(actual - trainer.fixed_atomic_energies[type]) > 1.0e-10) {
+			std::cerr << "type=" << type << " actual=" << actual
+			          << " target=" << trainer.fixed_atomic_energies[type];
+			FAIL()
 		}
 	}
 } END_TEST;

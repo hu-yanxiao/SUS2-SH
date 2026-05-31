@@ -300,6 +300,14 @@ public:
 	void AddPenaltyGrad(const double coeff, 
 						double& out_penalty_accumulator, 
 						Array1D* out_penalty_grad_accumulator) override;
+	void AddRadialSmoothnessPenalty(const double coeff,
+						const int grid_size,
+						double& out_penalty_accumulator,
+						Array1D* out_penalty_grad_accumulator) override;
+	void AddFixedAtomicEnergyPenalty(const std::vector<double>& atomic_energies,
+						const double coeff,
+						double& out_penalty_accumulator,
+						Array1D* out_penalty_grad_accumulator) override;
 
 
 	int alpha_count;								//!< Basis functions count 
