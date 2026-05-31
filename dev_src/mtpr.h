@@ -22,6 +22,26 @@ struct SHProduct {
 	double coeff;
 };
 
+struct SHProductRowTerm {
+	int left;
+	int right;
+	double coeff;
+};
+
+struct SHProductRow {
+	int target;
+	int term_begin;
+	int term_count;
+	int scalar_index;
+	bool terminal_scalar;
+};
+
+struct SHScalarInfo {
+	int body_order = 0;
+	int q[5] = {-1, -1, -1, -1, -1};
+	int intermediate_l = 0;
+};
+
 
 
 class MLMTPR : virtual public AnyLocalMLIP
@@ -61,6 +81,12 @@ protected:
 	std::string sh_parity_;
 	std::vector<int> sh_body_l_max_;
 	std::vector<SHProduct> sh_products_;
+	std::vector<SHProductRow> sh_product_rows_;
+	std::vector<SHProductRowTerm> sh_product_row_terms_;
+	std::vector<int> sh_scalar_index_by_moment_;
+	std::vector<char> sh_scalar_terminal_product_;
+	bool sh_product_rows_trace_printed_ = false;
+	bool sh_site_der_cache_trace_printed_ = false;
 	
 	double *moment_vals; //!< Array of basis function values calculated for certain atomic neighborhood
 	Array3D moment_ders;//!< Array of basis function derivatives w.r.t. motion of neighboring atoms calculated for certain atomic neighborhood
@@ -115,10 +141,17 @@ protected:
 		std::vector<double> grad_neighbor_mu_contract_coord_ders_ss_cache_;
 		std::vector<double> grad_neighbor_sh_values_cache_;
 		std::vector<double> grad_neighbor_sh_ders_cache_;
-		std::vector<int> basic_total_degree_cache_;
+		std::vector<double> grad_radial_coeff_value_accum_;
+		std::vector<double> grad_radial_coeff_coord_accum_;
+	std::vector<int> basic_total_degree_cache_;
 	std::vector<int> basic_scaling_block_cache_;
 	std::vector<int> basic_radial_eval_block_cache_;
+	std::vector<int> basic_radial_base_cache_;
+	std::vector<int> basic_radial_deriv_base_cache_;
 	std::vector<int> basic_radial_offset_cache_;
+	std::vector<int> basic_mu_cache_;
+	std::vector<int> basic_sh_index_cache_;
+	std::vector<int> basic_sh_der_index_cache_;
 	std::vector<int> mu_to_radial_eval_block_;
 	std::vector<int> radial_eval_to_scaling_block_;
 	Array3D sh_adj_ders_;
@@ -126,14 +159,37 @@ protected:
 
 	void CalcSHBasisFuncs(const Neighborhood& nbh, double* bf_vals);
 	void CalcSHMomentValuesOnly(const Neighborhood& nbh);
-	void CalcSHBasisFuncsDers(const Neighborhood& nbh);
-	void CalcSHSiteEnergyDers(const Neighborhood& nbh);
+	void CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh);
+		void CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh);
+		void CalcSHBasisFuncsDers(const Neighborhood& nbh);
+		void CalcTwoLayerGateScalarDirectionalDerivatives(
+			const Neighborhood& nbh,
+			const std::vector<Vector3>& direction_weights,
+			std::vector<double>& gate_scalar_tangents);
+		void CalcSHSiteEnergyDers(const Neighborhood& nbh);
+	void AccumulateSHGateTangentGrad(const Neighborhood& nbh,
+										std::vector<double>& out_grad_accumulator,
+										const std::vector<double>& neighbor_gate_tangent);
 	void AccumulateSHCombinationGrad(const Neighborhood& nbh,
 										std::vector<double>& out_grad_accumulator,
 										const double se_weight = 0.0,
 										const Vector3* se_ders_weights = nullptr);
 	void ReadSHProductGraph(std::ifstream& ifs, std::string& next_token);
 	void WriteSHProductGraph(std::ofstream& ofs);
+	void BuildSHProductProgram();
+	bool UseSHProductRows() const;
+	bool UseSHSiteDerivativeCache() const;
+	bool UseSHAccumSkipSiteDers() const;
+	bool UseSHProductHVTReverse() const;
+	void TraceSHProductProgramOnce();
+	void TraceSHSiteDerivativeCacheOnce(int neighbor_count,
+										int sh_count,
+										int radial_func_count);
+	void ApplySHProductRowsForward();
+	void ApplySHProductRowsDers(const Neighborhood& nbh);
+	void AccumulateSHProductRowsForward(const std::vector<double>& input_values,
+										std::vector<double>& output_values) const;
+	void BackpropSHProductRows(std::vector<double>& adjoints) const;
 
 	std::vector<int> radial_eval_to_basis_k_;
 
@@ -175,6 +231,17 @@ public:
 	bool has_scal_coeffs = false;
 	bool has_radial_coeffs = false;
 	bool has_linear_coeffs = false;
+	bool has_sh_scalar_info_ = false;
+	std::vector<SHScalarInfo> sh_scalar_info_;
+	bool two_layer_gate_enabled_ = false;
+	int two_layer_gate_body_order_max_ = 0;
+	bool two_layer_gate_include_one_body_ = false;
+	std::vector<int> two_layer_gate_scalar_indices_;
+	std::vector<double> two_layer_gate_weights_;
+	std::vector<double> two_layer_gate_values_;
+	std::vector<double> two_layer_gate_adjoints_;
+	const std::vector<double>* active_two_layer_gate_values_ = nullptr;
+	std::vector<double>* active_two_layer_gate_adjoints_ = nullptr;
         bool shift_ = true;
 	double* energy_cmpnts;								// Energy components for SLAE matrix
 	Array3D forces_cmpnts;								// Force components for SLAE matrix
@@ -188,6 +255,24 @@ public:
 	void CalcEFSComponents(Configuration& cfg, const Neighborhoods& neighborhoods, bool need_forces, bool need_stress);
 	void CalcEComponents(Configuration& cfg);			//Calculate the components for linear regression matrix
 	void CalcEComponents(Configuration& cfg, const Neighborhoods& neighborhoods);
+	void CalcEFS(Configuration& cfg) override;
+	void CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods) override;
+	void AccumulateEFSCombinationGrad(Configuration& cfg,
+	                                  std::vector<double>& ene_weight,
+	                                  const std::vector<Vector3>& frc_weights,
+	                                  const Matrix3& str_weights,
+	                                  Array1D& out_grads_accumulator) override;
+	void AccumulateEFSCombinationGrad(Configuration& cfg,
+	                                  std::vector<double>& ene_weight,
+	                                  const std::vector<Vector3>& frc_weights,
+	                                  const Matrix3& str_weights,
+	                                  Array1D& out_grads_accumulator,
+	                                  const Neighborhoods& neighborhoods) override;
+	bool HasNonzeroTwoLayerGateWeights() const;
+	void PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods);
+	void AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighborhoods& neighborhoods);
+	void AddTwoLayerGateAdjoint(const Neighborhood& nbh, int neighbor_index, double adjoint);
+	double TwoLayerGateNeighborScale(const Neighborhood& nbh, int neighbor_index) const;
 //	void CalcEFS(Configuration& cfg) override
 //	{
 //		AnyLocalMLIP::CalcEFS(cfg);
@@ -222,6 +307,11 @@ public:
 	int ScalingCoeffCount() const;
 	int RadialCoeffOffset() const;
 	int RadialCoeffBlockSize() const;
+	int BaseNonlinearCoeffCount() const;
+	int TwoLayerGateWeightCount() const;
+	int TwoLayerGateWeightOffset() const;
+	int LinearCoeffOffset() const;
+	double TwoLayerGateWeight(int weight_index) const;
 	int EnforcePositiveRadialFirstCoeffs(double min_value = 1.0e-12);
 	bool IsRadialFirstCoeff(int coeff_index) const;
 	double RadialFirstCoeffRawToValue(double raw_value) const;
@@ -251,7 +341,7 @@ public:
 	}
 	const std::vector<double>& LinCoeff()								//returns linear coefficients
 	{
-		int Rsize = species_count+2*species_count*species_count* K_ +(p_RadialBasis->rb_size + species_count)*radial_func_count;
+		int Rsize = LinearCoeffOffset();
 
 		for (int i = Rsize; i < Rsize + alpha_count + species_count - 1;i++)
 			linear_coeffs[i-Rsize]=regression_coeffs[i];
@@ -261,11 +351,23 @@ public:
 	}
 	void DistributeCoeffs()									//Combine radial and linear coefficients in one array
 	{
-		int radial_size = (int)regression_coeffs.size();
+		const int base_nonlinear_size = BaseNonlinearCoeffCount();
+		const int gate_weight_count = TwoLayerGateWeightCount();
+		const int linear_size = alpha_count + species_count - 1;
+		std::vector<double> old_coeffs = regression_coeffs;
+		if (static_cast<int>(old_coeffs.size()) < base_nonlinear_size)
+			ERROR("DistributeCoeffs found an inconsistent nonlinear coefficient block");
+		regression_coeffs.assign(base_nonlinear_size + gate_weight_count + linear_size, 0.0);
+		for (int i = 0; i < base_nonlinear_size; ++i)
+			regression_coeffs[i] = old_coeffs[i];
+		if (gate_weight_count > 0) {
+			if (static_cast<int>(two_layer_gate_weights_.size()) != gate_weight_count)
+				ERROR("SUS2-SH two-layer gate metadata has inconsistent sizes");
+			for (int i = 0; i < gate_weight_count; ++i)
+				regression_coeffs[base_nonlinear_size + i] = two_layer_gate_weights_[i];
+		}
+		int radial_size = base_nonlinear_size + gate_weight_count;
 		int max_comp = species_count - 1;				//maximum index of component
-
-		regression_coeffs.resize(radial_size + alpha_count + max_comp);
-
 
 		if (linear_coeffs.size() == alpha_count)
 		{

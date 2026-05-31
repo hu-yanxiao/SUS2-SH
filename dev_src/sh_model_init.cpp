@@ -16,6 +16,11 @@
 
 namespace {
 
+enum class SHFactorPruning {
+	Legacy,
+	QTotal
+};
+
 struct Product {
 	int left;
 	int right;
@@ -83,6 +88,40 @@ std::string StringOpt(const std::map<std::string, std::string>& opts, const std:
 	if (it == opts.end() || it->second.empty())
 		return default_value;
 	return it->second;
+}
+
+std::string CanonicalRadialBasisType(const std::string& value)
+{
+	if (value == "jacobi_sss")
+		return "RBJacobi_sss";
+	if (value == "laguerre_log1p")
+		return "RBLaguerre_log1p";
+	return value;
+}
+
+bool IsSupportedSHRadialBasis(const std::string& value)
+{
+	return value == "RBChebyshev_sss"
+	    || value == "RBChebyshev_sss_rational"
+	    || value == "RBLaguerre_log1p"
+	    || value == "RBJacobi_sss";
+}
+
+bool HasOpt(const std::map<std::string, std::string>& opts, const std::string& name)
+{
+	std::map<std::string, std::string>::const_iterator it = opts.find(name);
+	return it != opts.end() && !it->second.empty();
+}
+
+SHFactorPruning ParseFactorPruning(const std::map<std::string, std::string>& opts)
+{
+	const std::string value = StringOpt(opts, "sh-factor-pruning", "legacy");
+	if (value == "legacy")
+		return SHFactorPruning::Legacy;
+	if (value == "q-total" || value == "total")
+		return SHFactorPruning::QTotal;
+	ERROR("--sh-factor-pruning should be legacy or q-total.");
+	return SHFactorPruning::Legacy;
 }
 
 std::vector<int> ParseBodyLMax(const std::map<std::string, std::string>& opts,
@@ -239,8 +278,8 @@ std::string TensorKey(const std::string& left, const std::string& right, int L)
 
 class SHGraphBuilder {
 public:
-	SHGraphBuilder(int lmax, int kmax)
-		: lmax_(lmax), kmax_(kmax)
+	SHGraphBuilder(int lmax, int kmax, SHFactorPruning factor_pruning)
+		: lmax_(lmax), kmax_(kmax), factor_pruning_(factor_pruning)
 	{
 	}
 
@@ -377,21 +416,38 @@ public:
 	                           const std::function<void(const std::vector<int>&)>& callback)
 	{
 		std::vector<int> tuple;
-		std::function<void(int, int, int)> rec = [&](int pos, int max_l, int max_k) {
-			if (pos == factor_count) {
-				callback(tuple);
-				return;
-			}
-			for (int q_index = 0; q_index < static_cast<int>(q_.size()); ++q_index) {
-				const QIndex& q = q_[q_index];
-				if (!Allowed(q_index, body_order) || q.l > max_l || q.k > max_k)
-					continue;
-				tuple.push_back(q_index);
-				rec(pos + 1, q.l, q.k);
-				tuple.pop_back();
-			}
-		};
-		rec(0, lmax_, kmax_ - 1);
+		if (factor_pruning_ == SHFactorPruning::Legacy) {
+			std::function<void(int, int, int)> rec = [&](int pos, int max_l, int max_k) {
+				if (pos == factor_count) {
+					callback(tuple);
+					return;
+				}
+				for (int q_index = 0; q_index < static_cast<int>(q_.size()); ++q_index) {
+					const QIndex& q = q_[q_index];
+					if (!Allowed(q_index, body_order) || q.l > max_l || q.k > max_k)
+						continue;
+					tuple.push_back(q_index);
+					rec(pos + 1, q.l, q.k);
+					tuple.pop_back();
+				}
+			};
+			rec(0, lmax_, kmax_ - 1);
+		} else {
+			std::function<void(int, int)> rec = [&](int pos, int first_q_index) {
+				if (pos == factor_count) {
+					callback(tuple);
+					return;
+				}
+				for (int q_index = first_q_index; q_index < static_cast<int>(q_.size()); ++q_index) {
+					if (!Allowed(q_index, body_order))
+						continue;
+					tuple.push_back(q_index);
+					rec(pos + 1, q_index);
+					tuple.pop_back();
+				}
+			};
+			rec(0, 0);
+		}
 	}
 
 	void AddScalarSpec(int body_order, int q0, int q1, int q2, int q3, int q4, int intermediate_l)
@@ -533,8 +589,10 @@ public:
 					BasicTensor(q_index);
 			for (size_t i = 0; i < scalar_specs_.size(); ++i) {
 				const int scalar = BuildScalar(scalar_specs_[i]);
-				if (scalar >= 0)
+				if (scalar >= 0) {
 					scalars_.push_back(scalar);
+					scalar_infos_.push_back(scalar_specs_[i]);
+				}
 			}
 			CompressProducts();
 		}
@@ -564,6 +622,7 @@ public:
 
 	int lmax_;
 	int kmax_;
+	SHFactorPruning factor_pruning_;
 	int node_count_ = 0;
 	std::vector<int> body_lmax_;
 	std::vector<QIndex> q_;
@@ -572,6 +631,7 @@ public:
 	std::map<std::string, int> product_lookup_;
 	std::vector<char> required_q_;
 	std::vector<ScalarSpec> scalar_specs_;
+	std::vector<ScalarSpec> scalar_infos_;
 	std::vector<BasicIndex> basic_;
 	std::vector<Product> products_;
 	std::vector<int> scalars_;
@@ -590,22 +650,30 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const double min_dist = DoubleOpt(opts, "min-dist", 1.5);
 	const double max_dist = DoubleOpt(opts, "cutoff", DoubleOpt(opts, "max-dist", 7.5));
 	const double scaling = DoubleOpt(opts, "scaling", 0.01);
-	const std::string rbasis = StringOpt(opts, "radial-basis-type", "RBChebyshev_sss");
+	const std::string rbasis = CanonicalRadialBasisType(StringOpt(opts, "radial-basis-type", "RBChebyshev_sss"));
+	const SHFactorPruning factor_pruning = ParseFactorPruning(opts);
+	const bool two_layer_gate = HasOpt(opts, "two-layer-gate");
+	const int two_layer_gate_body_order = IntOpt(opts, "two-layer-gate-body-order", 3);
+	const bool write_scalar_info = HasOpt(opts, "write-sh-scalar-info") || two_layer_gate;
 	std::ostringstream default_name;
 	default_name << "sus2sh_l" << lmax << "k" << kmax << "_b" << body_order;
 	const std::string name = StringOpt(opts, "potential-name", default_name.str());
 	const std::vector<int> body_lmax = ParseBodyLMax(opts, lmax, body_order);
 
-	if (lmax < 0 || lmax > 4)
-		ERROR("init-sh currently supports --l-max from 0 to 4.");
+	if (lmax < 0 || lmax > 6)
+		ERROR("init-sh currently supports --l-max from 0 to 6.");
 	if (kmax <= 0)
 		ERROR("init-sh requires --k-max > 0.");
 	if (body_order < 2 || body_order > 6)
 		ERROR("init-sh supports --body-order from 2 to 6.");
-	if (rbasis != "RBChebyshev_sss")
-		ERROR("init-sh currently writes RBChebyshev_sss models; use --radial-basis-type=RBChebyshev_sss.");
+	if (two_layer_gate && (two_layer_gate_body_order < 2 || two_layer_gate_body_order > body_order))
+		ERROR("--two-layer-gate-body-order should be between 2 and --body-order.");
+	if (!IsSupportedSHRadialBasis(rbasis))
+		ERROR("init-sh currently writes RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, or RBJacobi_sss models.");
+	if (rbasis == "RBJacobi_sss" && kmax > 6)
+		ERROR("init-sh with RBJacobi_sss supports --k-max up to 6 because Jacobi blocks are indexed as k=0..5.");
 
-	SHGraphBuilder graph(lmax, kmax);
+	SHGraphBuilder graph(lmax, kmax, factor_pruning);
 	graph.Build();
 	graph.AddScalars(body_order, body_lmax);
 
@@ -667,4 +735,44 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ofs << graph.scalars_[i];
 	}
 	ofs << "}\n";
+	if (write_scalar_info) {
+		ofs << "sh_scalar_info_count = " << graph.scalar_infos_.size() << "\n";
+		ofs << "sh_scalar_info = {";
+		for (size_t i = 0; i < graph.scalar_infos_.size(); ++i) {
+			if (i != 0)
+				ofs << ", ";
+			const ScalarSpec& spec = graph.scalar_infos_[i];
+			ofs << "{" << spec.body_order << ", "
+			    << spec.q0 << ", " << spec.q1 << ", " << spec.q2 << ", "
+			    << spec.q3 << ", " << spec.q4 << ", " << spec.intermediate_l << "}";
+		}
+		ofs << "}\n";
+	}
+	if (two_layer_gate) {
+		std::vector<int> gate_scalar_indices;
+		for (size_t i = 0; i < graph.scalar_infos_.size(); ++i)
+			if (graph.scalar_infos_[i].body_order <= two_layer_gate_body_order)
+				gate_scalar_indices.push_back(static_cast<int>(i));
+		if (gate_scalar_indices.empty())
+			ERROR("--two-layer-gate selected no SH scalar basis functions.");
+
+		ofs << "two_layer_gate_enabled = true\n";
+		ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
+		ofs << "two_layer_gate_include_one_body = false\n";
+		ofs << "two_layer_gate_weight_count = " << gate_scalar_indices.size() << "\n";
+		ofs << "two_layer_gate_scalar_indices = {";
+		for (size_t i = 0; i < gate_scalar_indices.size(); ++i) {
+			if (i != 0)
+				ofs << ", ";
+			ofs << gate_scalar_indices[i];
+		}
+		ofs << "}\n";
+		ofs << "two_layer_gate_weights = {";
+		for (size_t i = 0; i < gate_scalar_indices.size(); ++i) {
+			if (i != 0)
+				ofs << ", ";
+			ofs << 0.0;
+		}
+		ofs << "}\n";
+	}
 }

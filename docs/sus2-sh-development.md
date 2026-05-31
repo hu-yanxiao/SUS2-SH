@@ -4,6 +4,171 @@
 
 SUS2-SH is developed by copying the SUS2-MLIP developer version and replacing the angular expression with real spherical harmonics. The original training flow remains the driver: `mlp-sus2 train`, E/F/S equations, nonlinear BFGS, linear sub-solve, model save/load, and MPI execution stay in the SUS2 code path.
 
+## Two-layer neighbor scalar gate
+
+The developer branch now has an experimental non-recursive two-layer gate for
+SUS2-SH. It changes the final-layer neighbor type factor as
+
+```text
+lambda_b -> lambda_b * (1 + f_b)
+f_b = sum_q w_q Phi_q^(0)(b)
+```
+
+`Phi_q^(0)` is built from the same SH scalar graph as the main model but with a
+separate body-order cutoff. The default gate cutoff is body order 3. The final
+model may still use a higher body order, for example 6. One-body terms are not
+included in the first-layer gate; the existing species shift and linear
+one-body terms remain only in the final site-energy layer.
+
+The model initializer accepts:
+
+```bash
+--two-layer-gate
+--two-layer-gate-body-order=<int>
+```
+
+When enabled, `init-sh` writes `sh_scalar_info` plus explicit gate metadata:
+
+```text
+two_layer_gate_enabled = true
+two_layer_gate_body_order_max = <int>
+two_layer_gate_include_one_body = false
+two_layer_gate_weight_count = <count>
+two_layer_gate_scalar_indices = {...}
+two_layer_gate_weights = {...}
+```
+
+The only new trainable coefficients are the `w_q` gate weights. They are stored
+after the radial/scaling nonlinear block and before the mirrored linear
+coefficients in `regression_coeffs`. They initialize to zero, so `calc-efs`
+uses the legacy SH path exactly until a gate weight becomes nonzero.
+
+Implementation notes:
+
+- The forward path first computes unmodulated first-layer gate scalars for all
+  atoms with the ordinary `r_c` neighbor list, then evaluates the final SH
+  moments using the neighbor scale `1 + f_b`.
+- The force and training-gradient paths are configuration-level because a site
+  energy centered at atom `a` depends on atom `c` when `c` is in the first-layer
+  shell of neighbor `b`. This gives an effective mathematical radius `2*r_c`
+  without building a physical `2*r_c` neighbor list.
+- Reverse mode accumulates `dL/df_b` from final edges, then backpropagates
+  through the selected first-layer scalar graph. The `w_q` gradients are
+  accumulated even when all `w_q` start at zero, which is required for the gate
+  to leave the zero state during training.
+- Force-loss gradients include both gate-chain terms: the direct
+  `d Phi_q^(0) / dx` contribution to `w_q`, and the mixed final-layer tangent
+  contribution `dA_b / dw_q`. The direct gate scalar directional derivative is
+  evaluated as a basic-moment tangent followed by SH product-graph tangent
+  propagation, avoiding a full per-neighbor/per-scalar derivative matrix.
+- LAMMPS and GPUMD should not use a real `2*r_c` halo for this feature. The
+  intended interface design is to compute `f` on owned atoms, communicate the
+  scalar to ghosts, use it in the main pass, reverse-communicate `dE/df`, then
+  run the first-layer gate reverse pass on owners.
+
+Validation added:
+
+```bash
+bash dev_test/sh_two_layer_gate_init_check.sh ./bin/mlp-sus2
+bash dev_test/sh_two_layer_gate_zero_compat_check.sh ./bin/mlp-sus2
+bash dev_test/sh_two_layer_gate_forward_check.sh ./bin/mlp-sus2
+bash dev_test/sh_two_layer_gate_force_fd_check.sh ./bin/mlp-sus2
+bash dev_test/sh_two_layer_gate_train_weight_check.sh ./bin/mlp-sus2
+bash dev_test/sh_two_layer_gate_loss_gradient_check.sh ./bin/mlp-sus2
+```
+
+Local serial build and the six focused gate tests pass with the developer
+build command:
+
+```bash
+make mlp -j2 USE_MPI=0 CXX_EXE=g++ CC_EXE=gcc FC_EXE=true \
+  CXXFLAGS='-std=c++11 -O0 -DMLIP_DEV' CPPFLAGS='-O0 -I./cblas' \
+  LDFLAGS='-framework Accelerate' TARGET_PRERQ=
+```
+
+Remote server validation was run in:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+```
+
+The MPI build must include `-DMLIP_MPI`; `USE_MPI=1` selects the MPI object
+directory and compiler wrapper but does not add the macro by itself. The server
+build command used for validation is:
+
+```bash
+make mlp -j8 USE_MPI=1 CXX_EXE=mpicxx CC_EXE=mpicc FC_EXE=true \
+  CXXFLAGS='-std=c++11 -O2 -DMLIP_DEV -DMLIP_MPI' \
+  CPPFLAGS='-O2 -I./cblas' TARGET_PRERQ=
+```
+
+The MPI build completed and the same six gate scripts passed against:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-work-codex/bin/mlp-sus2
+```
+
+Additional derivative checks on the previous nonzero-gate failure model
+`codex_two_layer_gate_500x100/gate_100_p.mtp`:
+
+```text
+gate force-loss gradient block: checked_coeffs=54, worst_index=-1
+EFS finite difference: force_abs_err=7.68e-7, stress_abs_err=3.85e-7
+```
+
+Short 500-configuration, 100-step benchmark:
+
+```text
+source data: /work/phy-weigw/hyx/200w/14w.cfg
+MPI ranks  : 120
+subset     : first 500 configurations, 83000 atoms
+```
+
+Both runs used the same final SH topology:
+
+```text
+species-count=4, l-max=4, k-max=4, body-order=6.5,
+body-l-max=4,4,4,2,1, cutoff=6.0,
+radial-basis-size=10, radial-basis-type=RBLaguerre_log1p,
+energy-weight=1, force-weight=0.01, stress-weight=0.001,
+do-samp, init-params=same, do-lin, do-lin-rescale,
+do-lin-steps=2000, do-lin-freq=50, max-iter=100,
+scal-range=3.5,1.5
+```
+
+The two-layer run additionally used:
+
+```text
+--two-layer-gate --two-layer-gate-body-order=3
+```
+
+Result:
+
+| model | runtime | Energy MAE | Force MAE | status |
+|---|---:|---:|---:|---|
+| plain SH | 334 s | 4.488 meV/atom | 205.006 meV/A | completed `max-iter=100` |
+| two-layer gate, pre-fix | 720 s | 7.659 meV/atom | 351.241 meV/A | line search stopped at formal step 17 |
+| two-layer gate, fixed | 1737 s | 5.501 meV/atom | 208.771 meV/A | completed `max-iter=100` |
+
+Benchmark paths:
+
+```text
+plain/pre-fix: /work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100
+fixed run    : /work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100_fix3
+fixed job id : 3740179
+```
+
+The pre-fix gate weights did move from zero, reaching roughly `1.8e-1` max
+absolute magnitude before the run stopped. The failure was traced to the
+training gradient, not to `CalcEFS`: finite differences showed force and stress
+predictions were consistent, while the force-loss gradient for gate weights was
+not. After adding the missing gate-chain terms, the fixed two-layer run
+completed 100 formal steps. It is now close to the plain SH force MAE on this
+small subset but remains about 5.2x slower than the plain run, so the next
+optimization target is reducing repeated first-layer gate reverse work and
+adding gate-specific scale control or staged training if larger runs show
+instability.
+
 ## Training model
 
 The training `.mtp` keeps the ordinary SUS2 radial/scaling/linear parameters and adds `potential_tag = SUS2-SH`. For SH models, `alpha_index_basic` stores `{k, l, m}`. Internally this is converted to `mu = k * (l_max + 1) + l`, so the radial channel is still compatible with the SUS2 coefficient layout.
@@ -204,3 +369,27 @@ Larger but more invasive optimization candidates are intentionally deferred:
 - Stream force/stress rows directly into the linear normal equations instead of materializing full `basis_ders`, `forces_cmpnts`, and `stress_cmpnts`.
 - Fuse prediction and BFGS residual-gradient accumulation so a neighborhood's SH/radial state is not rebuilt once for E/F prediction and again for coefficient gradients.
 - Add a final scalar-rooted graph closure/reindexing pass if future scalar generation leaves unreachable product nodes.
+
+## SUS2-SH-TT shared improvements synced back to SUS2-SH
+
+The TT-specific factorized model path is intentionally not part of this tree, but the plain SH runtime can reuse the training-side graph optimizations proven in the TT branch.
+
+Synced generic changes:
+
+- Product graph row program: groups all products with the same target moment and enables `SUS2_SH_PRODUCT_ROWS=1` for forward and derivative propagation.
+- Site derivative cache: enables `SUS2_SH_SITE_DER_CACHE=1` to compute SH site derivatives once per neighborhood before force/stress projection.
+- Coefficient-gradient fast paths: adds value-only radial basis evaluation, cached basic SH/radial indices, radial coefficient accumulation buffers, `SUS2_SH_ACCUM_SKIP_SITE_DERS=1`, and `SUS2_SH_PRODUCT_HVT_REVERSE=1`.
+- SH init basis controls: default `init-sh` remains legacy-compatible and writes the old format. `--sh-factor-pruning=q-total` requests the full q-index total-order factor tuples, and `--write-sh-scalar-info` writes optional scalar metadata. This metadata is preserved by ordinary model save/load but is not required for plain SH training.
+- SH harmonic support now covers `l <= 6`; existing l<=4 models remain compatible.
+- `init-sh` can write `RBLaguerre_log1p` and `RBJacobi_sss` SH models in addition to the Chebyshev SSS variants. Lowercase aliases `laguerre_log1p` and `jacobi_sss` are canonicalized to the saved model names. `RBJacobi_sss` supports `--k-max <= 6` because Jacobi blocks are indexed as `k=0..5`.
+
+Regression scripts added under `dev_test/`:
+
+- `sh_product_row_program_equivalence_check.sh`
+- `sh_site_der_cache_equivalence_check.sh`
+- `sh_accum_skip_site_ders_train_check.sh`
+- `sh_product_hvt_reverse_train_check.sh`
+- `sh_factor_tuple_total_order_check.sh`
+- `sh_init_format_compat_check.sh`
+- `sh_lmax_5_6_init_smoke.sh`
+- `sh_radial_basis_init_smoke.sh`

@@ -111,12 +111,12 @@ public:
 
 
 	// Called by Trainer in case of nonlinear MLIP
-	void AccumulateEFSCombinationGrad(	Configuration &cfg,											// Calculates gradient w.r.t. coefficients of a linear combination of energy, forces and stresses via linear combination of gradients of site energies and site energy derivatives w.r.t. positions of neighboring atoms
+	virtual void AccumulateEFSCombinationGrad(	Configuration &cfg,											// Calculates gradient w.r.t. coefficients of a linear combination of energy, forces and stresses via linear combination of gradients of site energies and site energy derivatives w.r.t. positions of neighboring atoms
 		                                std::vector<double>& ene_weight,
 										const std::vector<Vector3>& frc_weights,
 										const Matrix3& str_weights,
 										Array1D& out_grads_accumulator);
-	void AccumulateEFSCombinationGrad(	Configuration &cfg,
+	virtual void AccumulateEFSCombinationGrad(	Configuration &cfg,
 		                                std::vector<double>& ene_weight,
 										const std::vector<Vector3>& frc_weights,
 										const Matrix3& str_weights,

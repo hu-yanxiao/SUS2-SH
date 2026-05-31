@@ -22,11 +22,218 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdlib>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 
 using namespace std;
 
 namespace {
+
+double ParseDevDoubleOption(const std::map<std::string, std::string>& opts,
+                            const std::string& name,
+                            double default_value)
+{
+	const auto it = opts.find(name);
+	if (it == opts.end() || it->second.empty())
+		return default_value;
+	return std::stod(it->second);
+}
+
+int ParseDevIntOption(const std::map<std::string, std::string>& opts,
+                      const std::string& name,
+                      int default_value)
+{
+	const auto it = opts.find(name);
+	if (it == opts.end() || it->second.empty())
+		return default_value;
+	return std::stoi(it->second);
+}
+
+class DevLossGradientProbe : public MTPR_trainer {
+public:
+	struct Result {
+		int checked_count = 0;
+		int worst_index = -1;
+		double worst_rel_err = 0.0;
+		double worst_abs_err = 0.0;
+		double worst_analytic = 0.0;
+		double worst_fd = 0.0;
+		double base_loss = 0.0;
+	};
+
+	DevLossGradientProbe(MLMTPR* mtpr,
+	                     double energy_weight,
+	                     double force_weight,
+	                     double stress_weight)
+		: MTPR_trainer(mtpr, energy_weight, force_weight, stress_weight,
+		               0.0, 0.0)
+	{
+		std_scaling = 0.0;
+		stdd_scaling = 0.0;
+		radial_smooth_regularization = 0.0;
+		fixed_atomic_energies.clear();
+	}
+
+	Result Check(std::vector<Configuration>& configs,
+	             double displacement,
+	             double abs_tolerance,
+	             double rel_tolerance,
+	             int coeff_begin,
+	             int coeff_end)
+	{
+		Result result;
+		CalcObjectiveFunctionGrad(configs);
+		std::vector<double> analytic = loss_grad_;
+		result.base_loss = ObjectiveFunction(configs);
+		const int coeff_count = p_mlip->CoeffCount();
+		coeff_begin = std::max(0, coeff_begin);
+		coeff_end = coeff_end <= 0 ? coeff_count : std::min(coeff_end, coeff_count);
+		if (coeff_begin >= coeff_end)
+			ERROR("Invalid coefficient range for loss-gradient check.");
+		for (int i = coeff_begin; i < coeff_end; ++i) {
+			const double original = p_mlip->Coeff()[i];
+			p_mlip->Coeff()[i] = original + displacement;
+			const double loss_plus = ObjectiveFunction(configs);
+			p_mlip->Coeff()[i] = original - displacement;
+			const double loss_minus = ObjectiveFunction(configs);
+			p_mlip->Coeff()[i] = original;
+
+			const double fd = (loss_plus - loss_minus) / (2.0 * displacement);
+			const double abs_err = std::abs(analytic[i] - fd);
+			const double scale = std::max(1.0e-14,
+				std::max(std::abs(analytic[i]), std::abs(fd)));
+			const double rel_err = abs_err / scale;
+			++result.checked_count;
+			if (abs_err > abs_tolerance && rel_err > result.worst_rel_err) {
+				result.worst_rel_err = rel_err;
+				result.worst_abs_err = abs_err;
+				result.worst_index = i;
+				result.worst_analytic = analytic[i];
+				result.worst_fd = fd;
+			}
+		}
+		if (result.worst_abs_err <= abs_tolerance)
+			result.worst_rel_err = 0.0;
+		return result;
+	}
+};
+
+struct DevEFSFDResult {
+	int force_components = 0;
+	int stress_components = 0;
+	int worst_force_config = -1;
+	int worst_force_atom = -1;
+	int worst_force_component = -1;
+	int worst_stress_config = -1;
+	int worst_stress_a = -1;
+	int worst_stress_b = -1;
+	double worst_force_abs_err = 0.0;
+	double worst_force_rel_err = 0.0;
+	double worst_force_analytic = 0.0;
+	double worst_force_fd = 0.0;
+	double worst_stress_abs_err = 0.0;
+	double worst_stress_rel_err = 0.0;
+	double worst_stress_analytic = 0.0;
+	double worst_stress_fd = 0.0;
+};
+
+void UpdateWorst(double analytic,
+                 double finite_difference,
+                 double& worst_abs_err,
+                 double& worst_rel_err,
+                 double& worst_analytic,
+                 double& worst_fd)
+{
+	const double abs_err = std::abs(analytic - finite_difference);
+	const double scale = std::max(1.0e-14,
+		std::max(std::abs(analytic), std::abs(finite_difference)));
+	const double rel_err = abs_err / scale;
+	if (abs_err > worst_abs_err) {
+		worst_abs_err = abs_err;
+		worst_rel_err = rel_err;
+		worst_analytic = analytic;
+		worst_fd = finite_difference;
+	}
+}
+
+DevEFSFDResult CheckEFSFiniteDifference(MLMTPR& mtpr,
+                                        const std::vector<Configuration>& configs,
+                                        double displacement,
+                                        int max_atoms)
+{
+	DevEFSFDResult result;
+	for (int cfg_index = 0; cfg_index < static_cast<int>(configs.size()); ++cfg_index) {
+		Configuration base = configs[cfg_index];
+		mtpr.CalcEFS(base);
+
+		const int atom_limit = max_atoms <= 0
+			? base.size()
+			: std::min(max_atoms, base.size());
+		for (int i = 0; i < atom_limit; ++i) {
+			for (int a = 0; a < 3; ++a) {
+				Configuration plus = configs[cfg_index];
+				Configuration minus = configs[cfg_index];
+				plus.pos(i, a) += displacement;
+				minus.pos(i, a) -= displacement;
+				mtpr.CalcEFS(plus);
+				mtpr.CalcEFS(minus);
+				const double fd_force =
+					(minus.energy - plus.energy) / (2.0 * displacement);
+				const double old_abs = result.worst_force_abs_err;
+				UpdateWorst(base.force(i, a), fd_force,
+				            result.worst_force_abs_err,
+				            result.worst_force_rel_err,
+				            result.worst_force_analytic,
+				            result.worst_force_fd);
+				if (result.worst_force_abs_err > old_abs) {
+					result.worst_force_config = cfg_index;
+					result.worst_force_atom = i;
+					result.worst_force_component = a;
+				}
+				++result.force_components;
+			}
+		}
+
+		Matrix3 fd_dedl(0, 0, 0, 0, 0, 0, 0, 0, 0);
+		for (int a = 0; a < 3; ++a) {
+			for (int b = 0; b < 3; ++b) {
+				Configuration plus = configs[cfg_index];
+				Configuration minus = configs[cfg_index];
+				Matrix3 deform = configs[cfg_index].lattice;
+				deform[a][b] += displacement;
+				plus.Deform(plus.lattice.inverse() * deform);
+				deform[a][b] -= 2.0 * displacement;
+				minus.Deform(minus.lattice.inverse() * deform);
+				mtpr.CalcEFS(plus);
+				mtpr.CalcEFS(minus);
+				const double denom = plus.lattice[a][b] - minus.lattice[a][b];
+				fd_dedl[a][b] = (plus.energy - minus.energy) / denom;
+			}
+		}
+		const Matrix3 analytic_dedl =
+			-base.lattice.inverse().transpose() * base.stresses;
+		for (int a = 0; a < 3; ++a) {
+			for (int b = 0; b < 3; ++b) {
+				const double old_abs = result.worst_stress_abs_err;
+				UpdateWorst(analytic_dedl[a][b], fd_dedl[a][b],
+				            result.worst_stress_abs_err,
+				            result.worst_stress_rel_err,
+				            result.worst_stress_analytic,
+				            result.worst_stress_fd);
+				if (result.worst_stress_abs_err > old_abs) {
+					result.worst_stress_config = cfg_index;
+					result.worst_stress_a = a;
+					result.worst_stress_b = b;
+				}
+				++result.stress_components;
+			}
+		}
+	}
+	return result;
+}
 
 std::vector<int> ParseSpeciesIndexList(const std::string& value)
 {
@@ -64,6 +271,20 @@ std::string FormatSpeciesMapping(const std::vector<int>& old_species_indices)
 		oss << old_species_indices[i] << "->" << i;
 	}
 	return oss.str();
+}
+
+std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
+{
+	if (index < 0)
+		return "none";
+	if (index < mtpr.BaseNonlinearCoeffCount())
+		return "nonlinear";
+	if (index >= mtpr.TwoLayerGateWeightOffset()
+	    && index < mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount())
+		return "two_layer_gate_weight";
+	if (index >= mtpr.LinearCoeffOffset())
+		return "linear";
+	return "unknown";
 }
 
 }
@@ -125,10 +346,135 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		if(!self_test_dev()) exit(1);
 	} END_COMMAND;
 
-	BEGIN_COMMAND("init-sh",
-		"writes an untrained SUS2-SH model",
-		"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
+	BEGIN_COMMAND("check-loss-gradient-dev",
+		"checks MTPR loss gradient against finite differences",
+		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0\n"
 	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 check-loss-gradient-dev: model and cfg arguments are required\n";
+			return 1;
+		}
+		MLMTPR mtpr(args[0]);
+		std::ifstream ifs(args[1], std::ios::binary);
+		if (!ifs)
+			ERROR("Cannot open configuration file for loss-gradient check.");
+
+		const int max_configs = ParseDevIntOption(opts, "max-configs", 1);
+		std::vector<Configuration> configs;
+		Configuration cfg;
+		while ((max_configs <= 0 || static_cast<int>(configs.size()) < max_configs)
+		       && cfg.Load(ifs)) {
+			configs.push_back(cfg);
+		}
+		if (configs.empty())
+			ERROR("No configurations loaded for loss-gradient check.");
+
+		const double energy_weight = ParseDevDoubleOption(opts, "energy-weight", 1.0);
+		const double force_weight = ParseDevDoubleOption(opts, "force-weight", 1.0);
+		const double stress_weight = ParseDevDoubleOption(opts, "stress-weight", 0.0);
+		const double displacement = ParseDevDoubleOption(opts, "displacement", 1.0e-7);
+		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-5);
+		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-4);
+		const int coeff_start = ParseDevIntOption(opts, "coeff-start", 0);
+		const int coeff_end = ParseDevIntOption(opts, "coeff-end", 0);
+		if (displacement <= 0.0)
+			ERROR("--displacement should be positive.");
+
+		DevLossGradientProbe probe(&mtpr, energy_weight, force_weight, stress_weight);
+		DevLossGradientProbe::Result result =
+			probe.Check(configs, displacement, abs_tolerance, rel_tolerance,
+			            coeff_start, coeff_end);
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "checked_coeffs=" << result.checked_count
+			          << " coeff_count=" << mtpr.CoeffCount()
+			          << " base_nonlinear_end=" << mtpr.BaseNonlinearCoeffCount()
+			          << " gate_begin=" << mtpr.TwoLayerGateWeightOffset()
+			          << " gate_end=" << mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount()
+			          << " linear_begin=" << mtpr.LinearCoeffOffset()
+			          << " base_loss=" << result.base_loss
+			          << " worst_index=" << result.worst_index
+			          << " worst_group=" << DescribeMTPRCoeffIndex(mtpr, result.worst_index)
+			          << " analytic=" << result.worst_analytic
+			          << " finite_difference=" << result.worst_fd
+			          << " abs_err=" << result.worst_abs_err
+			          << " rel_err=" << result.worst_rel_err
+			          << std::endl;
+		}
+		if (result.worst_abs_err > abs_tolerance
+		    && result.worst_rel_err > rel_tolerance)
+			exit(1);
+	} END_COMMAND;
+
+	BEGIN_COMMAND("check-efs-fd-dev",
+		"checks forces and stresses against energy finite differences",
+		"mlp-sus2 check-efs-fd-dev model.mtp cfg --max-configs=1 --max-atoms=0 --displacement=1e-4 --abs-tolerance=1e-4 --rel-tolerance=1e-3\n"
+	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 check-efs-fd-dev: model and cfg arguments are required\n";
+			return 1;
+		}
+		MLMTPR mtpr(args[0]);
+		std::ifstream ifs(args[1], std::ios::binary);
+		if (!ifs)
+			ERROR("Cannot open configuration file for EFS finite-difference check.");
+
+		const int max_configs = ParseDevIntOption(opts, "max-configs", 1);
+		std::vector<Configuration> configs;
+		Configuration cfg;
+		while ((max_configs <= 0 || static_cast<int>(configs.size()) < max_configs)
+		       && cfg.Load(ifs)) {
+			configs.push_back(cfg);
+		}
+		if (configs.empty())
+			ERROR("No configurations loaded for EFS finite-difference check.");
+
+		const int max_atoms = ParseDevIntOption(opts, "max-atoms", 0);
+		const double displacement = ParseDevDoubleOption(opts, "displacement", 1.0e-4);
+		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-4);
+		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-3);
+		if (displacement <= 0.0)
+			ERROR("--displacement should be positive.");
+
+		const DevEFSFDResult result =
+			CheckEFSFiniteDifference(mtpr, configs, displacement, max_atoms);
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "force_components=" << result.force_components
+			          << " worst_force_config=" << result.worst_force_config
+			          << " worst_force_atom=" << result.worst_force_atom
+			          << " worst_force_component=" << result.worst_force_component
+			          << " force_analytic=" << result.worst_force_analytic
+			          << " force_fd=" << result.worst_force_fd
+			          << " force_abs_err=" << result.worst_force_abs_err
+			          << " force_rel_err=" << result.worst_force_rel_err
+			          << " stress_components=" << result.stress_components
+			          << " worst_stress_config=" << result.worst_stress_config
+			          << " worst_stress_a=" << result.worst_stress_a
+			          << " worst_stress_b=" << result.worst_stress_b
+			          << " stress_dedl_analytic=" << result.worst_stress_analytic
+			          << " stress_dedl_fd=" << result.worst_stress_fd
+			          << " stress_abs_err=" << result.worst_stress_abs_err
+			          << " stress_rel_err=" << result.worst_stress_rel_err
+			          << std::endl;
+		}
+		const bool force_failed =
+			result.worst_force_abs_err > abs_tolerance
+			&& result.worst_force_rel_err > rel_tolerance;
+		const bool stress_failed =
+			result.worst_stress_abs_err > abs_tolerance
+			&& result.worst_stress_rel_err > rel_tolerance;
+		if (force_failed || stress_failed)
+			exit(1);
+	} END_COMMAND;
+
+		BEGIN_COMMAND("init-sh",
+			"writes an untrained SUS2-SH model",
+			"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
+			"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
+			"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
+			"         --two-layer-gate, --two-layer-gate-body-order=<int> (default=3)\n"
+		) {
 		if (args.size() != 1) {
 			std::cout << "mlp-sus2 init-sh: 1 output .mtp argument is required\n";
 			return 1;

@@ -579,6 +579,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 		"    --inline-sh-model=<string>: inline SUS2-SH model path. If the file exists,\n"
 		"                                continue training from it; otherwise create it\n"
 		"                                from the init-sh options.\n"
+		"    --two-layer-gate: initialize the non-recursive SUS2-SH neighbor scalar gate.\n"
+		"    --two-layer-gate-body-order=<int>: scalar body cutoff for the gate. Default=3\n"
 		"    --shift: disable internal shift correction in trainer.\n"
 		"    --skip-preinit: skip the 75 iterations done when parameters are not given\n"
 		"    --update-mindist: updating the mindist parameter with actual \n"
