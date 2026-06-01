@@ -2146,6 +2146,7 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 		ERROR("SUS2-SH two-layer gate metadata has inconsistent sizes");
 	const int gate_count = static_cast<int>(two_layer_gate_scalar_indices_.size());
 	two_layer_gate_scalar_values_cache_.clear();
+	two_layer_gate_moment_values_cache_.clear();
 	if (gate_count == 0)
 		return;
 	two_layer_gate_scalar_values_cache_.assign(

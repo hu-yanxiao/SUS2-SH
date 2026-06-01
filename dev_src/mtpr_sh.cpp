@@ -2733,6 +2733,7 @@ void MLMTPR::AccumulateSHBasisGateDers(
 	const int moment_stride = alpha_moments_count;
 	if (static_cast<int>(sh_gate_moment_ders_.size()) != moment_stride)
 		sh_gate_moment_ders_.resize(moment_stride);
+	const bool use_product_rows = !sh_product_rows_.empty();
 
 	double sh_values[kMaxSHComponents];
 	std::vector<double>& rb_vals = radial_vals_buffer_;
@@ -2792,43 +2793,47 @@ void MLMTPR::AccumulateSHBasisGateDers(
 			}
 		}
 
-		std::fill(sh_gate_moment_ders_.begin(),
-		          sh_gate_moment_ders_.end(),
-		          0.0);
-			const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-			const double pair_type_scale = center_type_coeff * outer_type_coeff;
-			for (int i = 0; i < alpha_index_basic_count; ++i) {
-				const int mu = basic_mu_cache_[i];
-				const int sh_index = basic_sh_index_cache_[i];
-				sh_gate_moment_ders_[i] +=
-					pair_type_scale * radial_values_use[mu] * sh_values_use[sh_index];
+		const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
+		const double pair_type_scale = center_type_coeff * outer_type_coeff;
+		if (!use_product_rows) {
+			std::fill(sh_gate_moment_ders_.begin(),
+			          sh_gate_moment_ders_.end(),
+			          0.0);
+		}
+		for (int i = 0; i < alpha_index_basic_count; ++i) {
+			const int mu = basic_mu_cache_[i];
+			const int sh_index = basic_sh_index_cache_[i];
+			sh_gate_moment_ders_[i] =
+				pair_type_scale * radial_values_use[mu] * sh_values_use[sh_index];
 		}
 
-			if (UseSHProductRows()) {
-				for (const SHProductRow& row : sh_product_rows_) {
-					const int end = row.term_begin + row.term_count;
-					for (int t = row.term_begin; t < end; ++t) {
-						const SHProductRowTerm& term = sh_product_row_terms_[t];
-						sh_gate_moment_ders_[row.target] += term.coeff * (
-							sh_gate_moment_ders_[term.left] * moment_vals[term.right]
-							+ moment_vals[term.left] * sh_gate_moment_ders_[term.right]);
-					}
+		if (use_product_rows) {
+			for (const SHProductRow& row : sh_product_rows_) {
+				double value = 0.0;
+				const int end = row.term_begin + row.term_count;
+				for (int t = row.term_begin; t < end; ++t) {
+					const SHProductRowTerm& term = sh_product_row_terms_[t];
+					value += term.coeff * (
+						sh_gate_moment_ders_[term.left] * moment_vals[term.right]
+						+ moment_vals[term.left] * sh_gate_moment_ders_[term.right]);
 				}
-			} else {
-				for (size_t p = 0; p < sh_products_.size(); ++p) {
-					const SHProduct& product = sh_products_[p];
-					sh_gate_moment_ders_[product.target] += product.coeff * (
-						sh_gate_moment_ders_[product.left] * moment_vals[product.right]
-						+ moment_vals[product.left] * sh_gate_moment_ders_[product.right]);
-				}
+				sh_gate_moment_ders_[row.target] = value;
 			}
-
-			double* gate_adjoints = gate_linear_adjoints.data()
-				+ static_cast<size_t>(atom_index) * alpha_scalar_moments;
-			for (int i = 0; i < alpha_scalar_moments; ++i)
-				gate_adjoints[i] += sh_gate_moment_ders_[alpha_moment_mapping[i]];
+		} else {
+			for (size_t p = 0; p < sh_products_.size(); ++p) {
+				const SHProduct& product = sh_products_[p];
+				sh_gate_moment_ders_[product.target] += product.coeff * (
+					sh_gate_moment_ders_[product.left] * moment_vals[product.right]
+					+ moment_vals[product.left] * sh_gate_moment_ders_[product.right]);
+			}
 		}
+
+		double* gate_adjoints = gate_linear_adjoints.data()
+			+ static_cast<size_t>(atom_index) * alpha_scalar_moments;
+		for (int i = 0; i < alpha_scalar_moments; ++i)
+			gate_adjoints[i] += sh_gate_moment_ders_[alpha_moment_mapping[i]];
 	}
+}
 
 void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 	const Neighborhood& nbh,
