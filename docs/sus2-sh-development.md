@@ -169,6 +169,52 @@ optimization target is reducing repeated first-layer gate reverse work and
 adding gate-specific scale control or staged training if larger runs show
 instability.
 
+2026-06-01 follow-up notes:
+
+- The step-17 line-search failure was traced to incomplete chain terms in the
+  training gradient path, not to `CalcEFS` prediction. In particular, the
+  linear-component force/stress path must include the two-layer gate chain
+  correction so `TrainLinear` solves the same quadratic that the nonlinear
+  objective differentiates.
+- After `do-lin`, the BFGS state should sync the current coefficient vector but
+  should not reset the accumulated Hessian approximation. Resetting the Hessian
+  discards useful curvature memory and was not needed after the gradient fix.
+- Acceleration work is constrained to paths introduced by the two-layer gate.
+  Do not claim speedups from generic single-layer SH work such as common
+  `TrainLinear`, common BFGS, or generic SH accumulation unless the code is
+  explicitly gated to two-layer-only execution.
+- Accepted two-layer-only cache: `PrepareTwoLayerGateValues` now keeps selected
+  gate scalar values and the corresponding full first-layer moment vector per
+  atom. The cache is reused by the gate-weight gradient and by two-layer
+  weighted scalar derivative paths. A trial that also forced reuse in the gate
+  directional-derivative path was measured and rejected because it was slower.
+
+Server verification after the accepted cache used:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-work-codex/bin/mlp-sus2
+/work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100_final_chainfix
+```
+
+Key checker results:
+
+```text
+check-two-layer-gate-fastpath-dev: checked_values=648, checked_derivatives=90234,
+  value_abs_err=0, der_abs_err=0, weighted_der_abs_err=8.88e-16
+check-linear-components-fd-dev: checked_components=3024, abs_err=1.60e-08
+check-efs-fd-dev: force_abs_err=1.01e-06, stress_abs_err=3.64e-07
+check-loss-gradient-dev gate-weight block: checked_coeffs=54, abs_err=0
+```
+
+One-step 120-rank profile comparison on the same 500-configuration subset:
+
+| profile | path suffix | avg_us_total | avg_us_moment | avg_us_hvt_reverse | runtime_sec | status |
+|---|---|---:|---:|---:|---:|---|
+| original two-layer profile | `codex_two_layer_gate_profile_1step` | 258.569 | 169.974 | 16.3229 | 27 | reference |
+| scalar cache only | `codex_two_layer_gate_profile_1step_gatecache` | 258.053 | 170.196 | 16.0840 | 24 | measured |
+| accepted scalar+moment cache | `codex_two_layer_gate_profile_1step_momentcache` | 255.885 | 167.429 | 15.9410 | 24 | accepted |
+| rejected directional-cache trial | `codex_two_layer_gate_profile_1step_directioncache` | 257.064 | 168.175 | 16.0600 | 26 | reverted |
+
 ## Training model
 
 The training `.mtp` keeps the ordinary SUS2 radial/scaling/linear parameters and adds `potential_tag = SUS2-SH`. For SH models, `alpha_index_basic` stores `{k, l, m}`. Internally this is converted to `mu = k * (l_max + 1) + l`, so the radial channel is still compatible with the SUS2 coefficient layout.

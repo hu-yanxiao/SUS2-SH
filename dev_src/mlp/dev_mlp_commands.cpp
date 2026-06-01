@@ -140,6 +140,43 @@ struct DevEFSFDResult {
 	double worst_stress_fd = 0.0;
 };
 
+struct DevLinearComponentsFDResult {
+	int checked_components = 0;
+	int worst_config = -1;
+	int worst_atom = -1;
+	int worst_component = -1;
+	int worst_coeff = -1;
+	double worst_abs_err = 0.0;
+	double worst_rel_err = 0.0;
+	double worst_analytic = 0.0;
+	double worst_fd = 0.0;
+};
+
+struct DevGateFastPathResult {
+	int checked_values = 0;
+	int checked_derivatives = 0;
+	int worst_value_config = -1;
+	int worst_value_atom = -1;
+	int worst_value_q = -1;
+	int worst_der_config = -1;
+	int worst_der_atom = -1;
+	int worst_der_q = -1;
+	int worst_der_neighbor = -1;
+	int worst_der_component = -1;
+	double worst_value_abs_err = 0.0;
+	double worst_value_rel_err = 0.0;
+	double worst_value_full = 0.0;
+	double worst_value_fast = 0.0;
+	double worst_der_abs_err = 0.0;
+	double worst_der_rel_err = 0.0;
+	double worst_der_full = 0.0;
+	double worst_der_fast = 0.0;
+	double worst_weighted_der_abs_err = 0.0;
+	double worst_weighted_der_rel_err = 0.0;
+	double worst_weighted_der_full = 0.0;
+	double worst_weighted_der_fast = 0.0;
+};
+
 void UpdateWorst(double analytic,
                  double finite_difference,
                  double& worst_abs_err,
@@ -158,6 +195,123 @@ void UpdateWorst(double analytic,
 		worst_fd = finite_difference;
 	}
 }
+
+class DevGateFastPathProbe : public MLMTPR {
+public:
+	DevGateFastPathProbe(const std::string& mtp_filename)
+		: MLMTPR(mtp_filename)
+	{
+	}
+
+	DevGateFastPathResult Check(std::vector<Configuration>& configs,
+	                            int max_atoms)
+	{
+		if (!two_layer_gate_enabled_)
+			ERROR("Model does not have two-layer gate enabled.");
+		if (TwoLayerGateWeightCount() <= 0)
+			ERROR("Model has no two-layer gate weights.");
+
+		DevGateFastPathResult result;
+		std::vector<double> fast_values;
+		std::vector<double> fast_derivatives;
+		std::vector<Vector3> fast_weighted_derivatives;
+		std::vector<double> full_values(TwoLayerGateWeightCount(), 0.0);
+		std::vector<double> full_derivatives;
+		std::vector<Vector3> full_weighted_derivatives;
+
+		const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
+		std::vector<double>* saved_gate_adjoints = active_two_layer_gate_adjoints_;
+		active_two_layer_gate_values_ = nullptr;
+		active_two_layer_gate_adjoints_ = nullptr;
+
+		for (int cfg_index = 0; cfg_index < static_cast<int>(configs.size()); ++cfg_index) {
+			Neighborhoods neighborhoods(configs[cfg_index], CutOff());
+			const int atom_limit = max_atoms <= 0
+				? configs[cfg_index].size()
+				: std::min(max_atoms, configs[cfg_index].size());
+			for (int atom_index = 0; atom_index < atom_limit; ++atom_index) {
+				const Neighborhood& nbh = neighborhoods[atom_index];
+
+				CalcSHBasisFuncs(nbh, basis_vals);
+				for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+					const int scalar_index = two_layer_gate_scalar_indices_[q];
+					full_values[q] = basis_vals[1 + scalar_index];
+				}
+				CalcTwoLayerGateScalarValuesOnly(nbh, fast_values);
+				for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+					const double old_abs = result.worst_value_abs_err;
+					UpdateWorst(full_values[q], fast_values[q],
+					            result.worst_value_abs_err,
+					            result.worst_value_rel_err,
+					            result.worst_value_full,
+					            result.worst_value_fast);
+					if (result.worst_value_abs_err > old_abs) {
+						result.worst_value_config = cfg_index;
+						result.worst_value_atom = atom_index;
+						result.worst_value_q = q;
+					}
+					++result.checked_values;
+				}
+
+				CalcSHBasisFuncsDers(nbh);
+				full_derivatives.assign(
+					static_cast<size_t>(TwoLayerGateWeightCount()) * nbh.count * 3,
+					0.0);
+				full_weighted_derivatives.assign(
+					static_cast<size_t>(nbh.count), Vector3(0.0, 0.0, 0.0));
+				for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+					const int scalar_index = two_layer_gate_scalar_indices_[q];
+					const double weight = TwoLayerGateWeight(q);
+					for (int j = 0; j < nbh.count; ++j) {
+						for (int a = 0; a < 3; ++a) {
+							const double full_der = basis_ders(1 + scalar_index, j, a);
+							full_derivatives[(static_cast<size_t>(q) * nbh.count + j) * 3 + a] =
+								full_der;
+							full_weighted_derivatives[j][a] += weight * full_der;
+						}
+					}
+				}
+
+				CalcTwoLayerGateScalarDers(nbh, fast_derivatives);
+				CalcTwoLayerGateWeightedScalarDers(nbh, fast_weighted_derivatives);
+				for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+					for (int j = 0; j < nbh.count; ++j) {
+						for (int a = 0; a < 3; ++a) {
+							const size_t index =
+								(static_cast<size_t>(q) * nbh.count + j) * 3 + a;
+							const double old_abs = result.worst_der_abs_err;
+							UpdateWorst(full_derivatives[index],
+							            fast_derivatives[index],
+							            result.worst_der_abs_err,
+							            result.worst_der_rel_err,
+							            result.worst_der_full,
+							            result.worst_der_fast);
+							if (result.worst_der_abs_err > old_abs) {
+								result.worst_der_config = cfg_index;
+								result.worst_der_atom = atom_index;
+								result.worst_der_q = q;
+								result.worst_der_neighbor = j;
+								result.worst_der_component = a;
+							}
+							++result.checked_derivatives;
+
+							UpdateWorst(full_weighted_derivatives[j][a],
+							            fast_weighted_derivatives[j][a],
+							            result.worst_weighted_der_abs_err,
+							            result.worst_weighted_der_rel_err,
+							            result.worst_weighted_der_full,
+							            result.worst_weighted_der_fast);
+						}
+					}
+				}
+			}
+		}
+
+		active_two_layer_gate_values_ = saved_gate_values;
+		active_two_layer_gate_adjoints_ = saved_gate_adjoints;
+		return result;
+	}
+};
 
 DevEFSFDResult CheckEFSFiniteDifference(MLMTPR& mtpr,
                                         const std::vector<Configuration>& configs,
@@ -229,6 +383,75 @@ DevEFSFDResult CheckEFSFiniteDifference(MLMTPR& mtpr,
 					result.worst_stress_b = b;
 				}
 				++result.stress_components;
+			}
+		}
+	}
+	return result;
+}
+
+DevLinearComponentsFDResult CheckLinearComponentsFiniteDifference(
+	MLMTPR& mtpr,
+	const std::vector<Configuration>& configs,
+	double displacement,
+	int max_atoms,
+	int coeff_begin,
+	int coeff_end)
+{
+	DevLinearComponentsFDResult result;
+	const int coeff_count = mtpr.alpha_count - 1 + mtpr.species_count;
+	coeff_begin = std::max(0, coeff_begin);
+	coeff_end = coeff_end <= 0 ? coeff_count : std::min(coeff_end, coeff_count);
+	if (coeff_begin >= coeff_end)
+		ERROR("Invalid coefficient range for linear-component FD check.");
+
+	for (int cfg_index = 0; cfg_index < static_cast<int>(configs.size()); ++cfg_index) {
+		Configuration base = configs[cfg_index];
+		Neighborhoods base_neighborhoods(base, mtpr.CutOff());
+		mtpr.CalcEFSComponents(base, base_neighborhoods, true, false);
+
+		const int atom_limit = max_atoms <= 0
+			? base.size()
+			: std::min(max_atoms, base.size());
+		std::vector<double> base_force_components(
+			static_cast<size_t>(atom_limit) * 3 * coeff_count, 0.0);
+		for (int i = 0; i < atom_limit; ++i)
+			for (int a = 0; a < 3; ++a)
+				for (int k = coeff_begin; k < coeff_end; ++k)
+					base_force_components[(static_cast<size_t>(i) * 3 + a) * coeff_count + k] =
+						mtpr.forces_cmpnts(i, k, a);
+
+		for (int i = 0; i < atom_limit; ++i) {
+			for (int a = 0; a < 3; ++a) {
+				Configuration plus = configs[cfg_index];
+				Configuration minus = configs[cfg_index];
+				plus.pos(i, a) += displacement;
+				minus.pos(i, a) -= displacement;
+				Neighborhoods plus_neighborhoods(plus, mtpr.CutOff());
+				Neighborhoods minus_neighborhoods(minus, mtpr.CutOff());
+				mtpr.CalcEFSComponents(plus, plus_neighborhoods, false, false);
+				std::vector<double> plus_energy_components(
+					mtpr.energy_cmpnts, mtpr.energy_cmpnts + coeff_count);
+				mtpr.CalcEFSComponents(minus, minus_neighborhoods, false, false);
+				for (int k = coeff_begin; k < coeff_end; ++k) {
+					const double fd_force =
+						-(plus_energy_components[k] - mtpr.energy_cmpnts[k])
+						/ (2.0 * displacement);
+					const double analytic =
+						base_force_components[(static_cast<size_t>(i) * 3 + a) * coeff_count + k];
+					const double old_abs = result.worst_abs_err;
+					UpdateWorst(analytic, fd_force,
+					            result.worst_abs_err,
+					            result.worst_rel_err,
+					            result.worst_analytic,
+					            result.worst_fd);
+					if (result.worst_abs_err > old_abs) {
+						result.worst_config = cfg_index;
+						result.worst_atom = i;
+						result.worst_component = a;
+						result.worst_coeff = k;
+					}
+					++result.checked_components;
+				}
 			}
 		}
 	}
@@ -465,6 +688,127 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			result.worst_stress_abs_err > abs_tolerance
 			&& result.worst_stress_rel_err > rel_tolerance;
 		if (force_failed || stress_failed)
+			exit(1);
+	} END_COMMAND;
+
+	BEGIN_COMMAND("check-linear-components-fd-dev",
+		"checks linear-regression force components against energy-component finite differences",
+		"mlp-sus2 check-linear-components-fd-dev model.mtp cfg --max-configs=1 --max-atoms=1 --coeff-start=0 --coeff-end=0 --displacement=1e-5 --abs-tolerance=1e-5 --rel-tolerance=1e-4\n"
+	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 check-linear-components-fd-dev: model and cfg arguments are required\n";
+			return 1;
+		}
+		MLMTPR mtpr(args[0]);
+		std::ifstream ifs(args[1], std::ios::binary);
+		if (!ifs)
+			ERROR("Cannot open configuration file for linear-component finite-difference check.");
+
+		const int max_configs = ParseDevIntOption(opts, "max-configs", 1);
+		std::vector<Configuration> configs;
+		Configuration cfg;
+		while ((max_configs <= 0 || static_cast<int>(configs.size()) < max_configs)
+		       && cfg.Load(ifs)) {
+			configs.push_back(cfg);
+		}
+		if (configs.empty())
+			ERROR("No configurations loaded for linear-component finite-difference check.");
+
+		const int max_atoms = ParseDevIntOption(opts, "max-atoms", 1);
+		const int coeff_start = ParseDevIntOption(opts, "coeff-start", 0);
+		const int coeff_end = ParseDevIntOption(opts, "coeff-end", 0);
+		const double displacement = ParseDevDoubleOption(opts, "displacement", 1.0e-5);
+		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-5);
+		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-4);
+		if (displacement <= 0.0)
+			ERROR("--displacement should be positive.");
+
+		const DevLinearComponentsFDResult result =
+			CheckLinearComponentsFiniteDifference(mtpr, configs, displacement,
+			                                      max_atoms, coeff_start, coeff_end);
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "checked_components=" << result.checked_components
+			          << " coeff_count=" << (mtpr.alpha_count - 1 + mtpr.species_count)
+			          << " worst_config=" << result.worst_config
+			          << " worst_atom=" << result.worst_atom
+			          << " worst_component=" << result.worst_component
+			          << " worst_coeff=" << result.worst_coeff
+			          << " analytic=" << result.worst_analytic
+			          << " finite_difference=" << result.worst_fd
+			          << " abs_err=" << result.worst_abs_err
+			          << " rel_err=" << result.worst_rel_err
+			          << std::endl;
+		}
+		if (result.worst_abs_err > abs_tolerance
+		    && result.worst_rel_err > rel_tolerance)
+			exit(1);
+	} END_COMMAND;
+
+	BEGIN_COMMAND("check-two-layer-gate-fastpath-dev",
+		"checks two-layer gate pruned SH value/derivative paths against full SH",
+		"mlp-sus2 check-two-layer-gate-fastpath-dev model.mtp cfg --max-configs=1 --max-atoms=1 --abs-tolerance=1e-10 --rel-tolerance=1e-9\n"
+	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 check-two-layer-gate-fastpath-dev: model and cfg arguments are required\n";
+			return 1;
+		}
+		DevGateFastPathProbe mtpr(args[0]);
+		std::ifstream ifs(args[1], std::ios::binary);
+		if (!ifs)
+			ERROR("Cannot open configuration file for two-layer gate fast-path check.");
+
+		const int max_configs = ParseDevIntOption(opts, "max-configs", 1);
+		std::vector<Configuration> configs;
+		Configuration cfg;
+		while ((max_configs <= 0 || static_cast<int>(configs.size()) < max_configs)
+		       && cfg.Load(ifs)) {
+			configs.push_back(cfg);
+		}
+		if (configs.empty())
+			ERROR("No configurations loaded for two-layer gate fast-path check.");
+
+		const int max_atoms = ParseDevIntOption(opts, "max-atoms", 1);
+		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-10);
+		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-9);
+
+		const DevGateFastPathResult result = mtpr.Check(configs, max_atoms);
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "checked_values=" << result.checked_values
+			          << " checked_derivatives=" << result.checked_derivatives
+			          << " value_worst_config=" << result.worst_value_config
+			          << " value_worst_atom=" << result.worst_value_atom
+			          << " value_worst_q=" << result.worst_value_q
+			          << " value_full=" << result.worst_value_full
+			          << " value_fast=" << result.worst_value_fast
+			          << " value_abs_err=" << result.worst_value_abs_err
+			          << " value_rel_err=" << result.worst_value_rel_err
+			          << " der_worst_config=" << result.worst_der_config
+			          << " der_worst_atom=" << result.worst_der_atom
+			          << " der_worst_q=" << result.worst_der_q
+			          << " der_worst_neighbor=" << result.worst_der_neighbor
+			          << " der_worst_component=" << result.worst_der_component
+			          << " der_full=" << result.worst_der_full
+			          << " der_fast=" << result.worst_der_fast
+			          << " der_abs_err=" << result.worst_der_abs_err
+			          << " der_rel_err=" << result.worst_der_rel_err
+			          << " weighted_der_full=" << result.worst_weighted_der_full
+			          << " weighted_der_fast=" << result.worst_weighted_der_fast
+			          << " weighted_der_abs_err=" << result.worst_weighted_der_abs_err
+			          << " weighted_der_rel_err=" << result.worst_weighted_der_rel_err
+			          << std::endl;
+		}
+		const bool value_failed =
+			result.worst_value_abs_err > abs_tolerance
+			&& result.worst_value_rel_err > rel_tolerance;
+		const bool der_failed =
+			result.worst_der_abs_err > abs_tolerance
+			&& result.worst_der_rel_err > rel_tolerance;
+		const bool weighted_der_failed =
+			result.worst_weighted_der_abs_err > abs_tolerance
+			&& result.worst_weighted_der_rel_err > rel_tolerance;
+		if (value_failed || der_failed || weighted_der_failed)
 			exit(1);
 	} END_COMMAND;
 

@@ -85,6 +85,11 @@ protected:
 	std::vector<SHProductRowTerm> sh_product_row_terms_;
 	std::vector<int> sh_scalar_index_by_moment_;
 	std::vector<char> sh_scalar_terminal_product_;
+	std::vector<char> two_layer_gate_required_moments_;
+	std::vector<int> two_layer_gate_required_basic_indices_;
+	std::vector<int> two_layer_gate_required_product_indices_;
+	std::vector<int> two_layer_gate_required_mu_indices_;
+	std::vector<int> two_layer_gate_required_radial_eval_blocks_;
 	bool sh_product_rows_trace_printed_ = false;
 	bool sh_site_der_cache_trace_printed_ = false;
 	
@@ -136,13 +141,18 @@ protected:
 	std::vector<double> grad_neighbor_mu_contract_vals_cache_;
 	std::vector<double> grad_neighbor_mu_contract_ders_cache_;
 	std::vector<double> grad_neighbor_mu_contract_ders_s_cache_;
-		std::vector<double> grad_neighbor_mu_contract_ders_ss_cache_;
-		std::vector<double> grad_neighbor_mu_contract_coord_ders_s_cache_;
-		std::vector<double> grad_neighbor_mu_contract_coord_ders_ss_cache_;
-		std::vector<double> grad_neighbor_sh_values_cache_;
-		std::vector<double> grad_neighbor_sh_ders_cache_;
-		std::vector<double> grad_radial_coeff_value_accum_;
-		std::vector<double> grad_radial_coeff_coord_accum_;
+	std::vector<double> grad_neighbor_mu_contract_ders_ss_cache_;
+	std::vector<double> grad_neighbor_mu_contract_coord_ders_s_cache_;
+	std::vector<double> grad_neighbor_mu_contract_coord_ders_ss_cache_;
+	std::vector<double> grad_neighbor_sh_values_cache_;
+	std::vector<double> grad_neighbor_sh_ders_cache_;
+	std::vector<double> grad_radial_coeff_value_accum_;
+	std::vector<double> grad_radial_coeff_coord_accum_;
+	std::vector<double> sh_gate_moment_ders_;
+	std::vector<double> sh_gate_basis_ders_;
+	std::vector<double> sh_gate_scalar_values_;
+	std::vector<double> sh_gate_linear_adjoints_;
+	std::vector<Vector3> sh_gate_component_ders_;
 	std::vector<int> basic_total_degree_cache_;
 	std::vector<int> basic_scaling_block_cache_;
 	std::vector<int> basic_radial_eval_block_cache_;
@@ -160,8 +170,26 @@ protected:
 	void CalcSHBasisFuncs(const Neighborhood& nbh, double* bf_vals);
 	void CalcSHMomentValuesOnly(const Neighborhood& nbh);
 	void CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh);
-		void CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh);
-		void CalcSHBasisFuncsDers(const Neighborhood& nbh);
+	void CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh);
+	void CalcSHBasisFuncsDers(const Neighborhood& nbh);
+	void CalcTwoLayerGateScalarValuesOnly(
+		const Neighborhood& nbh,
+		std::vector<double>& gate_scalar_values);
+		void CalcTwoLayerGateScalarDers(
+			const Neighborhood& nbh,
+			std::vector<double>& gate_scalar_ders);
+		void CalcTwoLayerGateWeightedScalarDers(
+			const Neighborhood& nbh,
+			std::vector<Vector3>& gate_scalar_ders,
+			int cache_atom_index = -1);
+		void AccumulateTwoLayerGateScalarParamGrad(
+			const Neighborhood& nbh,
+			std::vector<double>& out_grad_accumulator,
+			double gate_adjoint,
+		const Vector3* gate_der_weights,
+		int cache_atom_index = -1);
+	void CalcSHBasisGateDers(const Neighborhood& nbh,
+	                         std::vector<double>& gate_basis_ders);
 		void CalcTwoLayerGateScalarDirectionalDerivatives(
 			const Neighborhood& nbh,
 			const std::vector<Vector3>& direction_weights,
@@ -177,6 +205,7 @@ protected:
 	void ReadSHProductGraph(std::ifstream& ifs, std::string& next_token);
 	void WriteSHProductGraph(std::ofstream& ofs);
 	void BuildSHProductProgram();
+	void BuildTwoLayerGateProductProgram();
 	bool UseSHProductRows() const;
 	bool UseSHSiteDerivativeCache() const;
 	bool UseSHAccumSkipSiteDers() const;
@@ -239,6 +268,8 @@ public:
 	std::vector<int> two_layer_gate_scalar_indices_;
 	std::vector<double> two_layer_gate_weights_;
 	std::vector<double> two_layer_gate_values_;
+	std::vector<double> two_layer_gate_scalar_values_cache_;
+	std::vector<double> two_layer_gate_moment_values_cache_;
 	std::vector<double> two_layer_gate_adjoints_;
 	const std::vector<double>* active_two_layer_gate_values_ = nullptr;
 	std::vector<double>* active_two_layer_gate_adjoints_ = nullptr;

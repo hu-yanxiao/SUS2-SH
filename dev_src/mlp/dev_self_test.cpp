@@ -19,7 +19,6 @@
 #include <cmath>
 #include <cstdio>
 #include <map>
-#include <random>
 
 #ifdef MLIP_INTEL_MKL
 #include <mkl_cblas.h>
