@@ -199,6 +199,9 @@ protected:
 		std::vector<double>& gate_scalar_tangents,
 		std::vector<double>* gate_moment_tangents = nullptr,
 		int cache_atom_index = -1);
+	void AccumulateSHBasisGateDers(
+		const Neighborhood& nbh,
+		std::vector<double>& gate_linear_adjoints);
 	void CalcSHResidualSiteEnergyDers(const Neighborhood& nbh);
 	void CalcSHSiteEnergyDers(const Neighborhood& nbh);
 	void AccumulateSHGateTangentGrad(const Neighborhood& nbh,
@@ -215,9 +218,11 @@ protected:
 	void BuildTwoLayerGateProductProgram();
 	void ClearTwoLayerEdgePrimitiveCache();
 	void BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
-										bool need_derivatives);
+										bool need_derivatives,
+										bool need_param_derivatives = true);
 	bool HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
-										bool need_derivatives) const;
+										bool need_derivatives,
+										bool need_param_derivatives = true) const;
 	size_t TwoLayerEdgePrimitiveOffset(int cache_atom_index,
 										int neighbor_index) const;
 	bool UseSHProductRows() const;
@@ -307,16 +312,17 @@ public:
 	std::vector<double> two_layer_edge_mu_ders_cache_;
 	std::vector<double> two_layer_edge_mu_ders_s_cache_;
 	std::vector<double> two_layer_edge_mu_ders_ss_cache_;
-		std::vector<double> two_layer_edge_mu_coord_ders_s_cache_;
-		std::vector<double> two_layer_edge_mu_coord_ders_ss_cache_;
-		std::vector<double> two_layer_edge_gate_mu_vals_cache_;
-		std::vector<double> two_layer_edge_gate_mu_ders_cache_;
-		std::vector<double> two_layer_edge_gate_mu_ders_s_cache_;
-		std::vector<double> two_layer_edge_gate_mu_ders_ss_cache_;
-		std::vector<double> two_layer_edge_gate_mu_coord_ders_s_cache_;
-		std::vector<double> two_layer_edge_gate_mu_coord_ders_ss_cache_;
-		bool two_layer_edge_cache_ready_ = false;
+	std::vector<double> two_layer_edge_mu_coord_ders_s_cache_;
+	std::vector<double> two_layer_edge_mu_coord_ders_ss_cache_;
+	std::vector<double> two_layer_edge_gate_mu_vals_cache_;
+	std::vector<double> two_layer_edge_gate_mu_ders_cache_;
+	std::vector<double> two_layer_edge_gate_mu_ders_s_cache_;
+	std::vector<double> two_layer_edge_gate_mu_ders_ss_cache_;
+	std::vector<double> two_layer_edge_gate_mu_coord_ders_s_cache_;
+	std::vector<double> two_layer_edge_gate_mu_coord_ders_ss_cache_;
+	bool two_layer_edge_cache_ready_ = false;
 	bool two_layer_edge_cache_has_derivatives_ = false;
+	bool two_layer_edge_cache_has_param_derivatives_ = false;
 	int two_layer_edge_cache_atom_count_ = 0;
 	int two_layer_edge_cache_eval_block_count_ = 0;
 	int two_layer_edge_cache_sh_count_ = 0;

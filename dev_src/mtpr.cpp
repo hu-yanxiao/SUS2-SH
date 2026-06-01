@@ -2255,7 +2255,7 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 	PrepareEvalCaches();
 	const bool profile_two_layer = TwoLayerProfileEnabledOnRank0();
 	const double profile_start = profile_two_layer ? TwoLayerProfileNow() : 0.0;
-	BuildTwoLayerEdgePrimitiveCache(neighborhoods, true);
+	BuildTwoLayerEdgePrimitiveCache(neighborhoods, true, false);
 	PrepareTwoLayerGateValues(cfg, neighborhoods);
 	const double profile_after_prepare =
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
@@ -2682,7 +2682,7 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 		use_two_layer_gate && TwoLayerProfileEnabledOnRank0();
 	const double profile_start = profile_two_layer ? TwoLayerProfileNow() : 0.0;
 	if (use_two_layer_gate) {
-		BuildTwoLayerEdgePrimitiveCache(neighborhoods, true);
+		BuildTwoLayerEdgePrimitiveCache(neighborhoods, true, false);
 		PrepareTwoLayerGateValues(cfg, neighborhoods);
 		active_two_layer_gate_values_ = &two_layer_gate_values_;
 	}
@@ -2721,23 +2721,12 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 						for (int j = 0; j < nbh.count; j++)
 							for (int a = 0; a < 3; a++)
 								for (int b = 0; b < 3; b++)
-									stress_cmpnts[k][a][b] -= basis_ders(i, j, a) * nbh.vecs[j][b];
-				}
+										stress_cmpnts[k][a][b] -= basis_ders(i, j, a) * nbh.vecs[j][b];
+					}
 				if (need_gate_linear_chain) {
 					const double profile_gate_adjoints_start =
 						profile_two_layer ? TwoLayerProfileNow() : 0.0;
-					CalcSHBasisGateDers(nbh, sh_gate_basis_ders_);
-					for (int j = 0; j < nbh.count; ++j) {
-						const int atom_index = nbh.inds[j];
-						if (atom_index < 0 || atom_index >= cfg.size())
-							ERROR("SUS2-SH two-layer gate linear component atom index is out of range");
-						double* gate_adjoints = sh_gate_linear_adjoints_.data()
-							+ static_cast<size_t>(atom_index) * alpha_scalar_moments;
-						const double* gate_basis_ders = sh_gate_basis_ders_.data()
-							+ static_cast<size_t>(j) * alpha_scalar_moments;
-						for (int i = 0; i < alpha_scalar_moments; ++i)
-							gate_adjoints[i] += gate_basis_ders[i];
-					}
+					AccumulateSHBasisGateDers(nbh, sh_gate_linear_adjoints_);
 					if (profile_two_layer)
 						profile_gate_adjoints_s +=
 							TwoLayerProfileNow() - profile_gate_adjoints_start;
@@ -2820,14 +2809,14 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 		}
 
 		double profile_gate_adjoints_s = 0.0;
-	for (int ind = 0; ind < cfg.size(); ind++) {
-		const Neighborhood& nbh = neighborhoods[ind];
-		if (use_two_layer_gate)
-			active_two_layer_edge_cache_atom_index_ = ind;
-		CalcBasisFuncsDers(nbh);
+		for (int ind = 0; ind < cfg.size(); ind++) {
+			const Neighborhood& nbh = neighborhoods[ind];
+			if (use_two_layer_gate)
+				active_two_layer_edge_cache_atom_index_ = ind;
+			CalcBasisFuncsDers(nbh);
 
-		if (nbh.my_type>=species_count)
-			throw MlipException("Too few species count in the MTP potential!");
+			if (nbh.my_type>=species_count)
+				throw MlipException("Too few species count in the MTP potential!");
 
 		energy_cmpnts[nbh.my_type] += basis_vals[0];
 
@@ -2848,29 +2837,17 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 					for (int j = 0; j < nbh.count; j++)
 						for (int a = 0; a < 3; a++)
 							for (int b = 0; b < 3; b++)
-								stress_cmpnts[k][a][b] -= basis_ders(i, j, a) * nbh.vecs[j][b];
+									stress_cmpnts[k][a][b] -= basis_ders(i, j, a) * nbh.vecs[j][b];
+					}
+			if (need_gate_linear_chain) {
+				const double profile_gate_adjoints_start =
+					profile_two_layer ? TwoLayerProfileNow() : 0.0;
+				AccumulateSHBasisGateDers(nbh, sh_gate_linear_adjoints_);
+				if (profile_two_layer)
+					profile_gate_adjoints_s +=
+						TwoLayerProfileNow() - profile_gate_adjoints_start;
 			}
-
-		if (need_gate_linear_chain) {
-			const double profile_gate_adjoints_start =
-				profile_two_layer ? TwoLayerProfileNow() : 0.0;
-			CalcSHBasisGateDers(nbh, sh_gate_basis_ders_);
-			for (int j = 0; j < nbh.count; ++j) {
-				const int atom_index = nbh.inds[j];
-				if (atom_index < 0 || atom_index >= cfg.size())
-					ERROR("SUS2-SH two-layer gate linear component atom index is out of range");
-				double* gate_adjoints = sh_gate_linear_adjoints_.data()
-					+ static_cast<size_t>(atom_index) * alpha_scalar_moments;
-				const double* gate_basis_ders = sh_gate_basis_ders_.data()
-					+ static_cast<size_t>(j) * alpha_scalar_moments;
-				for (int i = 0; i < alpha_scalar_moments; ++i)
-					gate_adjoints[i] += gate_basis_ders[i];
-			}
-			if (profile_two_layer)
-				profile_gate_adjoints_s +=
-					TwoLayerProfileNow() - profile_gate_adjoints_start;
 		}
-	}
 	if (use_two_layer_gate)
 		active_two_layer_edge_cache_atom_index_ = -1;
 	const double profile_after_main_components =

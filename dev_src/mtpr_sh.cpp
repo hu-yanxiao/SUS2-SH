@@ -904,6 +904,7 @@ void MLMTPR::ClearTwoLayerEdgePrimitiveCache()
 {
 	two_layer_edge_cache_ready_ = false;
 	two_layer_edge_cache_has_derivatives_ = false;
+	two_layer_edge_cache_has_param_derivatives_ = false;
 	two_layer_edge_cache_atom_count_ = 0;
 	two_layer_edge_cache_eval_block_count_ = 0;
 	two_layer_edge_cache_sh_count_ = 0;
@@ -919,7 +920,8 @@ void MLMTPR::ClearTwoLayerEdgePrimitiveCache()
 }
 
 bool MLMTPR::HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
-                                           bool need_derivatives) const
+                                           bool need_derivatives,
+                                           bool need_param_derivatives) const
 {
 	if (cache_atom_index < 0)
 		cache_atom_index = active_two_layer_edge_cache_atom_index_;
@@ -928,6 +930,10 @@ bool MLMTPR::HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
 	if (cache_atom_index >= two_layer_edge_cache_atom_count_)
 		return false;
 	if (need_derivatives && !two_layer_edge_cache_has_derivatives_)
+		return false;
+	if (need_derivatives
+	    && need_param_derivatives
+	    && !two_layer_edge_cache_has_param_derivatives_)
 		return false;
 	if (two_layer_edge_cache_eval_block_count_ !=
 	    static_cast<int>(radial_eval_to_scaling_block_.size()))
@@ -941,15 +947,43 @@ bool MLMTPR::HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
 	if (static_cast<size_t>(cache_atom_index + 1)
 	    >= two_layer_edge_offsets_cache_.size())
 		return false;
+	const size_t edge_count = two_layer_edge_offsets_cache_.back();
+	const size_t expected_sh_size =
+		edge_count * static_cast<size_t>(two_layer_edge_cache_sh_count_);
+	const size_t expected_mu_size =
+		edge_count * static_cast<size_t>(radial_func_count);
+	if (two_layer_edge_sh_values_cache_.size() < expected_sh_size
+	    || two_layer_edge_mu_vals_cache_.size() < expected_mu_size)
+		return false;
+	if (need_derivatives
+	    && (two_layer_edge_sh_ders_cache_.size()
+	            < expected_sh_size * static_cast<size_t>(3)
+	        || two_layer_edge_mu_ders_cache_.size() < expected_mu_size))
+		return false;
+	if (need_derivatives && need_param_derivatives) {
+		const size_t expected_radial_val_size =
+			edge_count
+			* static_cast<size_t>(two_layer_edge_cache_eval_block_count_)
+			* static_cast<size_t>(two_layer_edge_cache_rb_size_);
+		const size_t expected_radial_der_size =
+			expected_radial_val_size * static_cast<size_t>(5);
+		if (two_layer_edge_radial_vals_cache_.size() < expected_radial_val_size
+		    || two_layer_edge_radial_ders_cache_.size() < expected_radial_der_size
+		    || two_layer_edge_mu_ders_s_cache_.size() < expected_mu_size
+		    || two_layer_edge_mu_ders_ss_cache_.size() < expected_mu_size
+		    || two_layer_edge_mu_coord_ders_s_cache_.size() < expected_mu_size
+		    || two_layer_edge_mu_coord_ders_ss_cache_.size() < expected_mu_size)
+			return false;
+	}
 	if (TwoLayerGateUsesSharedRadial()) {
-		const size_t expected_mu_size =
-			two_layer_edge_offsets_cache_.back()
-			* static_cast<size_t>(radial_func_count);
 		if (two_layer_edge_gate_mu_vals_cache_.size() < expected_mu_size)
 			return false;
 		if (need_derivatives
-		    && (two_layer_edge_gate_mu_ders_cache_.size() < expected_mu_size
-		        || two_layer_edge_gate_mu_ders_s_cache_.size() < expected_mu_size
+		    && two_layer_edge_gate_mu_ders_cache_.size() < expected_mu_size)
+			return false;
+		if (need_derivatives
+		    && need_param_derivatives
+		    && (two_layer_edge_gate_mu_ders_s_cache_.size() < expected_mu_size
 		        || two_layer_edge_gate_mu_ders_ss_cache_.size() < expected_mu_size
 		        || two_layer_edge_gate_mu_coord_ders_s_cache_.size() < expected_mu_size
 		        || two_layer_edge_gate_mu_coord_ders_ss_cache_.size() < expected_mu_size))
@@ -968,7 +1002,8 @@ size_t MLMTPR::TwoLayerEdgePrimitiveOffset(int cache_atom_index,
 }
 
 void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
-                                             bool need_derivatives)
+                                             bool need_derivatives,
+                                             bool need_param_derivatives)
 {
 	ClearTwoLayerEdgePrimitiveCache();
 	if (DisableTwoLayerEdgePrimitiveCache())
@@ -993,6 +1028,8 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 	const int radial_der_stride = radial_val_stride * 5;
 	const int mu_stride = radial_func_count;
 	const int atom_count = neighborhoods.size();
+	const bool need_raw_radial_cache =
+		need_derivatives && need_param_derivatives;
 	size_t edge_count = 0;
 
 	two_layer_edge_offsets_cache_.assign(static_cast<size_t>(atom_count) + 1, 0);
@@ -1003,16 +1040,28 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 	two_layer_edge_offsets_cache_[atom_count] = edge_count;
 
 	two_layer_edge_sh_values_cache_.resize(edge_count * sh_count);
-	two_layer_edge_radial_vals_cache_.resize(edge_count * radial_val_stride);
 	two_layer_edge_mu_vals_cache_.resize(edge_count * mu_stride);
+	if (need_raw_radial_cache) {
+		two_layer_edge_radial_vals_cache_.resize(edge_count * radial_val_stride);
+	} else {
+		two_layer_edge_radial_vals_cache_.clear();
+	}
 	if (need_derivatives) {
 		two_layer_edge_sh_ders_cache_.resize(edge_count * 3 * sh_count);
-		two_layer_edge_radial_ders_cache_.resize(edge_count * radial_der_stride);
 		two_layer_edge_mu_ders_cache_.resize(edge_count * mu_stride);
-		two_layer_edge_mu_ders_s_cache_.resize(edge_count * mu_stride);
-		two_layer_edge_mu_ders_ss_cache_.resize(edge_count * mu_stride);
-		two_layer_edge_mu_coord_ders_s_cache_.resize(edge_count * mu_stride);
-		two_layer_edge_mu_coord_ders_ss_cache_.resize(edge_count * mu_stride);
+		if (need_param_derivatives) {
+			two_layer_edge_radial_ders_cache_.resize(edge_count * radial_der_stride);
+			two_layer_edge_mu_ders_s_cache_.resize(edge_count * mu_stride);
+			two_layer_edge_mu_ders_ss_cache_.resize(edge_count * mu_stride);
+			two_layer_edge_mu_coord_ders_s_cache_.resize(edge_count * mu_stride);
+			two_layer_edge_mu_coord_ders_ss_cache_.resize(edge_count * mu_stride);
+		} else {
+			two_layer_edge_radial_ders_cache_.clear();
+			two_layer_edge_mu_ders_s_cache_.clear();
+			two_layer_edge_mu_ders_ss_cache_.clear();
+			two_layer_edge_mu_coord_ders_s_cache_.clear();
+			two_layer_edge_mu_coord_ders_ss_cache_.clear();
+		}
 	} else {
 		two_layer_edge_sh_ders_cache_.clear();
 		two_layer_edge_radial_ders_cache_.clear();
@@ -1026,14 +1075,27 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 		two_layer_edge_gate_mu_vals_cache_.assign(edge_count * mu_stride, 0.0);
 		if (need_derivatives) {
 			two_layer_edge_gate_mu_ders_cache_.assign(edge_count * mu_stride, 0.0);
-			two_layer_edge_gate_mu_ders_s_cache_.assign(edge_count * mu_stride, 0.0);
-			two_layer_edge_gate_mu_ders_ss_cache_.assign(edge_count * mu_stride, 0.0);
-			two_layer_edge_gate_mu_coord_ders_s_cache_.assign(edge_count * mu_stride, 0.0);
-			two_layer_edge_gate_mu_coord_ders_ss_cache_.assign(edge_count * mu_stride, 0.0);
+			if (need_param_derivatives) {
+				two_layer_edge_gate_mu_ders_s_cache_.assign(edge_count * mu_stride, 0.0);
+				two_layer_edge_gate_mu_ders_ss_cache_.assign(edge_count * mu_stride, 0.0);
+				two_layer_edge_gate_mu_coord_ders_s_cache_.assign(edge_count * mu_stride, 0.0);
+				two_layer_edge_gate_mu_coord_ders_ss_cache_.assign(edge_count * mu_stride, 0.0);
+			} else {
+				two_layer_edge_gate_mu_ders_s_cache_.clear();
+				two_layer_edge_gate_mu_ders_ss_cache_.clear();
+				two_layer_edge_gate_mu_coord_ders_s_cache_.clear();
+				two_layer_edge_gate_mu_coord_ders_ss_cache_.clear();
+			}
 		}
 	}
 
 	const int radial_coeff_base = C + 2 * C * C * K_;
+	std::vector<double> radial_vals_scratch;
+	std::vector<double> radial_ders_scratch;
+	if (!need_raw_radial_cache)
+		radial_vals_scratch.resize(radial_val_stride);
+	if (need_derivatives && !need_param_derivatives)
+		radial_ders_scratch.resize(radial_der_stride);
 
 	for (int ind = 0; ind < atom_count; ++ind) {
 		const Neighborhood& nbh = neighborhoods[ind];
@@ -1051,28 +1113,31 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 			double* sh_ders = need_derivatives
 				? two_layer_edge_sh_ders_cache_.data() + edge * 3 * sh_count
 				: nullptr;
-			double* rb_vals =
-				two_layer_edge_radial_vals_cache_.data()
-				+ edge * radial_val_stride;
+			double* rb_vals = need_raw_radial_cache
+				? two_layer_edge_radial_vals_cache_.data()
+					+ edge * radial_val_stride
+				: radial_vals_scratch.data();
 			double* rb_ders = need_derivatives
-				? two_layer_edge_radial_ders_cache_.data()
-					+ edge * radial_der_stride
+				? (need_param_derivatives
+					? two_layer_edge_radial_ders_cache_.data()
+						+ edge * radial_der_stride
+					: radial_ders_scratch.data())
 				: nullptr;
 			double* mu_vals =
 				two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
 			double* mu_ders = need_derivatives
 				? two_layer_edge_mu_ders_cache_.data() + edge * mu_stride
 				: nullptr;
-			double* mu_ders_s = need_derivatives
+			double* mu_ders_s = need_derivatives && need_param_derivatives
 				? two_layer_edge_mu_ders_s_cache_.data() + edge * mu_stride
 				: nullptr;
-			double* mu_ders_ss = need_derivatives
+			double* mu_ders_ss = need_derivatives && need_param_derivatives
 				? two_layer_edge_mu_ders_ss_cache_.data() + edge * mu_stride
 				: nullptr;
-			double* mu_coord_ders_s = need_derivatives
+			double* mu_coord_ders_s = need_derivatives && need_param_derivatives
 				? two_layer_edge_mu_coord_ders_s_cache_.data() + edge * mu_stride
 				: nullptr;
-				double* mu_coord_ders_ss = need_derivatives
+				double* mu_coord_ders_ss = need_derivatives && need_param_derivatives
 					? two_layer_edge_mu_coord_ders_ss_cache_.data() + edge * mu_stride
 					: nullptr;
 				double* gate_mu_vals = use_gate_radial
@@ -1081,16 +1146,20 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 				double* gate_mu_ders = use_gate_radial && need_derivatives
 					? two_layer_edge_gate_mu_ders_cache_.data() + edge * mu_stride
 					: nullptr;
-				double* gate_mu_ders_s = use_gate_radial && need_derivatives
+				double* gate_mu_ders_s =
+					use_gate_radial && need_derivatives && need_param_derivatives
 					? two_layer_edge_gate_mu_ders_s_cache_.data() + edge * mu_stride
 					: nullptr;
-				double* gate_mu_ders_ss = use_gate_radial && need_derivatives
+				double* gate_mu_ders_ss =
+					use_gate_radial && need_derivatives && need_param_derivatives
 					? two_layer_edge_gate_mu_ders_ss_cache_.data() + edge * mu_stride
 					: nullptr;
-				double* gate_mu_coord_ders_s = use_gate_radial && need_derivatives
+				double* gate_mu_coord_ders_s =
+					use_gate_radial && need_derivatives && need_param_derivatives
 					? two_layer_edge_gate_mu_coord_ders_s_cache_.data() + edge * mu_stride
 					: nullptr;
-				double* gate_mu_coord_ders_ss = use_gate_radial && need_derivatives
+				double* gate_mu_coord_ders_ss =
+					use_gate_radial && need_derivatives && need_param_derivatives
 					? two_layer_edge_gate_mu_coord_ders_ss_cache_.data() + edge * mu_stride
 					: nullptr;
 
@@ -1133,11 +1202,12 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 					double dot_coord_s = 0.0;
 					double dot_ss = 0.0;
 					double dot_coord_ss = 0.0;
-					for (int xi = 0; xi < R; ++xi) {
-						const double coeff = regression_coeffs[radial_offset + xi];
-						dot_val += coeff * rb_vals[radial_base + xi];
-						if (need_derivatives) {
-							dot_der += coeff * rb_ders[deriv_base + xi];
+				for (int xi = 0; xi < R; ++xi) {
+					const double coeff = regression_coeffs[radial_offset + xi];
+					dot_val += coeff * rb_vals[radial_base + xi];
+					if (need_derivatives) {
+						dot_der += coeff * rb_ders[deriv_base + xi];
+						if (need_param_derivatives) {
 							dot_s += coeff * rb_ders[deriv_base + xi + R];
 							dot_coord_s += coeff * rb_ders[deriv_base + xi + 2 * R];
 							dot_ss += coeff * rb_ders[deriv_base + xi + 3 * R];
@@ -1145,15 +1215,18 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 								coeff * rb_ders[deriv_base + xi + 4 * R];
 						}
 					}
-					mu_vals[mu] = dot_val;
-					if (need_derivatives) {
-						mu_ders[mu] = dot_der;
+				}
+				mu_vals[mu] = dot_val;
+				if (need_derivatives) {
+					mu_ders[mu] = dot_der;
+					if (need_param_derivatives) {
 						mu_ders_s[mu] = dot_s;
 						mu_coord_ders_s[mu] = dot_coord_s;
 						mu_ders_ss[mu] = dot_ss;
 						mu_coord_ders_ss[mu] = dot_coord_ss;
 					}
 				}
+			}
 				if (use_gate_radial) {
 					for (int mu : two_layer_gate_required_mu_indices_) {
 						const int radial_base = mu_to_radial_eval_block_[mu] * R;
@@ -1166,33 +1239,39 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 						double dot_ss = 0.0;
 						double dot_coord_ss = 0.0;
 						for (int xi = 0; xi < R; ++xi) {
-							const double coeff = regression_coeffs[radial_offset + xi];
-							dot_val += coeff * rb_vals[radial_base + xi];
-							if (need_derivatives) {
-								dot_der += coeff * rb_ders[deriv_base + xi];
-								dot_s += coeff * rb_ders[deriv_base + xi + R];
-								dot_coord_s +=
-									coeff * rb_ders[deriv_base + xi + 2 * R];
-								dot_ss += coeff * rb_ders[deriv_base + xi + 3 * R];
-								dot_coord_ss +=
-									coeff * rb_ders[deriv_base + xi + 4 * R];
-							}
-						}
-						gate_mu_vals[mu] = dot_val;
-						if (need_derivatives) {
-							gate_mu_ders[mu] = dot_der;
-							gate_mu_ders_s[mu] = dot_s;
-							gate_mu_coord_ders_s[mu] = dot_coord_s;
-							gate_mu_ders_ss[mu] = dot_ss;
-							gate_mu_coord_ders_ss[mu] = dot_coord_ss;
+					const double coeff = regression_coeffs[radial_offset + xi];
+					dot_val += coeff * rb_vals[radial_base + xi];
+					if (need_derivatives) {
+						dot_der += coeff * rb_ders[deriv_base + xi];
+						if (need_param_derivatives) {
+							dot_s += coeff * rb_ders[deriv_base + xi + R];
+							dot_coord_s +=
+								coeff * rb_ders[deriv_base + xi + 2 * R];
+							dot_ss += coeff * rb_ders[deriv_base + xi + 3 * R];
+							dot_coord_ss +=
+								coeff * rb_ders[deriv_base + xi + 4 * R];
 						}
 					}
 				}
+				gate_mu_vals[mu] = dot_val;
+				if (need_derivatives) {
+					gate_mu_ders[mu] = dot_der;
+					if (need_param_derivatives) {
+						gate_mu_ders_s[mu] = dot_s;
+						gate_mu_coord_ders_s[mu] = dot_coord_s;
+						gate_mu_ders_ss[mu] = dot_ss;
+						gate_mu_coord_ders_ss[mu] = dot_coord_ss;
+					}
+				}
+			}
+		}
 		}
 	}
 
 	two_layer_edge_cache_ready_ = true;
 	two_layer_edge_cache_has_derivatives_ = need_derivatives;
+	two_layer_edge_cache_has_param_derivatives_ =
+		need_derivatives && need_param_derivatives;
 	two_layer_edge_cache_atom_count_ = atom_count;
 	two_layer_edge_cache_eval_block_count_ = eval_block_count;
 	two_layer_edge_cache_sh_count_ = sh_count;
@@ -1318,7 +1397,7 @@ void MLMTPR::CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh)
 
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& rb_ders = basis_radial_ders_buffer_;
-	const bool use_edge_cache = HasTwoLayerEdgePrimitiveCache(-1, true);
+	const bool use_edge_cache = HasTwoLayerEdgePrimitiveCache(-1, true, false);
 
 	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int shared_type_offset = radial_coeff_base + R;
@@ -1591,39 +1670,58 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 	std::vector<double>& radial_derivatives = grad_mu_contract_ders_;
 	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int shared_type_offset = radial_coeff_base + R;
+	const bool use_edge_cache = HasTwoLayerEdgePrimitiveCache(-1, true, false);
+	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
+	const int mu_stride = radial_func_count;
 
 	for (int j = 0; j < nbh.count; ++j) {
 		const Vector3& rvec = nbh.vecs[j];
 		const double r = nbh.dists[j];
 		const double inv_r = 1.0 / r;
 		const int type_outer = nbh.types[j];
-		EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+		const double* sh_values_use = sh_values;
+		const double* sh_ders_use = sh_ders;
+		const double* radial_values_use = radial_values.data();
+		const double* radial_derivatives_use = radial_derivatives.data();
+		if (use_edge_cache) {
+			const size_t edge = TwoLayerEdgePrimitiveOffset(-1, j);
+			sh_values_use =
+				two_layer_edge_sh_values_cache_.data() + edge * sh_count;
+			sh_ders_use =
+				two_layer_edge_sh_ders_cache_.data() + edge * 3 * sh_count;
+			radial_values_use =
+				two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
+			radial_derivatives_use =
+				two_layer_edge_mu_ders_cache_.data() + edge * mu_stride;
+		} else {
+			EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
 
-		for (int eval_block = 0; eval_block < static_cast<int>(radial_eval_to_scaling_block_.size()); ++eval_block) {
-			const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-			const int basis_k = radial_eval_to_basis_k_[eval_block];
-			p_RadialBasis->RB_Calc(
-				r,
-				regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
-				regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-				basis_k);
-			for (int xi = 0; xi < R; ++xi) {
-				rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
-				rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
+			for (int eval_block = 0; eval_block < static_cast<int>(radial_eval_to_scaling_block_.size()); ++eval_block) {
+				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+				const int basis_k = radial_eval_to_basis_k_[eval_block];
+				p_RadialBasis->RB_Calc(
+					r,
+					regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
+					regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
+					basis_k);
+				for (int xi = 0; xi < R; ++xi) {
+					rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
+					rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
+				}
 			}
-		}
-		for (int mu = 0; mu < radial_func_count; ++mu) {
-			const int radial_base = mu_to_radial_eval_block_[mu] * R;
-			const int radial_offset = radial_coeff_base + mu * (R + C);
-			double radial_value = 0.0;
-			double radial_der = 0.0;
-			for (int xi = 0; xi < R; ++xi) {
-				const double coeff = regression_coeffs[radial_offset + xi];
-				radial_value += coeff * rb_vals[radial_base + xi];
-				radial_der += coeff * rb_ders[radial_base + xi];
+			for (int mu = 0; mu < radial_func_count; ++mu) {
+				const int radial_base = mu_to_radial_eval_block_[mu] * R;
+				const int radial_offset = radial_coeff_base + mu * (R + C);
+				double radial_value = 0.0;
+				double radial_der = 0.0;
+				for (int xi = 0; xi < R; ++xi) {
+					const double coeff = regression_coeffs[radial_offset + xi];
+					radial_value += coeff * rb_vals[radial_base + xi];
+					radial_der += coeff * rb_ders[radial_base + xi];
+				}
+				radial_values[mu] = radial_value;
+				radial_derivatives[mu] = radial_der;
 			}
-			radial_values[mu] = radial_value;
-			radial_derivatives[mu] = radial_der;
 		}
 
 		const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
@@ -1631,18 +1729,18 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 		const double gate_scale = TwoLayerGateNeighborScale(nbh, j);
 		const double type_scale = center_type_coeff * outer_type_coeff * gate_scale;
 
-			for (int i = 0; i < alpha_index_basic_count; ++i) {
-				const int mu = basic_mu_cache_[i];
-				const int sh_index = basic_sh_index_cache_[i];
-				const int sh_der_index = basic_sh_der_index_cache_[i];
-				const double radial_value = radial_values[mu];
-			const double radial_der = radial_derivatives[mu];
+				for (int i = 0; i < alpha_index_basic_count; ++i) {
+					const int mu = basic_mu_cache_[i];
+					const int sh_index = basic_sh_index_cache_[i];
+					const int sh_der_index = basic_sh_der_index_cache_[i];
+				const double radial_value = radial_values_use[mu];
+			const double radial_der = radial_derivatives_use[mu];
 
-			const double y = sh_values[sh_index];
-			moment_vals[i] += type_scale * radial_value * y;
-			for (int a = 0; a < 3; ++a) {
-				const double dy = sh_ders[sh_der_index + a];
-				moment_ders(i, j, a) += type_scale * (radial_der * rvec[a] * inv_r * y + radial_value * dy);
+				const double y = sh_values_use[sh_index];
+				moment_vals[i] += type_scale * radial_value * y;
+				for (int a = 0; a < 3; ++a) {
+					const double dy = sh_ders_use[sh_der_index + a];
+					moment_ders(i, j, a) += type_scale * (radial_der * rvec[a] * inv_r * y + radial_value * dy);
 			}
 		}
 	}
@@ -1650,7 +1748,8 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 	basis_vals[0] = 1.0;
 	if (basis_ders.size1 != alpha_count || basis_ders.size2 != nbh.count)
 		basis_ders.resize(alpha_count, nbh.count, 3);
-	basis_ders.set(0);
+	if (active_two_layer_gate_values_ == nullptr)
+		basis_ders.set(0);
 
 	const bool use_product_rows = UseSHProductRows();
 	if (use_product_rows) {
@@ -1972,7 +2071,7 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
 	std::vector<double>& radial_derivatives = grad_mu_contract_ders_;
 	const bool use_edge_cache =
-		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
+		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true, false);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int mu_stride = radial_func_count;
@@ -2612,6 +2711,125 @@ void MLMTPR::CalcSHBasisGateDers(const Neighborhood& nbh,
 	}
 }
 
+void MLMTPR::AccumulateSHBasisGateDers(
+	const Neighborhood& nbh,
+	std::vector<double>& gate_linear_adjoints)
+{
+	if (SHUsesPrecomputedLmpTable(p_RadialBasis))
+		ERROR("SUS2-SH does not use precomputed LAMMPS radial tables in training.");
+	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
+		ERROR("SUS2-SH evaluator currently supports sh_l_max in [0,6].");
+	if (alpha_scalar_moments == 0)
+		return;
+	if (gate_linear_adjoints.size() % static_cast<size_t>(alpha_scalar_moments) != 0)
+		ERROR("SUS2-SH gate linear adjoint buffer has an incompatible size.");
+
+	const int C = species_count;
+	const int R = p_RadialBasis->rb_size;
+	const int type_central = nbh.my_type;
+	if (type_central >= species_count)
+		throw MlipException("Too few species count in the MTP potential!");
+
+	const int moment_stride = alpha_moments_count;
+	if (static_cast<int>(sh_gate_moment_ders_.size()) != moment_stride)
+		sh_gate_moment_ders_.resize(moment_stride);
+
+	double sh_values[kMaxSHComponents];
+	std::vector<double>& rb_vals = radial_vals_buffer_;
+	std::vector<double>& radial_values = grad_mu_contract_vals_;
+	const bool use_edge_cache = HasTwoLayerEdgePrimitiveCache(-1, false);
+	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
+	const int mu_stride = radial_func_count;
+	const int radial_coeff_base = C + 2 * C * C * K_;
+	const int shared_type_offset = radial_coeff_base + R;
+	const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
+
+	for (int j = 0; j < nbh.count; ++j) {
+		const int atom_index = nbh.inds[j];
+		if (atom_index < 0
+		    || static_cast<size_t>(atom_index + 1) * alpha_scalar_moments
+		        > gate_linear_adjoints.size())
+			ERROR("SUS2-SH two-layer gate linear component atom index is out of range");
+
+		const Vector3& rvec = nbh.vecs[j];
+		const double r = nbh.dists[j];
+		const int type_outer = nbh.types[j];
+		const double* sh_values_use = sh_values;
+		const double* radial_values_use = radial_values.data();
+		if (use_edge_cache) {
+			const size_t edge = TwoLayerEdgePrimitiveOffset(-1, j);
+			sh_values_use =
+				two_layer_edge_sh_values_cache_.data() + edge * sh_count;
+			radial_values_use =
+				two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
+		} else {
+			EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+
+			for (int eval_block = 0;
+			     eval_block < static_cast<int>(radial_eval_to_scaling_block_.size());
+			     ++eval_block) {
+				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+				const int basis_k = radial_eval_to_basis_k_[eval_block];
+				p_RadialBasis->RB_CalcValsOnly(
+					r,
+					regression_coeffs[C + 2 * scaling_block * C * C
+						+ C * type_central + type_outer],
+					regression_coeffs[C + 2 * scaling_block * C * C + C * C
+						+ C * type_central + type_outer],
+					basis_k);
+				for (int xi = 0; xi < R; ++xi)
+					rb_vals[eval_block * R + xi] =
+						p_RadialBasis->rb_vals[xi] * scaling;
+			}
+			for (int mu = 0; mu < radial_func_count; ++mu) {
+				const int radial_base = mu_to_radial_eval_block_[mu] * R;
+				const int radial_offset = radial_coeff_base + mu * (R + C);
+				double radial_value = 0.0;
+				for (int xi = 0; xi < R; ++xi)
+					radial_value += regression_coeffs[radial_offset + xi]
+						* rb_vals[radial_base + xi];
+				radial_values[mu] = radial_value;
+			}
+		}
+
+		std::fill(sh_gate_moment_ders_.begin(),
+		          sh_gate_moment_ders_.end(),
+		          0.0);
+			const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
+			const double pair_type_scale = center_type_coeff * outer_type_coeff;
+			for (int i = 0; i < alpha_index_basic_count; ++i) {
+				const int mu = basic_mu_cache_[i];
+				const int sh_index = basic_sh_index_cache_[i];
+				sh_gate_moment_ders_[i] +=
+					pair_type_scale * radial_values_use[mu] * sh_values_use[sh_index];
+		}
+
+			if (UseSHProductRows()) {
+				for (const SHProductRow& row : sh_product_rows_) {
+					const int end = row.term_begin + row.term_count;
+					for (int t = row.term_begin; t < end; ++t) {
+						const SHProductRowTerm& term = sh_product_row_terms_[t];
+						sh_gate_moment_ders_[row.target] += term.coeff * (
+							sh_gate_moment_ders_[term.left] * moment_vals[term.right]
+							+ moment_vals[term.left] * sh_gate_moment_ders_[term.right]);
+					}
+				}
+			} else {
+				for (size_t p = 0; p < sh_products_.size(); ++p) {
+					const SHProduct& product = sh_products_[p];
+					sh_gate_moment_ders_[product.target] += product.coeff * (
+						sh_gate_moment_ders_[product.left] * moment_vals[product.right]
+						+ moment_vals[product.left] * sh_gate_moment_ders_[product.right]);
+				}
+			}
+
+			double* gate_adjoints = gate_linear_adjoints.data()
+				+ static_cast<size_t>(atom_index) * alpha_scalar_moments;
+			for (int i = 0; i < alpha_scalar_moments; ++i)
+				gate_adjoints[i] += sh_gate_moment_ders_[alpha_moment_mapping[i]];
+		}
+	}
+
 void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 	const Neighborhood& nbh,
 	const std::vector<Vector3>& direction_weights,
@@ -2647,7 +2865,7 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
 	std::vector<double>& radial_derivatives = grad_mu_contract_ders_;
 	const bool use_edge_cache =
-		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
+		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true, false);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int mu_stride = radial_func_count;
@@ -2820,7 +3038,7 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 		return;
 	}
 	const bool use_site_der_cache =
-		UseSHSiteDerivativeCache() || HasTwoLayerEdgePrimitiveCache(-1, true);
+		UseSHSiteDerivativeCache() || HasTwoLayerEdgePrimitiveCache(-1, true, false);
 	if (use_site_der_cache)
 		CalcSHMomentValuesWithSiteDerivativeCache(nbh);
 	else
