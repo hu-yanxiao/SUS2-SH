@@ -262,6 +262,34 @@ two-layer gradient-side total by about 7% (`242634 -> 225239 us`). The remaining
 largest two-layer-only hotspots are scalar-parameter gate-chain gradients and
 gate scalar directional derivatives.
 
+The gate scalar directional derivative path was then fused so it computes
+first-layer gate moment values and their directional tangent in one required
+neighbor loop, followed by a single required-product pass that propagates both
+the value and tangent. This removes the separate value-only gate pass from the
+directional stage. On `codex_two_layer_gate_profile_1step_dirfuse`, the same
+profile became:
+
+```text
+avg_us_total=204135
+avg_us_prepare_gate=19173.1
+avg_us_main_gated_grad=42933.7
+avg_us_energy_adjoint=28749.6
+avg_us_directional=22480.5
+avg_us_tangent_grad=37146.7
+avg_us_gate_weight=25.0266
+avg_us_scalar_param=53625.4
+runtime_sec=21
+```
+
+Compared with the edge-cache profile, this reduces `avg_us_directional` by about
+45% (`40824.8 -> 22480.5 us`) and the two-layer gradient-side total by about 9%
+(`225239 -> 204135 us`). Relative to the pre-edge-cache final-cache profile,
+the combined two-layer-only optimizations reduce the measured gradient-side
+total by about 16% (`242634 -> 204135 us`). The next high-value target is the
+scalar-parameter stage: reusing only the final scalar directional outputs is not
+mathematically sufficient; a correct reuse cache must include the full gate
+moment tangent over the selected product-graph closure.
+
 ## Training model
 
 The training `.mtp` keeps the ordinary SUS2 radial/scaling/linear parameters and adds `potential_tag = SUS2-SH`. For SH models, `alpha_index_basic` stores `{k, l, m}`. Internally this is converted to `mu = k * (l_max + 1) + l`, so the radial channel is still compatible with the SUS2 coefficient layout.
