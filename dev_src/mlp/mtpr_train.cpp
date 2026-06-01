@@ -370,7 +370,8 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"potential-name",
 		"inline-sh-model",
 		"two-layer-gate",
-		"two-layer-gate-body-order"
+		"two-layer-gate-body-order",
+		"two-layer-gate-shared-radial"
 	};
 	for (const char* name : names) {
 		std::map<std::string, std::string>::const_iterator it = opts.find(name);

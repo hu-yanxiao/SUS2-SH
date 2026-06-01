@@ -275,11 +275,13 @@ public:
 	bool has_linear_coeffs = false;
 	bool has_sh_scalar_info_ = false;
 	std::vector<SHScalarInfo> sh_scalar_info_;
-	bool two_layer_gate_enabled_ = false;
-	int two_layer_gate_body_order_max_ = 0;
-	bool two_layer_gate_include_one_body_ = false;
-	std::vector<int> two_layer_gate_scalar_indices_;
-	std::vector<double> two_layer_gate_weights_;
+		bool two_layer_gate_enabled_ = false;
+		int two_layer_gate_body_order_max_ = 0;
+		bool two_layer_gate_include_one_body_ = false;
+		bool two_layer_gate_shared_radial_ = false;
+		std::vector<int> two_layer_gate_scalar_indices_;
+		std::vector<double> two_layer_gate_radial_coeffs_;
+		std::vector<double> two_layer_gate_weights_;
 	std::vector<double> two_layer_gate_values_;
 	std::vector<double> two_layer_gate_scalar_values_cache_;
 	std::vector<double> two_layer_gate_moment_values_cache_;
@@ -297,9 +299,15 @@ public:
 	std::vector<double> two_layer_edge_mu_ders_cache_;
 	std::vector<double> two_layer_edge_mu_ders_s_cache_;
 	std::vector<double> two_layer_edge_mu_ders_ss_cache_;
-	std::vector<double> two_layer_edge_mu_coord_ders_s_cache_;
-	std::vector<double> two_layer_edge_mu_coord_ders_ss_cache_;
-	bool two_layer_edge_cache_ready_ = false;
+		std::vector<double> two_layer_edge_mu_coord_ders_s_cache_;
+		std::vector<double> two_layer_edge_mu_coord_ders_ss_cache_;
+		std::vector<double> two_layer_edge_gate_mu_vals_cache_;
+		std::vector<double> two_layer_edge_gate_mu_ders_cache_;
+		std::vector<double> two_layer_edge_gate_mu_ders_s_cache_;
+		std::vector<double> two_layer_edge_gate_mu_ders_ss_cache_;
+		std::vector<double> two_layer_edge_gate_mu_coord_ders_s_cache_;
+		std::vector<double> two_layer_edge_gate_mu_coord_ders_ss_cache_;
+		bool two_layer_edge_cache_ready_ = false;
 	bool two_layer_edge_cache_has_derivatives_ = false;
 	int two_layer_edge_cache_atom_count_ = 0;
 	int two_layer_edge_cache_eval_block_count_ = 0;
@@ -370,14 +378,20 @@ public:
 	bool HasCompleteParameters() const;
 	void PruneSpecies(const std::vector<int>& old_species_indices);
 	int ScalingCoeffCount() const;
-	int RadialCoeffOffset() const;
-	int RadialCoeffBlockSize() const;
-	int BaseNonlinearCoeffCount() const;
-	int TwoLayerGateWeightCount() const;
-	int TwoLayerGateWeightOffset() const;
-	int LinearCoeffOffset() const;
-	double TwoLayerGateWeight(int weight_index) const;
-	int EnforcePositiveRadialFirstCoeffs(double min_value = 1.0e-12);
+		int RadialCoeffOffset() const;
+		int RadialCoeffBlockSize() const;
+		int BaseNonlinearCoeffCount() const;
+		bool TwoLayerGateUsesSharedRadial() const;
+		int TwoLayerGateRadialCoeffCount() const;
+		int TwoLayerGateRadialCoeffOffset() const;
+		int TwoLayerGateWeightCount() const;
+		int TwoLayerGateWeightOffset() const;
+		int LinearCoeffOffset() const;
+		int TwoLayerGateRadialCoeffIndex(int mu, int xi) const;
+		double TwoLayerGateRadialCoeff(int mu, int xi) const;
+		double TwoLayerGateWeight(int weight_index) const;
+		void InitializeTwoLayerGateRadialCoeffsFromBase();
+		int EnforcePositiveRadialFirstCoeffs(double min_value = 1.0e-12);
 	bool IsRadialFirstCoeff(int coeff_index) const;
 	double RadialFirstCoeffRawToValue(double raw_value) const;
 	double RadialFirstCoeffValueToRaw(double coeff_value) const;
@@ -414,25 +428,34 @@ public:
 
 		return linear_coeffs;
 	}
-	void DistributeCoeffs()									//Combine radial and linear coefficients in one array
-	{
-		const int base_nonlinear_size = BaseNonlinearCoeffCount();
-		const int gate_weight_count = TwoLayerGateWeightCount();
-		const int linear_size = alpha_count + species_count - 1;
-		std::vector<double> old_coeffs = regression_coeffs;
-		if (static_cast<int>(old_coeffs.size()) < base_nonlinear_size)
-			ERROR("DistributeCoeffs found an inconsistent nonlinear coefficient block");
-		regression_coeffs.assign(base_nonlinear_size + gate_weight_count + linear_size, 0.0);
-		for (int i = 0; i < base_nonlinear_size; ++i)
-			regression_coeffs[i] = old_coeffs[i];
-		if (gate_weight_count > 0) {
-			if (static_cast<int>(two_layer_gate_weights_.size()) != gate_weight_count)
-				ERROR("SUS2-SH two-layer gate metadata has inconsistent sizes");
-			for (int i = 0; i < gate_weight_count; ++i)
-				regression_coeffs[base_nonlinear_size + i] = two_layer_gate_weights_[i];
-		}
-		int radial_size = base_nonlinear_size + gate_weight_count;
-		int max_comp = species_count - 1;				//maximum index of component
+		void DistributeCoeffs()									//Combine radial and linear coefficients in one array
+		{
+			const int base_nonlinear_size = BaseNonlinearCoeffCount();
+			const int gate_radial_count = TwoLayerGateRadialCoeffCount();
+			const int gate_weight_count = TwoLayerGateWeightCount();
+			const int linear_size = alpha_count + species_count - 1;
+			std::vector<double> old_coeffs = regression_coeffs;
+			if (static_cast<int>(old_coeffs.size()) < base_nonlinear_size)
+				ERROR("DistributeCoeffs found an inconsistent nonlinear coefficient block");
+			regression_coeffs.assign(base_nonlinear_size + gate_radial_count + gate_weight_count + linear_size, 0.0);
+			for (int i = 0; i < base_nonlinear_size; ++i)
+				regression_coeffs[i] = old_coeffs[i];
+			if (gate_radial_count > 0) {
+				if (static_cast<int>(two_layer_gate_radial_coeffs_.size()) != gate_radial_count)
+					InitializeTwoLayerGateRadialCoeffsFromBase();
+				for (int i = 0; i < gate_radial_count; ++i)
+					regression_coeffs[base_nonlinear_size + i] =
+						two_layer_gate_radial_coeffs_[i];
+			}
+			if (gate_weight_count > 0) {
+				if (static_cast<int>(two_layer_gate_weights_.size()) != gate_weight_count)
+					ERROR("SUS2-SH two-layer gate metadata has inconsistent sizes");
+				for (int i = 0; i < gate_weight_count; ++i)
+					regression_coeffs[base_nonlinear_size + gate_radial_count + i] =
+						two_layer_gate_weights_[i];
+			}
+			int radial_size = base_nonlinear_size + gate_radial_count + gate_weight_count;
+			int max_comp = species_count - 1;				//maximum index of component
 
 		if (linear_coeffs.size() == alpha_count)
 		{

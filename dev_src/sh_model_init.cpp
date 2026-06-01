@@ -653,6 +653,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const std::string rbasis = CanonicalRadialBasisType(StringOpt(opts, "radial-basis-type", "RBChebyshev_sss"));
 	const SHFactorPruning factor_pruning = ParseFactorPruning(opts);
 	const bool two_layer_gate = HasOpt(opts, "two-layer-gate");
+	const bool two_layer_gate_shared_radial =
+		HasOpt(opts, "two-layer-gate-shared-radial");
 	const int two_layer_gate_body_order = IntOpt(opts, "two-layer-gate-body-order", 3);
 	const bool write_scalar_info = HasOpt(opts, "write-sh-scalar-info") || two_layer_gate;
 	std::ostringstream default_name;
@@ -668,6 +670,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("init-sh supports --body-order from 2 to 6.");
 	if (two_layer_gate && (two_layer_gate_body_order < 2 || two_layer_gate_body_order > body_order))
 		ERROR("--two-layer-gate-body-order should be between 2 and --body-order.");
+	if (two_layer_gate_shared_radial && !two_layer_gate)
+		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate.");
 	if (!IsSupportedSHRadialBasis(rbasis))
 		ERROR("init-sh currently writes RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, or RBJacobi_sss models.");
 	if (rbasis == "RBJacobi_sss" && kmax > 6)
@@ -759,6 +763,18 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ofs << "two_layer_gate_enabled = true\n";
 		ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
 		ofs << "two_layer_gate_include_one_body = false\n";
+		if (two_layer_gate_shared_radial) {
+			const int gate_radial_count = kmax * (lmax + 1) * rb_size;
+			ofs << "two_layer_gate_radial_mode = shared-radial\n";
+			ofs << "two_layer_gate_radial_coeff_count = " << gate_radial_count << "\n";
+			ofs << "two_layer_gate_radial_coeffs = {";
+			for (int i = 0; i < gate_radial_count; ++i) {
+				if (i != 0)
+					ofs << ", ";
+				ofs << 1.0e-2;
+			}
+			ofs << "}\n";
+		}
 		ofs << "two_layer_gate_weight_count = " << gate_scalar_indices.size() << "\n";
 		ofs << "two_layer_gate_scalar_indices = {";
 		for (size_t i = 0; i < gate_scalar_indices.size(); ++i) {

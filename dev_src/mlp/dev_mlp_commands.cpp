@@ -210,6 +210,8 @@ public:
 			ERROR("Model does not have two-layer gate enabled.");
 		if (TwoLayerGateWeightCount() <= 0)
 			ERROR("Model has no two-layer gate weights.");
+		if (TwoLayerGateUsesSharedRadial())
+			ERROR("check-two-layer-gate-fastpath-dev compares gate scalars to the full outer SH path and is only valid for legacy shared radial coefficients.");
 
 		DevGateFastPathResult result;
 		std::vector<double> fast_values;
@@ -502,6 +504,9 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 		return "none";
 	if (index < mtpr.BaseNonlinearCoeffCount())
 		return "nonlinear";
+	if (index >= mtpr.TwoLayerGateRadialCoeffOffset()
+	    && index < mtpr.TwoLayerGateWeightOffset())
+		return "two_layer_gate_radial_coeff";
 	if (index >= mtpr.TwoLayerGateWeightOffset()
 	    && index < mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount())
 		return "two_layer_gate_weight";
@@ -616,6 +621,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			          << "checked_coeffs=" << result.checked_count
 			          << " coeff_count=" << mtpr.CoeffCount()
 			          << " base_nonlinear_end=" << mtpr.BaseNonlinearCoeffCount()
+			          << " gate_radial_begin=" << mtpr.TwoLayerGateRadialCoeffOffset()
+			          << " gate_radial_end=" << mtpr.TwoLayerGateWeightOffset()
 			          << " gate_begin=" << mtpr.TwoLayerGateWeightOffset()
 			          << " gate_end=" << mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount()
 			          << " linear_begin=" << mtpr.LinearCoeffOffset()
@@ -821,7 +828,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 			"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
 			"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
-			"         --two-layer-gate, --two-layer-gate-body-order=<int> (default=3)\n"
+			"         --two-layer-gate, --two-layer-gate-body-order=<int> (default=3),\n"
+			"         --two-layer-gate-shared-radial\n"
 		) {
 		if (args.size() != 1) {
 			std::cout << "mlp-sus2 init-sh: 1 output .mtp argument is required\n";
