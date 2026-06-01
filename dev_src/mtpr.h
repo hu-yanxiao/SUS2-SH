@@ -174,7 +174,8 @@ protected:
 	void CalcSHBasisFuncsDers(const Neighborhood& nbh);
 	void CalcTwoLayerGateScalarValuesOnly(
 		const Neighborhood& nbh,
-		std::vector<double>& gate_scalar_values);
+		std::vector<double>& gate_scalar_values,
+		int cache_atom_index = -1);
 	void CalcTwoLayerGateScalarDers(
 		const Neighborhood& nbh,
 		std::vector<double>& gate_scalar_ders);
@@ -196,7 +197,8 @@ protected:
 		const Neighborhood& nbh,
 		const std::vector<Vector3>& direction_weights,
 		std::vector<double>& gate_scalar_tangents,
-		std::vector<double>* gate_moment_tangents = nullptr);
+		std::vector<double>* gate_moment_tangents = nullptr,
+		int cache_atom_index = -1);
 	void CalcSHSiteEnergyDers(const Neighborhood& nbh);
 	void AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 										std::vector<double>& out_grad_accumulator,
@@ -210,6 +212,13 @@ protected:
 	void WriteSHProductGraph(std::ofstream& ofs);
 	void BuildSHProductProgram();
 	void BuildTwoLayerGateProductProgram();
+	void ClearTwoLayerEdgePrimitiveCache();
+	void BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
+										bool need_derivatives);
+	bool HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
+										bool need_derivatives) const;
+	size_t TwoLayerEdgePrimitiveOffset(int cache_atom_index,
+										int neighbor_index) const;
 	bool UseSHProductRows() const;
 	bool UseSHSiteDerivativeCache() const;
 	bool UseSHAccumSkipSiteDers() const;
@@ -279,6 +288,25 @@ public:
 	std::vector<double> two_layer_gate_adjoints_;
 	const std::vector<double>* active_two_layer_gate_values_ = nullptr;
 	std::vector<double>* active_two_layer_gate_adjoints_ = nullptr;
+	std::vector<size_t> two_layer_edge_offsets_cache_;
+	std::vector<double> two_layer_edge_sh_values_cache_;
+	std::vector<double> two_layer_edge_sh_ders_cache_;
+	std::vector<double> two_layer_edge_radial_vals_cache_;
+	std::vector<double> two_layer_edge_radial_ders_cache_;
+	std::vector<double> two_layer_edge_mu_vals_cache_;
+	std::vector<double> two_layer_edge_mu_ders_cache_;
+	std::vector<double> two_layer_edge_mu_ders_s_cache_;
+	std::vector<double> two_layer_edge_mu_ders_ss_cache_;
+	std::vector<double> two_layer_edge_mu_coord_ders_s_cache_;
+	std::vector<double> two_layer_edge_mu_coord_ders_ss_cache_;
+	bool two_layer_edge_cache_ready_ = false;
+	bool two_layer_edge_cache_has_derivatives_ = false;
+	int two_layer_edge_cache_atom_count_ = 0;
+	int two_layer_edge_cache_eval_block_count_ = 0;
+	int two_layer_edge_cache_sh_count_ = 0;
+	int two_layer_edge_cache_radial_func_count_ = 0;
+	int two_layer_edge_cache_rb_size_ = 0;
+	int active_two_layer_edge_cache_atom_index_ = -1;
         bool shift_ = true;
 	double* energy_cmpnts;								// Energy components for SLAE matrix
 	Array3D forces_cmpnts;								// Force components for SLAE matrix

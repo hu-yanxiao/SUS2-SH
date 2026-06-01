@@ -153,6 +153,8 @@ Result:
 | plain SH | 334 s | 4.488 meV/atom | 205.006 meV/A | completed `max-iter=100` |
 | two-layer gate, pre-fix | 720 s | 7.659 meV/atom | 351.241 meV/A | line search stopped at formal step 17 |
 | two-layer gate, fixed | 1737 s | 5.501 meV/atom | 208.771 meV/A | completed `max-iter=100` |
+| two-layer gate, stable chainfix | 1386 s | 5.243 meV/atom | 241.660 meV/A | completed `max-iter=100` |
+| two-layer gate, directed-edge cache | 613 s | 5.160 meV/atom | 227.230 meV/A | completed `max-iter=100` |
 
 Benchmark paths:
 
@@ -160,6 +162,9 @@ Benchmark paths:
 plain/pre-fix: /work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100
 fixed run    : /work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100_fix3
 fixed job id : 3740179
+stable chainfix: /work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100_blas_stable
+directed-edge cache: /work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100_edgeprimitive
+directed-edge job id: 3740785
 ```
 
 The pre-fix gate weights did move from zero, reaching roughly `1.8e-1` max
@@ -318,6 +323,46 @@ profile, the accepted two-layer-only optimizations now reduce the measured
 gradient-side total by about 24% (`242634 -> 185140 us`). A direct HVT-reverse
 fusion trial inside scalar-param was also checked and profiled but rejected
 because it was slightly slower (`204135 -> 205153 us` total).
+
+A configuration-level directed-edge primitive cache was then added for
+two-layer paths only. It is built once per `Configuration`/`Neighborhoods`
+inside the two-layer evaluation/training entry points and is indexed by the
+directed center-neighbor slot `i -> j`; the reverse edge is never reused because
+the real SH parity and ordered center/outer element radial parameters differ.
+The cache stores only shared edge primitives and radial contractions:
+`Y_lm`, `dY_lm/dx`, radial basis values, radial basis derivatives with respect
+to coordinate/sigma/shift channels, and contracted radial values/derivatives.
+It does not reuse first-layer gate scalar products as final-layer scalar
+products. The final gated SH moments are still rebuilt as
+`B_i^(1)(a)=sum_j [1+f_j] edge_i(a,j)` and the outer product graph is still
+propagated from those gated moments.
+
+The cache is consumed only when a two-layer caller has provided an atom index
+or set `active_two_layer_edge_cache_atom_index_`; otherwise the old SH code path
+runs unchanged. It now feeds gate preparation, final gated SH accumulation,
+final energy adjoints, gate directional derivatives, final-layer tangent
+gradients, scalar-parameter gate-chain gradients, and the two-layer
+force-chain correction. On
+`codex_two_layer_gate_profile_1step_edgeprimitive`, the same 1-step profile
+became:
+
+```text
+avg_us_total=108769
+avg_us_prepare_gate=34997.7
+avg_us_main_gated_grad=26715.8
+avg_us_energy_adjoint=10295.6
+avg_us_directional=3172.88
+avg_us_tangent_grad=16030.8
+avg_us_gate_weight=15.4981
+avg_us_scalar_param=17059.2
+runtime_sec=17
+```
+
+Compared with the previous tangent-cache profile, this reduces the measured
+two-layer gradient-side total by about 41% (`185140 -> 108769 us`). Relative to
+the pre-directed-cache final-cache profile, the cumulative accepted
+two-layer-only optimizations reduce the gradient-side total by about 55%
+(`242634 -> 108769 us`).
 
 ## Training model
 
