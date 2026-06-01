@@ -2139,10 +2139,18 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 
 	double profile_directional_s = 0.0;
 	double profile_tangent_grad_s = 0.0;
+	std::vector<double> gate_directional_moment_tangent_cache;
+	std::vector<char> gate_directional_moment_tangent_valid;
 	if (!energy_gate_adjoints.empty()) {
 		std::vector<Vector3> gate_chain_weights;
 		std::vector<double> gate_scalar_tangents;
+		std::vector<double> gate_moment_tangents;
 		std::vector<double> gate_chain_directional_values(cfg.size(), 0.0);
+		if (alpha_moments_count > 0) {
+			gate_directional_moment_tangent_cache.assign(
+				static_cast<size_t>(cfg.size()) * alpha_moments_count, 0.0);
+			gate_directional_moment_tangent_valid.assign(cfg.size(), 0);
+		}
 		const double profile_directional_start =
 			profile_two_layer ? TwoLayerProfileNow() : 0.0;
 		for (int ind = 0; ind < cfg.size(); ++ind) {
@@ -2170,9 +2178,26 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 			if (grad_zero)
 				continue;
 
+			std::vector<double>* gate_moment_tangents_ptr =
+				(energy_gate_adjoint != 0.0
+				 && !gate_directional_moment_tangent_cache.empty())
+					? &gate_moment_tangents
+					: nullptr;
 			CalcTwoLayerGateScalarDirectionalDerivatives(nbh,
 			                                             gate_chain_weights,
-			                                             gate_scalar_tangents);
+			                                             gate_scalar_tangents,
+			                                             gate_moment_tangents_ptr);
+			if (gate_moment_tangents_ptr != nullptr
+			    && static_cast<int>(gate_moment_tangents.size())
+			        == alpha_moments_count) {
+				const size_t offset =
+					static_cast<size_t>(ind) * alpha_moments_count;
+				std::copy(gate_moment_tangents.begin(),
+				          gate_moment_tangents.end(),
+				          gate_directional_moment_tangent_cache.begin()
+				              + offset);
+				gate_directional_moment_tangent_valid[ind] = 1;
+			}
 			for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
 				const double directional_derivative = gate_scalar_tangents[q];
 				gate_chain_directional_values[ind] +=
@@ -2273,11 +2298,22 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 			}
 			if (gate_adjoint == 0.0 && gate_der_weights_ptr == nullptr)
 				continue;
+			const double* gate_moment_tangents_ptr = nullptr;
+			if (gate_der_weights_ptr != nullptr
+			    && ind < static_cast<int>(
+			        gate_directional_moment_tangent_valid.size())
+			    && gate_directional_moment_tangent_valid[ind]) {
+				gate_moment_tangents_ptr =
+					gate_directional_moment_tangent_cache.data()
+					+ static_cast<size_t>(ind) * alpha_moments_count;
+			}
 			AccumulateTwoLayerGateScalarParamGrad(nbh,
 			                                      out_grads_accumulator,
 			                                      gate_adjoint,
 			                                      gate_der_weights_ptr,
-			                                      ind);
+			                                      ind,
+			                                      gate_moment_tangents_ptr,
+			                                      energy_gate_adjoint);
 		}
 	}
 	const double profile_after_scalar_param =

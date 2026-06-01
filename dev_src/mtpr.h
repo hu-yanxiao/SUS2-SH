@@ -175,30 +175,33 @@ protected:
 	void CalcTwoLayerGateScalarValuesOnly(
 		const Neighborhood& nbh,
 		std::vector<double>& gate_scalar_values);
-		void CalcTwoLayerGateScalarDers(
-			const Neighborhood& nbh,
-			std::vector<double>& gate_scalar_ders);
-		void CalcTwoLayerGateWeightedScalarDers(
-			const Neighborhood& nbh,
-			std::vector<Vector3>& gate_scalar_ders,
-			int cache_atom_index = -1);
-		void AccumulateTwoLayerGateScalarParamGrad(
-			const Neighborhood& nbh,
-			std::vector<double>& out_grad_accumulator,
-			double gate_adjoint,
-		const Vector3* gate_der_weights,
+	void CalcTwoLayerGateScalarDers(
+		const Neighborhood& nbh,
+		std::vector<double>& gate_scalar_ders);
+	void CalcTwoLayerGateWeightedScalarDers(
+		const Neighborhood& nbh,
+		std::vector<Vector3>& gate_scalar_ders,
 		int cache_atom_index = -1);
+	void AccumulateTwoLayerGateScalarParamGrad(
+		const Neighborhood& nbh,
+		std::vector<double>& out_grad_accumulator,
+		double gate_adjoint,
+		const Vector3* gate_der_weights,
+		int cache_atom_index = -1,
+		const double* gate_moment_tangents = nullptr,
+		double gate_moment_tangent_scale = 1.0);
 	void CalcSHBasisGateDers(const Neighborhood& nbh,
 	                         std::vector<double>& gate_basis_ders);
-		void CalcTwoLayerGateScalarDirectionalDerivatives(
-			const Neighborhood& nbh,
-			const std::vector<Vector3>& direction_weights,
-			std::vector<double>& gate_scalar_tangents);
-		void CalcSHSiteEnergyDers(const Neighborhood& nbh);
-		void AccumulateSHGateTangentGrad(const Neighborhood& nbh,
-											std::vector<double>& out_grad_accumulator,
-											const std::vector<double>& neighbor_gate_tangent,
-											int cache_atom_index = -1);
+	void CalcTwoLayerGateScalarDirectionalDerivatives(
+		const Neighborhood& nbh,
+		const std::vector<Vector3>& direction_weights,
+		std::vector<double>& gate_scalar_tangents,
+		std::vector<double>* gate_moment_tangents = nullptr);
+	void CalcSHSiteEnergyDers(const Neighborhood& nbh);
+	void AccumulateSHGateTangentGrad(const Neighborhood& nbh,
+										std::vector<double>& out_grad_accumulator,
+										const std::vector<double>& neighbor_gate_tangent,
+										int cache_atom_index = -1);
 	void AccumulateSHCombinationGrad(const Neighborhood& nbh,
 										std::vector<double>& out_grad_accumulator,
 										const double se_weight = 0.0,

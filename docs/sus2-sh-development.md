@@ -290,6 +290,35 @@ scalar-parameter stage: reusing only the final scalar directional outputs is not
 mathematically sufficient; a correct reuse cache must include the full gate
 moment tangent over the selected product-graph closure.
 
+The scalar-parameter stage now reuses that full gate moment tangent. During the
+directional pass, atoms with nonzero `energy_gate_adjoint` store the complete
+`D_x m(v)` vector after required-product tangent propagation. The later
+scalar-parameter pass scales this vector by `energy_gate_adjoint` and skips the
+duplicated neighbor derivative pass plus product tangent propagation; the final
+edge-level coefficient-gradient pass is still evaluated directly. This keeps the
+chain rule exact while avoiding reuse of an insufficient scalar-only tangent. On
+`codex_two_layer_gate_profile_1step_tangentcache`, the same profile became:
+
+```text
+avg_us_total=185140
+avg_us_prepare_gate=19233.9
+avg_us_main_gated_grad=43195.5
+avg_us_energy_adjoint=28759.8
+avg_us_directional=22904.8
+avg_us_tangent_grad=37566.3
+avg_us_gate_weight=13.8214
+avg_us_scalar_param=33087.6
+runtime_sec=20
+```
+
+Compared with the directional-fuse profile, this reduces `avg_us_scalar_param`
+by about 38% (`53625.4 -> 33087.6 us`) and the two-layer gradient-side total by
+about 9% (`204135 -> 185140 us`). Relative to the pre-edge-cache final-cache
+profile, the accepted two-layer-only optimizations now reduce the measured
+gradient-side total by about 24% (`242634 -> 185140 us`). A direct HVT-reverse
+fusion trial inside scalar-param was also checked and profiled but rejected
+because it was slightly slower (`204135 -> 205153 us` total).
+
 ## Training model
 
 The training `.mtp` keeps the ordinary SUS2 radial/scaling/linear parameters and adds `potential_tag = SUS2-SH`. For SH models, `alpha_index_basic` stores `{k, l, m}`. Internally this is converted to `mu = k * (l_max + 1) + l`, so the radial channel is still compatible with the SUS2 coefficient layout.
