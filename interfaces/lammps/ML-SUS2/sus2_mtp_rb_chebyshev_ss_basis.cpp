@@ -342,6 +342,48 @@ void RBChebyshev_sss_lmp::calc_radial_basis_ders(double dist, double scal, doubl
 
 
 
+void RBChebyshev_sss_rational_lmp::calc_radial_basis(double dist, double scal, double s, int k)
+{
+  double x = scal * (dist - s) / 2.0;
+  double inv = 1.0 / sqrt(1.0 + x * x);
+  double ksi = x * inv;
+
+  double Dr = dist - max_cutoff;
+  double cutoff = Dr * Dr;
+
+  radial_basis_vals[0] = scaling * cutoff;
+  radial_basis_vals[1] = scaling * (ksi * cutoff);
+
+  for (int i = 2; i < size; i++) {
+    radial_basis_vals[i] = 2.0 * ksi * radial_basis_vals[i-1] - radial_basis_vals[i-2];
+  }
+}
+
+void RBChebyshev_sss_rational_lmp::calc_radial_basis_ders(double dist, double scal, double s, int k)
+{
+  calc_radial_basis(dist, scal, s, k);
+
+  double x = scal * (dist - s) / 2.0;
+  double inv = 1.0 / sqrt(1.0 + x * x);
+  double ksi = x * inv;
+  double der = inv * inv * inv;
+  double mult = der * scal / 2.0;
+
+  double Dr = dist - max_cutoff;
+  double cutoff = Dr * Dr;
+
+  radial_basis_ders[0] = 2.0 * Dr * scaling;
+  radial_basis_ders[1] = scaling * (mult * cutoff + 2.0 * ksi * Dr);
+
+  for (int i = 2; i < size; i++) {
+    radial_basis_ders[i] = 2.0 * (mult * radial_basis_vals[i-1] + ksi * radial_basis_ders[i-1]) - radial_basis_ders[i-2];
+  }
+}
+
+
+
+
+
 // RBChebyshev_sss implementation - matching SUS2-MLIP-1.1 RadialBasis_Chebyshev_sss::RB_Calc
 void RBChebyshev_sss::calc_radial_basis(double dist, double scal, double s, int k)
 {
@@ -412,6 +454,68 @@ void RBChebyshev_sss::calc_radial_basis_ders(double dist, double scal, double s,
                                     radial_basis_ders[i+3*size-2];
     radial_basis_ders[i + 4*size] = 2.0 * (mult_s_r * radial_basis_vals[i-1] + mult * radial_basis_ders[i+3*size-1] + 
                                         ksi * radial_basis_ders[i+4*size-1] + mult_s * radial_basis_ders[i-1]) - 
+                                        radial_basis_ders[i+4*size-2];
+  }
+}
+
+void RBChebyshev_sss_rational::calc_radial_basis(double dist, double scal, double s, int k)
+{
+  double x = scal * (dist - s) / 2.0;
+  double inv = 1.0 / sqrt(1.0 + x * x);
+  double ksi = x * inv;
+
+  double Dr = dist - max_cutoff;
+  double cutoff = Dr * Dr;
+
+  radial_basis_vals[0] = scaling * cutoff;
+  radial_basis_vals[1] = scaling * (ksi * cutoff);
+
+  for (int i = 2; i < size; i++) {
+    radial_basis_vals[i] = 2.0 * ksi * radial_basis_vals[i-1] - radial_basis_vals[i-2];
+  }
+}
+
+void RBChebyshev_sss_rational::calc_radial_basis_ders(double dist, double scal, double s, int k)
+{
+  calc_radial_basis(dist, scal, s, k);
+
+  double x = scal * (dist - s) / 2.0;
+  double inv = 1.0 / sqrt(1.0 + x * x);
+  double ksi = x * inv;
+  double der = inv * inv * inv;
+  double dder = -3.0 * x * der * inv * inv;
+
+  double mult = der * scal / 2.0;
+  double mult_s_r = -dder * scal * scal / 4.0;
+  double mult_scal_r = der / 2.0 + dder * (dist - s) * scal / 4.0;
+  double mult_scal = der * (dist - s) / 2.0;
+  double mult_s = -mult;
+
+  double Dr = dist - max_cutoff;
+  double cutoff = Dr * Dr;
+
+  radial_basis_ders[0] = 2.0 * Dr * scaling;
+  radial_basis_ders[0 + size] = 0.0;
+  radial_basis_ders[0 + 2*size] = 0.0;
+  radial_basis_ders[0 + 3*size] = 0.0;
+  radial_basis_ders[0 + 4*size] = 0.0;
+
+  radial_basis_ders[1] = scaling * (mult * cutoff + 2.0 * ksi * Dr);
+  radial_basis_ders[1 + size] = scaling * mult_scal * cutoff;
+  radial_basis_ders[1 + 2*size] = scaling * (mult_scal_r * cutoff + 2.0 * mult_scal * Dr);
+  radial_basis_ders[1 + 3*size] = scaling * mult_s * cutoff;
+  radial_basis_ders[1 + 4*size] = scaling * (mult_s_r * cutoff + 2.0 * mult_s * Dr);
+
+  for (int i = 2; i < size; i++) {
+    radial_basis_ders[i] = 2.0 * (mult * radial_basis_vals[i-1] + ksi * radial_basis_ders[i-1]) - radial_basis_ders[i-2];
+    radial_basis_ders[i + size] = 2.0 * (mult_scal * radial_basis_vals[i-1] + ksi * radial_basis_ders[i-1+size]) - radial_basis_ders[i-2+size];
+    radial_basis_ders[i + 2*size] = 2.0 * (mult_scal_r * radial_basis_vals[i-1] + mult * radial_basis_ders[i-1+size] +
+                                        ksi * radial_basis_ders[i-1+2*size] + mult_scal * radial_basis_ders[i-1]) -
+                                        radial_basis_ders[i-2+2*size];
+    radial_basis_ders[i + 3*size] = 2.0 * (mult_s * radial_basis_vals[i-1] + ksi * radial_basis_ders[i+3*size-1]) -
+                                    radial_basis_ders[i+3*size-2];
+    radial_basis_ders[i + 4*size] = 2.0 * (mult_s_r * radial_basis_vals[i-1] + mult * radial_basis_ders[i+3*size-1] +
+                                        ksi * radial_basis_ders[i+4*size-1] + mult_s * radial_basis_ders[i-1]) -
                                         radial_basis_ders[i+4*size-2];
   }
 }

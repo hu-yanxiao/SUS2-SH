@@ -36,11 +36,15 @@ private:
 	double quad_opt_scalar;								// Scalar value in least squares minimization problem A*A^T = b*A^T (Not needed in most scenarios) 
 	int quad_opt_eqn_count;								// Number of equation in overdetermined system
 	int quad_opt_allocated_n = 0;
-	std::vector<double> lin_force_block_;
-	std::vector<double> lin_force_rhs_;
-	std::vector<double> lin_stress_block_;
-	std::vector<double> lin_stress_rhs_;
-	std::vector<double> lin_energy_cmpnts_;
+		std::vector<double> lin_force_block_;
+		std::vector<double> lin_force_rhs_;
+		std::vector<double> lin_stress_block_;
+		std::vector<double> lin_stress_rhs_;
+		std::vector<double> lin_energy_cmpnts_;
+		std::vector<double> lin_projected_row_;
+		std::vector<double> lin_active_row_;
+		std::vector<int> linear_solve_columns_;
+		std::vector<int> linear_solve_full_to_active_;
 
 	Array2D inv_hessian;
 	bool have_hess = false;								//is hessian currently approximated
@@ -54,7 +58,15 @@ private:
 	bool HasFixedAtomicEnergies() const;
 	void ValidateFixedAtomicEnergies() const;
 	double FixedAtomicEnergySum(const Configuration& cfg) const;
-	void ApplyFixedAtomicEnergyGauge(int n);
+		void ApplyFixedAtomicEnergyGauge(int n);
+		bool LinearColumnActiveForStage(int column) const;
+		void PrepareLinearSolveColumns();
+		int LinearSolveColumnCount() const;
+		int LinearSolveActiveIndex(int column) const;
+		bool LinearSolveColumnActive(int column) const;
+		bool CoeffActiveForStage(int coeff_index) const;
+		double LinearColumnCurrentCoeff(int column) const;
+		void ProjectLinearRowToActive(const double* full_row, int full_stride, double& rhs, double* active_row);
 #ifdef MLIP_MPI
 	MPI_Comm train_comm_ = MPI_COMM_WORLD;
 	bool train_comm_owned_ = false;
@@ -75,6 +87,12 @@ public:
 	int do_lin_step_limit = 1000;
 	int do_lin_frequency = 50;
 	bool freeze_scal_coeffs = false;
+	enum TwoLayerResidualStage {
+		kResidualStageFull = 0,
+		kResidualStageE0 = 1,
+		kResidualStageE1 = 2
+	};
+	int two_layer_residual_stage = kResidualStageFull;
 	MTPR_trainer(MLMTPR* _p_mlip,						// Constructor requires MTP basis
 						double opt_en_coeff = 1.0,				//	Optional parameters are the weights coeficients of energy, forces and stresses equations in minimization problem
 						double opt_fr_coeff = 1.0,

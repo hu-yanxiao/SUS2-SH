@@ -399,6 +399,16 @@ bool MLMTPR::TwoLayerGateUsesSharedRadial() const
 	return two_layer_gate_enabled_ && two_layer_gate_shared_radial_;
 }
 
+bool MLMTPR::TwoLayerResidualEnabled() const
+{
+	return is_sh_potential_ && two_layer_gate_enabled_ && two_layer_residual_enabled_;
+}
+
+bool MLMTPR::TwoLayerGateUsesDirectScale() const
+{
+	return two_layer_gate_scale_mode_ == "direct";
+}
+
 int MLMTPR::TwoLayerGateRadialCoeffCount() const
 {
 	if (!TwoLayerGateUsesSharedRadial() || p_RadialBasis == nullptr)
@@ -423,9 +433,29 @@ int MLMTPR::TwoLayerGateWeightOffset() const
 	return BaseNonlinearCoeffCount() + TwoLayerGateRadialCoeffCount();
 }
 
-int MLMTPR::LinearCoeffOffset() const
+int MLMTPR::TwoLayerResidualE0CoeffCount() const
+{
+	return TwoLayerResidualEnabled() ? alpha_scalar_moments : 0;
+}
+
+int MLMTPR::TwoLayerResidualE0CoeffOffset() const
 {
 	return TwoLayerGateWeightOffset() + TwoLayerGateWeightCount();
+}
+
+int MLMTPR::LinearCoeffOffset() const
+{
+	return TwoLayerResidualE0CoeffOffset() + TwoLayerResidualE0CoeffCount();
+}
+
+int MLMTPR::LinearCoeffCount() const
+{
+	return alpha_count + species_count - 1;
+}
+
+int MLMTPR::LinearEquationCount() const
+{
+	return LinearCoeffCount() + TwoLayerResidualE0CoeffCount();
 }
 
 int MLMTPR::TwoLayerGateRadialCoeffIndex(int mu, int xi) const
@@ -468,6 +498,21 @@ double MLMTPR::TwoLayerGateWeight(int weight_index) const
 	if (weight_index < static_cast<int>(two_layer_gate_weights_.size()))
 		return two_layer_gate_weights_[weight_index];
 	ERROR("SUS2-SH two-layer gate weight storage is inconsistent");
+	return 0.0;
+}
+
+double MLMTPR::TwoLayerResidualE0Coeff(int scalar_index) const
+{
+	if (!TwoLayerResidualEnabled())
+		return 0.0;
+	if (scalar_index < 0 || scalar_index >= alpha_scalar_moments)
+		ERROR("SUS2-SH residual E0 scalar index is out of range");
+	const int coeff_index = TwoLayerResidualE0CoeffOffset() + scalar_index;
+	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	if (scalar_index < static_cast<int>(two_layer_residual_e0_coeffs_.size()))
+		return two_layer_residual_e0_coeffs_[scalar_index];
+	ERROR("SUS2-SH residual E0 coefficient storage is inconsistent");
 	return 0.0;
 }
 
@@ -929,9 +974,13 @@ void MLMTPR::Load(const string& filename)
 	two_layer_gate_body_order_max_ = 0;
 	two_layer_gate_include_one_body_ = false;
 	two_layer_gate_shared_radial_ = false;
+	two_layer_residual_enabled_ = false;
+	two_layer_gate_scale_mode_ = "legacy";
+	two_layer_gate_bias_ = 1.0;
 	two_layer_gate_scalar_indices_.clear();
 	two_layer_gate_radial_coeffs_.clear();
 	two_layer_gate_weights_.clear();
+	two_layer_residual_e0_coeffs_.clear();
 	two_layer_gate_values_.clear();
 	two_layer_gate_scalar_values_cache_.clear();
 	two_layer_gate_moment_values_cache_.clear();
@@ -1433,12 +1482,33 @@ void MLMTPR::Load(const string& filename)
 			ERROR("SUS2-SH two-layer gate is missing two_layer_gate_include_one_body");
 		ifs.ignore(2);
 		ifs >> bool_token;
-			two_layer_gate_include_one_body_ = ReadBoolToken(bool_token);
+		two_layer_gate_include_one_body_ = ReadBoolToken(bool_token);
 
+		ifs >> tmpstr;
+		if (tmpstr == "two_layer_residual_enabled") {
+			ifs.ignore(2);
+			ifs >> bool_token;
+			two_layer_residual_enabled_ = ReadBoolToken(bool_token);
 			ifs >> tmpstr;
-			if (tmpstr == "two_layer_gate_radial_mode") {
-				std::string radial_mode;
-				ifs.ignore(2);
+		}
+		if (tmpstr == "two_layer_gate_scale_mode") {
+			ifs.ignore(2);
+			ifs >> two_layer_gate_scale_mode_;
+			if (two_layer_gate_scale_mode_ != "legacy"
+			    && two_layer_gate_scale_mode_ != "direct")
+				ERROR("SUS2-SH two-layer gate has an unknown scale mode: " + two_layer_gate_scale_mode_);
+			ifs >> tmpstr;
+		}
+		if (tmpstr == "two_layer_gate_bias") {
+			ifs.ignore(2);
+			ifs >> two_layer_gate_bias_;
+			if (!std::isfinite(two_layer_gate_bias_))
+				ERROR("SUS2-SH two_layer_gate_bias should be finite");
+			ifs >> tmpstr;
+		}
+		if (tmpstr == "two_layer_gate_radial_mode") {
+			std::string radial_mode;
+			ifs.ignore(2);
 				ifs >> radial_mode;
 				if (radial_mode == "shared-radial") {
 					two_layer_gate_shared_radial_ = true;
@@ -1499,14 +1569,36 @@ void MLMTPR::Load(const string& filename)
 			ERROR("SUS2-SH two-layer gate body order is out of range");
 		if (!(ifs >> tmpstr))
 			tmpstr = "";
+		if (tmpstr == "two_layer_residual_e0_coeff_count") {
+			ifs.ignore(2);
+			int e0_count = 0;
+			ifs >> e0_count;
+			if (!two_layer_residual_enabled_)
+				ERROR("SUS2-SH found residual E0 coefficients without two_layer_residual_enabled");
+			if (e0_count != alpha_scalar_moments)
+				ERROR("SUS2-SH residual E0 coefficient count should match alpha_scalar_moments");
+			ifs >> tmpstr;
+			if (tmpstr != "two_layer_residual_e0_coeffs")
+				ERROR("SUS2-SH residual mode is missing two_layer_residual_e0_coeffs");
+			ReadDoubleList(ifs, two_layer_residual_e0_coeffs_, e0_count);
+			ifs.ignore(1000, '\n');
+			if (!(ifs >> tmpstr))
+				tmpstr = "";
+		}
+		if (two_layer_residual_enabled_) {
+			if (two_layer_gate_scale_mode_ != "direct")
+				ERROR("SUS2-SH residual two-layer mode requires two_layer_gate_scale_mode = direct");
+			if (static_cast<int>(two_layer_residual_e0_coeffs_.size()) != alpha_scalar_moments)
+				two_layer_residual_e0_coeffs_.assign(alpha_scalar_moments, 0.0);
+		}
 	}
 
 	if (tmpstr != "species_coeffs")
 	{
 		inited = false;
 		//cout << "Linear coeffs not found, initializing defaults, species_count = " << species_count << endl;
-		linear_coeffs.resize(alpha_count + species_count - 1);
-		for (int i = 0; i < alpha_count + species_count - 1; i++)
+		linear_coeffs.resize(LinearCoeffCount());
+		for (int i = 0; i < LinearCoeffCount(); i++)
 			linear_coeffs[i] = 1e-3;
 	}
 	else
@@ -1526,7 +1618,7 @@ void MLMTPR::Load(const string& filename)
 
 		ifs.ignore(2);
 
-		linear_coeffs.resize(alpha_count + species_count - 1);
+		linear_coeffs.resize(LinearCoeffCount());
 
 		ifs.ignore(10, '{');
 
@@ -1591,7 +1683,7 @@ void MLMTPR::Load(const string& filename)
 
 void MLMTPR::CalcDescriptors(Configuration& cfg, ofstream& ofs)
 {
-	int n = alpha_count + species_count - 1;
+	int n = LinearCoeffCount();
 
 	Neighborhoods neighborhoods(cfg,p_RadialBasis->max_dist);
         ofs << "#start  ";
@@ -1628,7 +1720,7 @@ void MLMTPR::CalcDescriptors(Configuration& cfg, ofstream& ofs)
 
 void MLMTPR::CalcpartialE(Configuration& cfg, ofstream& ofs)
 {
-	int n = alpha_count + species_count - 1;
+	int n = LinearCoeffCount();
 
 	Neighborhoods neighborhoods(cfg,p_RadialBasis->max_dist);
         ofs << "#start  ";
@@ -1823,10 +1915,20 @@ void MLMTPR::Save(const string& filename)
 			if (sh_scalar_info_[index].body_order > two_layer_gate_body_order_max_)
 				ERROR("SUS2-SH two-layer gate scalar index exceeds two_layer_gate_body_order_max");
 			}
-			ofs << "two_layer_gate_enabled = true\n";
-			ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order_max_ << '\n';
-			ofs << "two_layer_gate_include_one_body = false\n";
-			if (TwoLayerGateUsesSharedRadial()) {
+				ofs << "two_layer_gate_enabled = true\n";
+				ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order_max_ << '\n';
+				ofs << "two_layer_gate_include_one_body = false\n";
+				if (two_layer_residual_enabled_) {
+					ofs << "two_layer_residual_enabled = true\n";
+					ofs << "two_layer_gate_scale_mode = "
+					    << two_layer_gate_scale_mode_ << '\n';
+					ofs << "two_layer_gate_bias = " << two_layer_gate_bias_ << '\n';
+				} else if (two_layer_gate_scale_mode_ != "legacy") {
+					ofs << "two_layer_gate_scale_mode = "
+					    << two_layer_gate_scale_mode_ << '\n';
+					ofs << "two_layer_gate_bias = " << two_layer_gate_bias_ << '\n';
+				}
+				if (TwoLayerGateUsesSharedRadial()) {
 				const int gate_radial_count = TwoLayerGateRadialCoeffCount();
 				if (gate_radial_count <= 0)
 					ERROR("SUS2-SH two-layer shared-radial gate has no radial coefficients");
@@ -1851,14 +1953,27 @@ void MLMTPR::Save(const string& filename)
 			ofs << two_layer_gate_scalar_indices_[i];
 		}
 		ofs << "}\n";
-		ofs << "two_layer_gate_weights = {";
-		for (int i = 0; i < static_cast<int>(two_layer_gate_weights_.size()); ++i) {
-			if (i > 0)
-				ofs << ", ";
-			ofs << TwoLayerGateWeight(i);
+			ofs << "two_layer_gate_weights = {";
+			for (int i = 0; i < static_cast<int>(two_layer_gate_weights_.size()); ++i) {
+				if (i > 0)
+					ofs << ", ";
+				ofs << TwoLayerGateWeight(i);
+			}
+			ofs << "}\n";
+			if (two_layer_residual_enabled_) {
+				const int e0_count = TwoLayerResidualE0CoeffCount();
+				if (e0_count != alpha_scalar_moments)
+					ERROR("SUS2-SH residual E0 coefficient count is inconsistent");
+				ofs << "two_layer_residual_e0_coeff_count = " << e0_count << '\n';
+				ofs << "two_layer_residual_e0_coeffs = {";
+				for (int i = 0; i < e0_count; ++i) {
+					if (i > 0)
+						ofs << ", ";
+					ofs << TwoLayerResidualE0Coeff(i);
+				}
+				ofs << "}\n";
+			}
 		}
-		ofs << "}\n";
-	}
 
 	ofs << "species_coeffs = {";
 	for (int i = 0; i < species_count; i++)
@@ -2016,9 +2131,17 @@ bool MLMTPR::HasNonzeroTwoLayerGateWeights() const
 	return false;
 }
 
+bool MLMTPR::RequiresTwoLayerGateEvaluation() const
+{
+	return two_layer_gate_enabled_
+	    && (HasNonzeroTwoLayerGateWeights() || TwoLayerResidualEnabled());
+}
+
 void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods)
 {
-	two_layer_gate_values_.assign(cfg.size(), 1.0);
+	const double default_gate =
+		TwoLayerGateUsesDirectScale() ? two_layer_gate_bias_ : 1.0;
+	two_layer_gate_values_.assign(cfg.size(), default_gate);
 	if (two_layer_gate_scalar_indices_.size() != two_layer_gate_weights_.size())
 		ERROR("SUS2-SH two-layer gate metadata has inconsistent sizes");
 	const int gate_count = static_cast<int>(two_layer_gate_scalar_indices_.size());
@@ -2049,7 +2172,8 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 			cached_scalars[q] = sh_gate_scalar_values_[q];
 			f += TwoLayerGateWeight(q) * cached_scalars[q];
 		}
-		two_layer_gate_values_[ind] = 1.0 + f;
+		two_layer_gate_values_[ind] =
+			TwoLayerGateUsesDirectScale() ? (two_layer_gate_bias_ + f) : (1.0 + f);
 	}
 	active_two_layer_gate_values_ = saved_gate_values;
 }
@@ -2119,7 +2243,10 @@ void MLMTPR::CalcEFS(Configuration& cfg)
 
 void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 {
-	if (!HasNonzeroTwoLayerGateWeights()) {
+	if (!RequiresTwoLayerGateEvaluation()) {
+		active_two_layer_gate_values_ = nullptr;
+		active_two_layer_gate_adjoints_ = nullptr;
+		active_two_layer_edge_cache_atom_index_ = -1;
 		AnyLocalMLIP::CalcEFS(cfg, neighborhoods);
 		return;
 	}
@@ -2310,11 +2437,11 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 		std::vector<double> gate_scalar_tangents;
 		std::vector<double> gate_moment_tangents;
 		std::vector<double> gate_chain_directional_values(cfg.size(), 0.0);
-		if (alpha_moments_count > 0) {
-			gate_directional_moment_tangent_cache.assign(
-				static_cast<size_t>(cfg.size()) * alpha_moments_count, 0.0);
-			gate_directional_moment_tangent_valid.assign(cfg.size(), 0);
-		}
+			if (alpha_moments_count > 0) {
+				gate_directional_moment_tangent_cache.assign(
+					static_cast<size_t>(cfg.size()) * alpha_moments_count, 0.0);
+				gate_directional_moment_tangent_valid.assign(cfg.size(), 0);
+			}
 		const double profile_directional_start =
 			profile_two_layer ? TwoLayerProfileNow() : 0.0;
 		for (int ind = 0; ind < cfg.size(); ++ind) {
@@ -2529,14 +2656,14 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
                                bool need_forces,
                                bool need_stress)
 {
-	int n = alpha_count + species_count - 1;
+	int n = LinearEquationCount();
 
 	if (!need_forces && !need_stress) {
 		CalcEComponents(cfg, neighborhoods);
 		return;
 	}
 
-	if (cfg.size() != forces_cmpnts.size1)
+	if (cfg.size() != forces_cmpnts.size1 || n != forces_cmpnts.size2)
 		forces_cmpnts.resize(cfg.size(), n, 3);
 
 	memset(energy_cmpnts, 0, n * sizeof(energy_cmpnts[0]));
@@ -2545,7 +2672,12 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 	if (need_stress)
 		memset(stress_cmpnts, 0, n * sizeof(stress_cmpnts[0]));
 
-	const bool use_two_layer_gate = HasNonzeroTwoLayerGateWeights();
+	const bool use_two_layer_gate = RequiresTwoLayerGateEvaluation();
+	if (!use_two_layer_gate) {
+		active_two_layer_gate_values_ = nullptr;
+		active_two_layer_gate_adjoints_ = nullptr;
+		active_two_layer_edge_cache_atom_index_ = -1;
+	}
 	const bool profile_two_layer =
 		use_two_layer_gate && TwoLayerProfileEnabledOnRank0();
 	const double profile_start = profile_two_layer ? TwoLayerProfileNow() : 0.0;
@@ -2558,14 +2690,140 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
 	const bool need_gate_linear_chain =
 		use_two_layer_gate && (need_forces || need_stress);
-	if (need_gate_linear_chain) {
-		sh_gate_linear_adjoints_.assign(
-			static_cast<size_t>(cfg.size()) * alpha_scalar_moments, 0.0);
-	}
+		if (need_gate_linear_chain) {
+			sh_gate_linear_adjoints_.assign(
+				static_cast<size_t>(cfg.size()) * alpha_scalar_moments, 0.0);
+		}
 
-	double profile_gate_adjoints_s = 0.0;
+		if (TwoLayerResidualEnabled()) {
+			const int e1_linear_count = LinearCoeffCount();
+			const int e0_col_offset = e1_linear_count;
+			double profile_gate_adjoints_s = 0.0;
+			for (int ind = 0; ind < cfg.size(); ind++) {
+				const Neighborhood& nbh = neighborhoods[ind];
+				if (nbh.my_type >= species_count)
+					throw MlipException("Too few species count in the MTP potential!");
+
+				// E1 columns: final direct-gated scalar basis, no one-body column.
+				active_two_layer_gate_values_ = &two_layer_gate_values_;
+				active_two_layer_edge_cache_atom_index_ = ind;
+				CalcBasisFuncsDers(nbh);
+				for (int k = species_count; k < e1_linear_count; k++) {
+					const int i = k - species_count + 1;
+					energy_cmpnts[k] += basis_vals[i];
+					if (need_forces)
+						for (int j = 0; j < nbh.count; j++)
+							for (int a = 0; a < 3; a++) {
+								forces_cmpnts(ind, k, a) += basis_ders(i, j, a);
+								forces_cmpnts(nbh.inds[j], k, a) -= basis_ders(i, j, a);
+							}
+					if (need_stress)
+						for (int j = 0; j < nbh.count; j++)
+							for (int a = 0; a < 3; a++)
+								for (int b = 0; b < 3; b++)
+									stress_cmpnts[k][a][b] -= basis_ders(i, j, a) * nbh.vecs[j][b];
+				}
+				if (need_gate_linear_chain) {
+					const double profile_gate_adjoints_start =
+						profile_two_layer ? TwoLayerProfileNow() : 0.0;
+					CalcSHBasisGateDers(nbh, sh_gate_basis_ders_);
+					for (int j = 0; j < nbh.count; ++j) {
+						const int atom_index = nbh.inds[j];
+						if (atom_index < 0 || atom_index >= cfg.size())
+							ERROR("SUS2-SH two-layer gate linear component atom index is out of range");
+						double* gate_adjoints = sh_gate_linear_adjoints_.data()
+							+ static_cast<size_t>(atom_index) * alpha_scalar_moments;
+						const double* gate_basis_ders = sh_gate_basis_ders_.data()
+							+ static_cast<size_t>(j) * alpha_scalar_moments;
+						for (int i = 0; i < alpha_scalar_moments; ++i)
+							gate_adjoints[i] += gate_basis_ders[i];
+					}
+					if (profile_two_layer)
+						profile_gate_adjoints_s +=
+							TwoLayerProfileNow() - profile_gate_adjoints_start;
+				}
+
+				// E0 columns: one-cutoff unmodulated scalar basis plus one-body.
+				active_two_layer_gate_values_ = nullptr;
+				CalcBasisFuncsDers(nbh);
+				energy_cmpnts[nbh.my_type] += basis_vals[0];
+				for (int i = 0; i < alpha_scalar_moments; ++i) {
+					const int col = e0_col_offset + i;
+					energy_cmpnts[col] += basis_vals[1 + i];
+					if (need_forces)
+						for (int j = 0; j < nbh.count; j++)
+							for (int a = 0; a < 3; a++) {
+								forces_cmpnts(ind, col, a) += basis_ders(1 + i, j, a);
+								forces_cmpnts(nbh.inds[j], col, a) -= basis_ders(1 + i, j, a);
+							}
+					if (need_stress)
+						for (int j = 0; j < nbh.count; j++)
+							for (int a = 0; a < 3; a++)
+								for (int b = 0; b < 3; b++)
+									stress_cmpnts[col][a][b] -= basis_ders(1 + i, j, a) * nbh.vecs[j][b];
+				}
+			}
+			active_two_layer_edge_cache_atom_index_ = -1;
+
+			if (need_gate_linear_chain) {
+				const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
+				active_two_layer_gate_values_ = nullptr;
+				for (int ind = 0; ind < cfg.size(); ++ind) {
+					const double* gate_adjoints = sh_gate_linear_adjoints_.data()
+						+ static_cast<size_t>(ind) * alpha_scalar_moments;
+					bool has_gate_adjoint = false;
+					for (int i = 0; i < alpha_scalar_moments; ++i)
+						if (gate_adjoints[i] != 0.0) {
+							has_gate_adjoint = true;
+							break;
+						}
+					if (!has_gate_adjoint)
+						continue;
+					const Neighborhood& nbh = neighborhoods[ind];
+					CalcTwoLayerGateWeightedScalarDers(nbh, sh_gate_component_ders_, ind);
+					for (int j = 0; j < nbh.count; ++j) {
+						for (int a = 0; a < 3; ++a) {
+							const double component_der = sh_gate_component_ders_[j][a];
+							if (component_der == 0.0)
+								continue;
+							if (need_forces) {
+								cblas_daxpy(alpha_scalar_moments,
+								            component_der,
+								            gate_adjoints,
+								            1,
+								            &forces_cmpnts(ind, species_count, a),
+								            3);
+								cblas_daxpy(alpha_scalar_moments,
+								            -component_der,
+								            gate_adjoints,
+								            1,
+								            &forces_cmpnts(nbh.inds[j], species_count, a),
+								            3);
+							}
+							if (need_stress) {
+								for (int b = 0; b < 3; ++b)
+									cblas_daxpy(alpha_scalar_moments,
+									            -component_der * nbh.vecs[j][b],
+									            gate_adjoints,
+									            1,
+									            &stress_cmpnts[species_count][a][b],
+									            9);
+							}
+						}
+					}
+				}
+				active_two_layer_gate_values_ = saved_gate_values;
+			}
+			if (use_two_layer_gate)
+				active_two_layer_gate_values_ = nullptr;
+			return;
+		}
+
+		double profile_gate_adjoints_s = 0.0;
 	for (int ind = 0; ind < cfg.size(); ind++) {
 		const Neighborhood& nbh = neighborhoods[ind];
+		if (use_two_layer_gate)
+			active_two_layer_edge_cache_atom_index_ = ind;
 		CalcBasisFuncsDers(nbh);
 
 		if (nbh.my_type>=species_count)
@@ -2613,6 +2871,8 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 					TwoLayerProfileNow() - profile_gate_adjoints_start;
 		}
 	}
+	if (use_two_layer_gate)
+		active_two_layer_edge_cache_atom_index_ = -1;
 	const double profile_after_main_components =
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
 
@@ -2693,14 +2953,47 @@ void MLMTPR::CalcEComponents(Configuration& cfg)
 
 void MLMTPR::CalcEComponents(Configuration& cfg, const Neighborhoods& neighborhoods)
 {
-	int n = alpha_count + species_count - 1;
+	int n = LinearEquationCount();
 	memset(energy_cmpnts, 0, n * sizeof(energy_cmpnts[0]));
 
-	const bool use_two_layer_gate = HasNonzeroTwoLayerGateWeights();
+	const bool use_two_layer_gate = RequiresTwoLayerGateEvaluation();
+	if (!use_two_layer_gate) {
+		active_two_layer_gate_values_ = nullptr;
+		active_two_layer_gate_adjoints_ = nullptr;
+		active_two_layer_edge_cache_atom_index_ = -1;
+	}
 	if (use_two_layer_gate) {
 		BuildTwoLayerEdgePrimitiveCache(neighborhoods, false);
 		PrepareTwoLayerGateValues(cfg, neighborhoods);
 		active_two_layer_gate_values_ = &two_layer_gate_values_;
+	}
+
+	if (TwoLayerResidualEnabled()) {
+		const int e1_linear_count = LinearCoeffCount();
+		const int e0_col_offset = e1_linear_count;
+		for (int ind = 0; ind < cfg.size(); ind++) {
+			const Neighborhood& nbh = neighborhoods[ind];
+			if (nbh.my_type >= species_count)
+				throw MlipException("Too few species count in the MTP potential!");
+
+			active_two_layer_gate_values_ = &two_layer_gate_values_;
+			active_two_layer_edge_cache_atom_index_ = ind;
+			CalcBasisFuncs(nbh, basis_vals);
+			for (int k = species_count; k < e1_linear_count; k++) {
+				const int i = k - species_count + 1;
+				energy_cmpnts[k] += basis_vals[i];
+			}
+
+			active_two_layer_gate_values_ = nullptr;
+			CalcBasisFuncs(nbh, basis_vals);
+			energy_cmpnts[nbh.my_type] += basis_vals[0];
+			for (int i = 0; i < alpha_scalar_moments; ++i)
+				energy_cmpnts[e0_col_offset + i] += basis_vals[1 + i];
+		}
+		active_two_layer_edge_cache_atom_index_ = -1;
+		if (use_two_layer_gate)
+			active_two_layer_gate_values_ = nullptr;
+		return;
 	}
 
 	for (int ind = 0; ind < cfg.size(); ind++) {
@@ -3003,7 +3296,7 @@ int MLMTPR::JacobiIndexedBlockForMu(int mu) const
 
 void MLMTPR::MemAlloc()
 {
-	int n = alpha_count - 1 + species_count;
+	int n = LinearEquationCount();
 
 	energy_cmpnts = new double[n];
 	forces_cmpnts.reserve(n * 3);
@@ -4399,8 +4692,7 @@ void MLMTPR::AddFixedAtomicEnergyPenalty(const std::vector<double>& atomic_energ
 	if (static_cast<int>(atomic_energies.size()) != species_count)
 		ERROR("Fixed atomic energy count should match species_count");
 
-	const int nlin = alpha_count + species_count - 1;
-	const int linear_begin = CoeffCount() - nlin;
+	const int linear_begin = LinearCoeffOffset();
 	if (linear_begin < 0 || linear_begin + species_count > CoeffCount())
 		ERROR("Invalid MTPR linear coefficient layout for fixed atomic energy penalty");
 

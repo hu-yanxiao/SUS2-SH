@@ -368,11 +368,12 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"radial-basis-type",
 		"scaling",
 		"potential-name",
-		"inline-sh-model",
-		"two-layer-gate",
-		"two-layer-gate-body-order",
-		"two-layer-gate-shared-radial"
-	};
+			"inline-sh-model",
+			"two-layer-gate",
+			"two-layer-gate-body-order",
+			"two-layer-gate-shared-radial",
+			"two-layer-residual"
+		};
 	for (const char* name : names) {
 		std::map<std::string, std::string>::const_iterator it = opts.find(name);
 		if (it != opts.end() && !it->second.empty())
@@ -891,6 +892,26 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (opts["max-iter"] != "")
 		maxits = stoi(opts["max-iter"]);
 
+	bool two_layer_residual_staged = false;
+	if (opts["two-layer-residual-staged"] != "")
+		two_layer_residual_staged = true;
+	int stage_a_steps = 0;
+	int stage_b_steps = 0;
+	int stage_c_steps = 0;
+	if (opts["stage-a-steps"] != "")
+		stage_a_steps = stoi(opts["stage-a-steps"]);
+	if (opts["stage-b-steps"] != "")
+		stage_b_steps = stoi(opts["stage-b-steps"]);
+	if (opts["stage-c-steps"] != "")
+		stage_c_steps = stoi(opts["stage-c-steps"]);
+	if (stage_a_steps < 0 || stage_b_steps < 0 || stage_c_steps < 0)
+		ERROR("--stage-a-steps, --stage-b-steps, and --stage-c-steps should be >= 0");
+	if (two_layer_residual_staged
+	    && stage_a_steps == 0
+	    && stage_b_steps == 0
+	    && stage_c_steps == 0)
+		ERROR("--two-layer-residual-staged requires at least one positive stage step count");
+
 	bool skip_preinit = false;
 	if (opts["skip-preinit"] != "")
 		skip_preinit = true;
@@ -1011,6 +1032,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (!fixed_atomic_energies.empty() &&
 	    static_cast<int>(fixed_atomic_energies.size()) != mtpr.species_count)
 		ERROR("--atomic-energies count should match species_count");
+	if (two_layer_residual_staged && !mtpr.TwoLayerResidualEnabled())
+		ERROR("--two-layer-residual-staged requires a model initialized with --two-layer-residual");
 #ifdef MLIP_MPI
 	MPI_Comm_rank(MPI_COMM_WORLD, &prank);
 	MPI_Comm_size(MPI_COMM_WORLD, &psize);
@@ -1059,6 +1082,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	}
 	if (prank == 0 && fine_tune)
 		std::cout << "fine-tune mode enabled: scal_coeffs frozen; initial rescale+linear solve will run before BFGS" << std::endl;
+	if (prank == 0 && two_layer_residual_staged) {
+		std::cout << "two-layer residual staged training enabled"
+		          << " A=" << stage_a_steps
+		          << " B=" << stage_b_steps
+		          << " C=" << stage_c_steps << std::endl;
+	}
 
 	Configuration cfg;
 	DatasetStats train_stats_local;
@@ -1229,7 +1258,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 #endif
 	}
          trainer.shift(do_shift);
-	if (!mtpr.inited && maxits > 0 && !skip_preinit) {
+	if (!mtpr.inited && maxits > 0 && !skip_preinit && !two_layer_residual_staged) {
 		trainer.max_step_count = 75;
 //		trainer.random_sample(prank, training_set);
 //		if (prank == 0){
@@ -1334,9 +1363,54 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 //          	Rescale(trainer, mtpr);
 		bool f = true;
 		trainer.shift(f);
-		if (trainer.TrainRankActive())
-			trainer.Train(training_set);
-		trainer.BroadcastCoeffsWorld();
+		if (two_layer_residual_staged) {
+			auto run_residual_stage = [&](const char* label,
+			                              int stage,
+			                              int steps,
+			                              const char* solve_context,
+			                              bool run_linear_solve) {
+				if (steps <= 0)
+					return;
+				trainer.two_layer_residual_stage = stage;
+				trainer.max_step_count = steps;
+				if (prank == 0) {
+					std::cout << "[" << CurrentTimestamp() << "] "
+					          << "Residual two-layer staged training: stage "
+					          << label
+					          << " steps=" << steps << std::endl;
+				}
+				if (run_linear_solve && trainer.TrainRankActive())
+					trainer.TrainLinear(prank,
+					                    training_set,
+					                    linear_training_neighborhoods_ptr,
+					                    solve_context);
+				trainer.BroadcastCoeffsWorld();
+				const bool saved_do_lin = trainer.do_lin;
+				const bool saved_do_lin_rescale = trainer.do_lin_rescale;
+				const int saved_do_lin_step_limit = trainer.do_lin_step_limit;
+				trainer.do_lin = false;
+				trainer.do_lin_rescale = false;
+				trainer.do_lin_step_limit = 0;
+				if (trainer.TrainRankActive())
+					trainer.Train(training_set);
+				trainer.BroadcastCoeffsWorld();
+				trainer.do_lin = saved_do_lin;
+				trainer.do_lin_rescale = saved_do_lin_rescale;
+				trainer.do_lin_step_limit = saved_do_lin_step_limit;
+			};
+			run_residual_stage("A", MTPR_trainer::kResidualStageE0,
+			                   stage_a_steps, "residual stage A E0 solve", true);
+			run_residual_stage("B", MTPR_trainer::kResidualStageE1,
+			                   stage_b_steps, "residual stage B E1 residual solve", true);
+			run_residual_stage("C", MTPR_trainer::kResidualStageFull,
+			                   stage_c_steps, "residual stage C BFGS refine", false);
+			trainer.two_layer_residual_stage = MTPR_trainer::kResidualStageFull;
+			trainer.max_step_count = maxits;
+		} else {
+			if (trainer.TrainRankActive())
+				trainer.Train(training_set);
+			trainer.BroadcastCoeffsWorld();
+		}
 		//string train_name = "pp.mtp";
 //		if (prank == 0)
 //			mtpr.Save("loop_1.mtp");

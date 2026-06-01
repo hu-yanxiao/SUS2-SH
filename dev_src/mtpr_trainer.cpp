@@ -160,6 +160,16 @@ void RequireFiniteArray(const double* values, int count, const std::string& name
 		ERROR(NonFiniteMessage(name, bad_index));
 }
 
+bool EnvFlagEnabled(const char* name)
+{
+	const char* value = std::getenv(name);
+	return value != nullptr
+	    && value[0] != '\0'
+	    && std::strcmp(value, "0") != 0
+	    && std::strcmp(value, "false") != 0
+	    && std::strcmp(value, "FALSE") != 0;
+}
+
 int SuggestedLinearSolveThreads(int n)
 {
 #ifdef MLIP_INTEL_MKL
@@ -306,12 +316,159 @@ void MTPR_trainer::ApplyFixedAtomicEnergyGauge(int n)
 	ValidateFixedAtomicEnergies();
 	const int C = p_mlmtpr->species_count;
 	for (int type = 0; type < C; ++type) {
+		const int active_type = LinearSolveActiveIndex(type);
+		if (active_type < 0)
+			continue;
 		for (int j = 0; j < n; ++j) {
-			quad_opt_matr[type * n + j] = 0.0;
-			quad_opt_matr[j * n + type] = 0.0;
+			quad_opt_matr[active_type * n + j] = 0.0;
+			quad_opt_matr[j * n + active_type] = 0.0;
 		}
-		quad_opt_matr[type * n + type] = 1.0;
-		quad_opt_vec[type] = 1.0;
+		quad_opt_matr[active_type * n + active_type] = 1.0;
+		quad_opt_vec[active_type] = 1.0;
+	}
+}
+
+bool MTPR_trainer::LinearColumnActiveForStage(int column) const
+{
+	if (p_mlmtpr == nullptr || !p_mlmtpr->TwoLayerResidualEnabled())
+		return true;
+
+	const int linear_count = p_mlmtpr->LinearCoeffCount();
+	const int e0_count = p_mlmtpr->TwoLayerResidualE0CoeffCount();
+	if (column < 0 || column >= linear_count + e0_count)
+		return false;
+
+	switch (two_layer_residual_stage) {
+	case kResidualStageE0:
+		return column < p_mlmtpr->species_count || column >= linear_count;
+	case kResidualStageE1:
+		return column >= p_mlmtpr->species_count && column < linear_count;
+	case kResidualStageFull:
+	default:
+		return true;
+	}
+}
+
+void MTPR_trainer::PrepareLinearSolveColumns()
+{
+	if (p_mlmtpr == nullptr)
+		p_mlmtpr = dynamic_cast<MLMTPR*>(p_mlip);
+	if (p_mlmtpr == nullptr)
+		ERROR("MTPR_trainer::PrepareLinearSolveColumns requires an MLMTPR potential");
+
+	const int full_n = p_mlmtpr->LinearEquationCount();
+	linear_solve_columns_.clear();
+	linear_solve_full_to_active_.assign(full_n, -1);
+	for (int column = 0; column < full_n; ++column) {
+		if (!LinearColumnActiveForStage(column))
+			continue;
+		const int active_index = static_cast<int>(linear_solve_columns_.size());
+		linear_solve_columns_.push_back(column);
+		linear_solve_full_to_active_[column] = active_index;
+	}
+	if (linear_solve_columns_.empty())
+		ERROR("MTPR_trainer::PrepareLinearSolveColumns found no active linear columns");
+}
+
+int MTPR_trainer::LinearSolveColumnCount() const
+{
+	if (linear_solve_columns_.empty()) {
+		if (p_mlmtpr == nullptr)
+			return 0;
+		return p_mlmtpr->LinearEquationCount();
+	}
+	return static_cast<int>(linear_solve_columns_.size());
+}
+
+int MTPR_trainer::LinearSolveActiveIndex(int column) const
+{
+	if (column < 0 || column >= static_cast<int>(linear_solve_full_to_active_.size()))
+		return -1;
+	return linear_solve_full_to_active_[column];
+}
+
+bool MTPR_trainer::LinearSolveColumnActive(int column) const
+{
+	return LinearSolveActiveIndex(column) >= 0;
+}
+
+bool MTPR_trainer::CoeffActiveForStage(int coeff_index) const
+{
+	if (p_mlmtpr == nullptr || !p_mlmtpr->TwoLayerResidualEnabled())
+		return true;
+
+	switch (two_layer_residual_stage) {
+	case kResidualStageE0: {
+		const int base_end = p_mlmtpr->BaseNonlinearCoeffCount();
+		const int e0_begin = p_mlmtpr->TwoLayerResidualE0CoeffOffset();
+		const int e0_end = e0_begin + p_mlmtpr->TwoLayerResidualE0CoeffCount();
+		const int linear_begin = p_mlmtpr->LinearCoeffOffset();
+		const int species_linear_end = linear_begin + p_mlmtpr->species_count;
+		return coeff_index < base_end
+		    || (coeff_index >= e0_begin && coeff_index < e0_end)
+		    || (coeff_index >= linear_begin && coeff_index < species_linear_end);
+	}
+	case kResidualStageE1: {
+		const int gate_radial_begin = p_mlmtpr->TwoLayerGateRadialCoeffOffset();
+		const int gate_radial_end = gate_radial_begin + p_mlmtpr->TwoLayerGateRadialCoeffCount();
+		const int gate_weight_begin = p_mlmtpr->TwoLayerGateWeightOffset();
+		const int gate_weight_end = gate_weight_begin + p_mlmtpr->TwoLayerGateWeightCount();
+		const int linear_begin = p_mlmtpr->LinearCoeffOffset();
+		const int linear_end = linear_begin + p_mlmtpr->LinearCoeffCount();
+		return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
+		    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
+		    || (coeff_index >= linear_begin + p_mlmtpr->species_count && coeff_index < linear_end);
+	}
+	case kResidualStageFull:
+	default:
+		return true;
+	}
+}
+
+double MTPR_trainer::LinearColumnCurrentCoeff(int column) const
+{
+	const int linear_count = p_mlmtpr->LinearCoeffCount();
+	const int linear_begin = p_mlmtpr->LinearCoeffOffset();
+	if (column < linear_count) {
+		if (column < p_mlmtpr->species_count) {
+			return p_mlmtpr->regression_coeffs[column]
+			     + p_mlmtpr->regression_coeffs[linear_begin + column];
+		}
+		const int scalar_index = column - p_mlmtpr->species_count;
+		double value = p_mlmtpr->regression_coeffs[linear_begin + column];
+		if (scalar_index >= 0 && scalar_index < static_cast<int>(p_mlmtpr->linear_mults.size()))
+			value *= p_mlmtpr->linear_mults[scalar_index];
+		return value;
+	}
+
+	const int e0_index = column - linear_count;
+	const int e0_begin = p_mlmtpr->TwoLayerResidualE0CoeffOffset();
+	double value = 0.0;
+	if (e0_index >= 0 && e0_index < p_mlmtpr->TwoLayerResidualE0CoeffCount())
+		value = p_mlmtpr->regression_coeffs[e0_begin + e0_index];
+	if (e0_index >= 0 && e0_index < static_cast<int>(p_mlmtpr->linear_mults.size()))
+		value *= p_mlmtpr->linear_mults[e0_index];
+	return value;
+}
+
+void MTPR_trainer::ProjectLinearRowToActive(const double* full_row,
+                                            int full_stride,
+                                            double& rhs,
+                                            double* active_row)
+{
+	const int active_n = LinearSolveColumnCount();
+	for (int active_index = 0; active_index < active_n; ++active_index) {
+		const int full_column = linear_solve_columns_[active_index];
+		active_row[active_index] = full_row[full_column * full_stride];
+	}
+
+	const int full_n = p_mlmtpr->LinearEquationCount();
+	for (int column = 0; column < full_n; ++column) {
+		if (LinearSolveColumnActive(column))
+			continue;
+		const double value = full_row[column * full_stride];
+		if (value != 0.0)
+			rhs -= value * LinearColumnCurrentCoeff(column);
 	}
 }
 
@@ -324,7 +481,8 @@ void MTPR_trainer::ClearSLAE()
 	if (p_mlmtpr == nullptr)
 		ERROR("MTPR_trainer::ClearSLAE requires an MLMTPR potential");
 
-	int n = p_mlmtpr->alpha_count - 1 + p_mlmtpr->species_count;	// Matrix size
+	PrepareLinearSolveColumns();
+	int n = LinearSolveColumnCount();	// Active matrix size
 
 	if (quad_opt_allocated_n != n || quad_opt_vec == nullptr || quad_opt_matr == nullptr) {
 		delete[] quad_opt_vec;
@@ -356,7 +514,7 @@ MTPR_trainer::~MTPR_trainer()
 
 void MTPR_trainer::SymmetrizeSLAE()
 {
-	int n = p_mlmtpr->alpha_count + p_mlmtpr->species_count - 1;		// Matrix size
+	int n = LinearSolveColumnCount();		// Active matrix size
 
 	for (int i = 0; i < n; i++)
 		for (int j = i + 1; j < n; j++)
@@ -370,7 +528,7 @@ void MTPR_trainer::SolveSLAE()
 
 	double gammareg = 1e-13;
 
-	int n = p_mlmtpr->alpha_count - 1 + p_mlmtpr->species_count;		// Matrix size
+	int n = LinearSolveColumnCount();		// Active matrix size
 
 	for (int i = 0; i < n; i++)
 		quad_opt_matr[i*n + i] += gammareg*(1 + quad_opt_matr[i*n + i]);
@@ -379,6 +537,9 @@ void MTPR_trainer::SolveSLAE()
 	p_mlmtpr->LinCoeff();	/// TO MOVE TO MLMTPR
 
 #ifdef MLIP_INTEL_MKL
+	if (EnvFlagEnabled("SUS2_SH_FORCE_GAUSSIAN_SOLVE")) {
+		SolveSLAEGaussian(n, quad_opt_matr, quad_opt_vec);
+	} else {
 	std::vector<double> matrix_work(quad_opt_matr, quad_opt_matr + n * n);
 	std::vector<double> rhs_work(quad_opt_vec, quad_opt_vec + n);
 	const int solve_threads = SuggestedLinearSolveThreads(n);
@@ -409,12 +570,30 @@ void MTPR_trainer::SolveSLAE()
 	memcpy(quad_opt_vec, rhs_work.data(), n * sizeof(double));
 	if (solve_threads > 1)
 		mkl_set_num_threads_local(previous_threads);
+	}
 #else
 	SolveSLAEGaussian(n, quad_opt_matr, quad_opt_vec);
 #endif
 
-	for (int i = 0; i < n; i++)
-		p_mlmtpr->linear_coeffs[i] = quad_opt_vec[i];
+	const int linear_count = p_mlmtpr->LinearCoeffCount();
+	const int e0_count = p_mlmtpr->TwoLayerResidualE0CoeffCount();
+	if (static_cast<int>(p_mlmtpr->linear_coeffs.size()) != linear_count)
+		p_mlmtpr->linear_coeffs.resize(linear_count);
+	for (int active_index = 0; active_index < n; ++active_index) {
+		const int column = linear_solve_columns_[active_index];
+		if (column < linear_count)
+			p_mlmtpr->linear_coeffs[column] = quad_opt_vec[active_index];
+	}
+	if (e0_count > 0) {
+		if (static_cast<int>(p_mlmtpr->two_layer_residual_e0_coeffs_.size()) != e0_count)
+			p_mlmtpr->two_layer_residual_e0_coeffs_.assign(e0_count, 0.0);
+		for (int active_index = 0; active_index < n; ++active_index) {
+			const int column = linear_solve_columns_[active_index];
+			if (column >= linear_count)
+				p_mlmtpr->two_layer_residual_e0_coeffs_[column - linear_count] =
+					quad_opt_vec[active_index];
+		}
+	}
 	//double e0_ = 0;
 	//for (int i = 0; i < p_mlmtpr->species_count; i++)
 	//{
@@ -429,19 +608,39 @@ void MTPR_trainer::SolveSLAE()
 //	std::default_random_engine generator(rand_device());
 //	std::uniform_real_distribution<> uniform(-0.05, 0.05);
 	for (int i = 0; i < p_mlmtpr->species_count; i++) {
-		if (HasFixedAtomicEnergies()) {
-			p_mlmtpr->linear_coeffs[i] = 1.0;
-			p_mlmtpr->regression_coeffs[i] = fixed_atomic_energies[i] - p_mlmtpr->linear_coeffs[i];
-		} else {
-			p_mlmtpr->regression_coeffs[i] = p_mlmtpr->linear_coeffs[i] - 1.0;
-			p_mlmtpr->linear_coeffs[i] = 1.0;
+		if (LinearSolveColumnActive(i)) {
+			if (HasFixedAtomicEnergies()) {
+				p_mlmtpr->linear_coeffs[i] = 1.0;
+				p_mlmtpr->regression_coeffs[i] = fixed_atomic_energies[i] - p_mlmtpr->linear_coeffs[i];
+			} else {
+				p_mlmtpr->regression_coeffs[i] = p_mlmtpr->linear_coeffs[i] - 1.0;
+				p_mlmtpr->linear_coeffs[i] = 1.0;
+			}
 		}
 	}
-	for (int i = 0; i < n; i++) {
-		p_mlmtpr->regression_coeffs[p_mlmtpr->regression_coeffs.size() - n + i] = p_mlmtpr->linear_coeffs[i];
+	const int e0_offset = p_mlmtpr->TwoLayerResidualE0CoeffOffset();
+	for (int i = 0; i < e0_count; ++i) {
+		if (!LinearSolveColumnActive(linear_count + i))
+			continue;
+		if (i < static_cast<int>(p_mlmtpr->linear_mults.size()))
+			p_mlmtpr->two_layer_residual_e0_coeffs_[i] /=
+				p_mlmtpr->linear_mults[i] * 1.0;
+		p_mlmtpr->regression_coeffs[e0_offset + i] =
+			p_mlmtpr->two_layer_residual_e0_coeffs_[i];
 	}
-	for (int i = (int)p_mlmtpr->regression_coeffs.size() - n + p_mlmtpr->species_count; i < (int)p_mlmtpr->regression_coeffs.size(); i++)
-		p_mlmtpr->regression_coeffs[i] /= p_mlmtpr->linear_mults[i - (p_mlmtpr->regression_coeffs.size() - n + p_mlmtpr->species_count)] * 1.0;
+	const int linear_offset = p_mlmtpr->LinearCoeffOffset();
+	for (int i = 0; i < linear_count; i++) {
+		if (!LinearSolveColumnActive(i))
+			continue;
+		p_mlmtpr->regression_coeffs[linear_offset + i] = p_mlmtpr->linear_coeffs[i];
+	}
+	for (int i = linear_offset + p_mlmtpr->species_count;
+	     i < linear_offset + linear_count; i++) {
+		if (!LinearSolveColumnActive(i - linear_offset))
+			continue;
+		p_mlmtpr->regression_coeffs[i] /= p_mlmtpr->linear_mults[i - (linear_offset + p_mlmtpr->species_count)] * 1.0;
+	}
+	p_mlmtpr->LinCoeff();
 
 
 }
@@ -452,7 +651,8 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 	if (cfg.size() == 0)				// 
 		return;
 
-	int n = p_mlmtpr->alpha_count - 1 + p_mlmtpr->species_count;		// Matrix size
+	const int full_n = p_mlmtpr->LinearEquationCount();		// Full linear component count
+	const int n = LinearSolveColumnCount();		// Active matrix size
       //  {std::cout<<n<<" "<<std::endl;}
      //   {std::cout<<n<<" "<<  (int)p_mlmtpr->energy_cmpnts.size() <<std::endl;}
 	double wgt_energy = wgt_eqtn_energy / cfg.size();
@@ -500,12 +700,15 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 		const double* energy_cmpnts = p_mlmtpr->energy_cmpnts;
 		double energy_rhs = cfg.energy;
 		if (HasFixedAtomicEnergies()) {
-			lin_energy_cmpnts_.assign(p_mlmtpr->energy_cmpnts, p_mlmtpr->energy_cmpnts + n);
+			lin_energy_cmpnts_.assign(p_mlmtpr->energy_cmpnts, p_mlmtpr->energy_cmpnts + full_n);
 			for (int type = 0; type < p_mlmtpr->species_count; ++type)
 				lin_energy_cmpnts_[type] = 0.0;
 			energy_cmpnts = lin_energy_cmpnts_.data();
 			energy_rhs -= FixedAtomicEnergySum(cfg);
 		}
+		lin_active_row_.resize(n);
+		ProjectLinearRowToActive(energy_cmpnts, 1, energy_rhs, lin_active_row_.data());
+		energy_cmpnts = lin_active_row_.data();
 		cblas_dger(CBLAS_ORDER::CblasRowMajor, n, n,
 			alpha,
 			energy_cmpnts, 1,
@@ -521,7 +724,8 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 	{
 		const double alpha = weight * wgt_forces * d / (d + fn*avef);
 			const int force_rows = 3 * cfg.size();
-				const bool use_force_block = (n >= 1000 && n <= 5000 && force_rows > 0);
+			const bool use_force_block = (n >= 1000 && n <= 5000 && force_rows > 0
+				&& !EnvFlagEnabled("SUS2_SH_DISABLE_LINEAR_BLOCK_ACCUM"));
 			if (use_force_block) {
 				lin_force_block_.resize(static_cast<size_t>(force_rows) * n);
 				lin_force_rhs_.resize(force_rows);
@@ -529,8 +733,10 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 				for (int a = 0; a < 3; a++) {
 					const int row = 3 * ind + a;
 					lin_force_rhs_[row] = cfg.force(ind, a);
-					for (int i = 0; i < n; i++)
-						lin_force_block_[static_cast<size_t>(row) * n + i] = p_mlmtpr->forces_cmpnts(ind, i, a);
+					ProjectLinearRowToActive(&p_mlmtpr->forces_cmpnts(ind, 0, a),
+					                         3,
+					                         lin_force_rhs_[row],
+					                         &lin_force_block_[static_cast<size_t>(row) * n]);
 				}
 			}
 			cblas_dgemm(CBLAS_ORDER::CblasRowMajor,
@@ -556,18 +762,24 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 		} else {
 			for (int ind = 0; ind < cfg.size(); ind++)
 			{
+				double force_rhs_sq_sum = 0.0;
 				for (int a = 0; a < 3; a++) {
 					double* force_cmp = &p_mlmtpr->forces_cmpnts(ind, 0, a);
+					double force_rhs = cfg.force(ind, a);
+					lin_projected_row_.resize(n);
+					ProjectLinearRowToActive(force_cmp, 3, force_rhs, lin_projected_row_.data());
+					const double* force_row = lin_projected_row_.data();
+					const int force_stride = 1;
 					cblas_dger(CBLAS_ORDER::CblasRowMajor, n, n,
 						alpha,
-						force_cmp, 3,
-						force_cmp, 3,
+						force_row, force_stride,
+						force_row, force_stride,
 						quad_opt_matr, n);
-					cblas_daxpy(n, alpha * cfg.force(ind, a), force_cmp, 3, quad_opt_vec, 1);
+					cblas_daxpy(n, alpha * force_rhs, force_row, force_stride, quad_opt_vec, 1);
+					force_rhs_sq_sum += force_rhs * force_rhs;
 				}
 
-				for (int a = 0; a < 3; a++)
-					quad_opt_scalar += alpha * cfg.force(ind, a) * cfg.force(ind, a);
+				quad_opt_scalar += alpha * force_rhs_sq_sum;
 
 				quad_opt_eqn_count += 3 * ((weight > 0) ? 1 : ((weight < 0) ? -1 : 0));
 			}
@@ -578,7 +790,8 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 	{
 		const double alpha = weight * wgt_stress;
 			const int stress_rows = 9;
-			const bool use_stress_block = (n >= 1000 && n <= 5000);
+			const bool use_stress_block = (n >= 1000 && n <= 5000
+				&& !EnvFlagEnabled("SUS2_SH_DISABLE_LINEAR_BLOCK_ACCUM"));
 			if (use_stress_block) {
 				lin_stress_block_.resize(static_cast<size_t>(stress_rows) * n);
 				lin_stress_rhs_.resize(stress_rows);
@@ -587,8 +800,10 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 				for (int b = 0; b < 3; b++) {
 					lin_stress_rhs_[row] = cfg.stresses[a][b];
 					double* stress_cmp = &p_mlmtpr->stress_cmpnts[0][a][b];
-					for (int i = 0; i < n; i++)
-						lin_stress_block_[static_cast<size_t>(row) * n + i] = stress_cmp[i * 9];
+					ProjectLinearRowToActive(stress_cmp,
+					                         9,
+					                         lin_stress_rhs_[row],
+					                         &lin_stress_block_[static_cast<size_t>(row) * n]);
 					row++;
 				}
 			cblas_dgemm(CBLAS_ORDER::CblasRowMajor,
@@ -614,13 +829,18 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 			for (int a = 0; a < 3; a++)
 				for (int b = 0; b < 3; b++) {
 					double* stress_cmp = &p_mlmtpr->stress_cmpnts[0][a][b];
+					double stress_rhs = cfg.stresses[a][b];
+					lin_projected_row_.resize(n);
+					ProjectLinearRowToActive(stress_cmp, 9, stress_rhs, lin_projected_row_.data());
+					const double* stress_row = lin_projected_row_.data();
+					const int stress_stride = 1;
 					cblas_dger(CBLAS_ORDER::CblasRowMajor, n, n,
 						alpha,
-						stress_cmp, 9,
-						stress_cmp, 9,
+						stress_row, stress_stride,
+						stress_row, stress_stride,
 						quad_opt_matr, n);
-					cblas_daxpy(n, alpha * cfg.stresses[a][b], stress_cmp, 9, quad_opt_vec, 1);
-					quad_opt_scalar += alpha * cfg.stresses[a][b] * cfg.stresses[a][b];
+					cblas_daxpy(n, alpha * stress_rhs, stress_row, stress_stride, quad_opt_vec, 1);
+					quad_opt_scalar += alpha * stress_rhs * stress_rhs;
 				}
 		}
 
@@ -638,7 +858,7 @@ double* MTPR_trainer::ConstructLinHessian()
 
 	SymmetrizeSLAE();
 
-	int linsize = p_mlmtpr->alpha_scalar_moments + p_mlmtpr->species_count;
+	int linsize = p_mlmtpr->LinearEquationCount();
 
 	//int m = (int)training_set.size();
 	int M = 1;
@@ -675,11 +895,12 @@ void MTPR_trainer::TrainLinear(int prank,
 	for (const Configuration& cfg : training_set)
 		local_atom_count += cfg.size();
 	const std::string prefix = context.empty() ? "TrainLinear" : "TrainLinear[" + context + "]";
-	int n = p_mlmtpr->alpha_count - 1 + p_mlmtpr->species_count;		// Matrix size
+	const int full_n = p_mlmtpr->LinearEquationCount();		// Full linear component count
 
 	p_mlmtpr->Orthogonalize();
 
 	ClearSLAE();
+	int n = LinearSolveColumnCount();		// Active matrix size
 
 	double build_start = 0.0;
 #ifdef MLIP_MPI
@@ -705,6 +926,7 @@ void MTPR_trainer::TrainLinear(int prank,
 		std::cout << "[" << CurrentTimestamp() << "] TrainLinear build done"
 		          << " ctx=" << prefix
 		          << " n=" << n
+		          << " full_n=" << full_n
 		          << " cfg_local=" << local_cfg_count
 		          << " atoms_local=" << local_atom_count
 		          << " eq_local=" << quad_opt_eqn_count
@@ -896,7 +1118,24 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	int n = p_mlip->CoeffCount();
 	double *x = p_mlip->Coeff();
 
-	int nlin = p_mlmtpr->alpha_count + p_mlmtpr->species_count - 1;
+	int nlin = p_mlmtpr->LinearCoeffCount();
+	struct ResidualEvalStageScope {
+		MLMTPR* mtpr;
+		int saved_stage;
+		ResidualEvalStageScope(MLMTPR* mtpr_, int stage)
+			: mtpr(mtpr_),
+			  saved_stage(mtpr_ == nullptr ? 0 : mtpr_->two_layer_residual_eval_stage_)
+		{
+			if (mtpr != nullptr)
+				mtpr->two_layer_residual_eval_stage_ =
+					mtpr->TwoLayerResidualEnabled() ? stage : 0;
+		}
+		~ResidualEvalStageScope()
+		{
+			if (mtpr != nullptr)
+				mtpr->two_layer_residual_eval_stage_ = saved_stage;
+		}
+	} residual_eval_stage_scope(p_mlmtpr, two_layer_residual_stage);
 
 	p_mlmtpr->max_radial.resize(p_mlmtpr->species_count*p_mlmtpr->species_count*p_mlmtpr->radial_func_count);
 
@@ -976,6 +1215,15 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	const int scal_coeff_end = p_mlmtpr->RadialCoeffOffset();
 	std::vector<int> active_coeff_indices;
 	p_mlmtpr->BuildActiveCoeffIndices(active_coeff_indices, freeze_scal_coeffs);
+	if (p_mlmtpr->TwoLayerResidualEnabled()
+	    && two_layer_residual_stage != kResidualStageFull) {
+		std::vector<int> stage_active_coeff_indices;
+		stage_active_coeff_indices.reserve(active_coeff_indices.size());
+		for (int coeff_index : active_coeff_indices)
+			if (CoeffActiveForStage(coeff_index))
+				stage_active_coeff_indices.push_back(coeff_index);
+		active_coeff_indices.swap(stage_active_coeff_indices);
+	}
 	std::vector<int> full_to_active_index(n, -1);
 	for (int active_idx = 0; active_idx < static_cast<int>(active_coeff_indices.size()); ++active_idx)
 		full_to_active_index[active_coeff_indices[active_idx]] = active_idx;
@@ -1018,6 +1266,14 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	};
 	auto full_inv_hess_diag_value = [&](int full_idx) {
 		double value = 1.0;
+		if (p_mlmtpr->TwoLayerResidualEnabled()) {
+			const int e0_begin = p_mlmtpr->TwoLayerResidualE0CoeffOffset();
+			const int e0_end = e0_begin + p_mlmtpr->TwoLayerResidualE0CoeffCount();
+			if (full_idx >= e0_begin && full_idx < e0_end) {
+				const double mult = p_mlmtpr->linear_mults[full_idx - e0_begin];
+				return value / (mult * mult);
+			}
+		}
 		const int linear_moment_begin = n - nlin + p_mlmtpr->species_count;
 		if (full_idx >= linear_moment_begin && full_idx < n) {
 			const double mult = p_mlmtpr->linear_mults[full_idx - linear_moment_begin];
@@ -1058,6 +1314,9 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		return reason.find("stepping in accend direction") != std::string::npos
 			|| reason.find("stepping in ascend direction") != std::string::npos;
 	};
+	auto is_linesearch_stagnation_failure = [](const std::string& reason) {
+		return reason.find("Linesearch stagnated") != std::string::npos;
+	};
 	bool freeze_species_coeffs = do_lin && do_lin_step_limit > 0;
 	auto recover_bfgs_state_from_current_coeffs = [&](const std::string& reason, int step) {
 		reset_bfgs_state();
@@ -1082,6 +1341,16 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		std::cout << "[" << CurrentTimestamp() << "] "
 		          << "unused radial species coefficients excluded from BFGS Hessian"
 		          << " redundant_count=" << redundant_radial_species_count
+		          << " active_count=" << opt_n
+		          << " full_count=" << n << std::endl;
+	}
+	if (prank == 0 && p_mlmtpr->TwoLayerResidualEnabled()
+	    && two_layer_residual_stage != kResidualStageFull) {
+		const char* stage_name =
+			(two_layer_residual_stage == kResidualStageE0) ? "E0" : "E1";
+		std::cout << "[" << CurrentTimestamp() << "] "
+		          << "residual two-layer BFGS stage filter"
+		          << " stage=" << stage_name
 		          << " active_count=" << opt_n
 		          << " full_count=" << n << std::endl;
 	}
@@ -1388,8 +1657,15 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					std::cerr << "[" << CurrentTimestamp() << "] BFGS failed"
 					          << " step=" << num_step
 					          << " reason=" << reason << std::endl;
-				if (!try_recover_bfgs_from_ascent_direction(reason))
+				if (is_linesearch_stagnation_failure(reason) && optimizer_state_is_finite()) {
+					converge = true;
+					if (prank == 0)
+						std::cerr << "[" << CurrentTimestamp() << "] "
+						          << "BFGS converged due to linesearch stagnation"
+						          << " step=" << num_step << std::endl;
+				} else if (!try_recover_bfgs_from_ascent_direction(reason)) {
 					bfgs_status = 1;
+				}
 			}
 			catch (const std::exception& exc) {
 				const std::string reason = exc.what();
@@ -1397,8 +1673,15 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					std::cerr << "[" << CurrentTimestamp() << "] BFGS failed"
 					          << " step=" << num_step
 					          << " reason=" << reason << std::endl;
-				if (!try_recover_bfgs_from_ascent_direction(reason))
+				if (is_linesearch_stagnation_failure(reason) && optimizer_state_is_finite()) {
+					converge = true;
+					if (prank == 0)
+						std::cerr << "[" << CurrentTimestamp() << "] "
+						          << "BFGS converged due to linesearch stagnation"
+						          << " step=" << num_step << std::endl;
+				} else if (!try_recover_bfgs_from_ascent_direction(reason)) {
 					bfgs_status = 1;
+				}
 			}
 			catch (...) {
 				if (prank == 0)

@@ -47,6 +47,18 @@ class RBChebyshev_sss : public SUS2RadialMTPBasis {
   virtual void calc_radial_basis_ders(double val, double scal = 0.1, double s = 0.1, int k = 0) override;
 };
 
+class RBChebyshev_sss_rational : public SUS2RadialMTPBasis {
+ public:
+  RBChebyshev_sss_rational(int size, LAMMPS *lmp) : SUS2RadialMTPBasis(size, lmp) {
+    basis_type = CHEBYSHEV_SSS_RATIONAL;
+  };
+  RBChebyshev_sss_rational(TextFileReader &tfr, LAMMPS *lmp) : SUS2RadialMTPBasis(tfr, lmp) {
+    basis_type = CHEBYSHEV_SSS_RATIONAL;
+  }
+  virtual void calc_radial_basis(double val, double scal = 0.1, double s = 0.1, int k = 0) override;
+  virtual void calc_radial_basis_ders(double val, double scal = 0.1, double s = 0.1, int k = 0) override;
+};
+
 class RBChebyshev_sss_lmp : public SUS2RadialMTPBasis {
  public:
   RBChebyshev_sss_lmp(int size, LAMMPS *lmp) : SUS2RadialMTPBasis(size, lmp) {
@@ -54,6 +66,18 @@ class RBChebyshev_sss_lmp : public SUS2RadialMTPBasis {
   };
   RBChebyshev_sss_lmp(TextFileReader &tfr, LAMMPS *lmp) : SUS2RadialMTPBasis(tfr, lmp) {
     basis_type = CHEBYSHEV_SSS_LMP;
+  }
+  virtual void calc_radial_basis(double val, double scal = 0.1, double s = 0.1, int k = 0) override;
+  virtual void calc_radial_basis_ders(double val, double scal = 0.1, double s = 0.1, int k = 0) override;
+};
+
+class RBChebyshev_sss_rational_lmp : public SUS2RadialMTPBasis {
+ public:
+  RBChebyshev_sss_rational_lmp(int size, LAMMPS *lmp) : SUS2RadialMTPBasis(size, lmp) {
+    basis_type = CHEBYSHEV_SSS_RATIONAL_LMP;
+  };
+  RBChebyshev_sss_rational_lmp(TextFileReader &tfr, LAMMPS *lmp) : SUS2RadialMTPBasis(tfr, lmp) {
+    basis_type = CHEBYSHEV_SSS_RATIONAL_LMP;
   }
   virtual void calc_radial_basis(double val, double scal = 0.1, double s = 0.1, int k = 0) override;
   virtual void calc_radial_basis_ders(double val, double scal = 0.1, double s = 0.1, int k = 0) override;

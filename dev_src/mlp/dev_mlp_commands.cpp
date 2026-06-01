@@ -52,6 +52,31 @@ int ParseDevIntOption(const std::map<std::string, std::string>& opts,
 	return std::stoi(it->second);
 }
 
+int ParseDevResidualStageOption(const std::map<std::string, std::string>& opts)
+{
+	const auto it = opts.find("residual-stage");
+	if (it == opts.end() || it->second.empty() || it->second == "full")
+		return MTPR_trainer::kResidualStageFull;
+	if (it->second == "e0" || it->second == "E0")
+		return MTPR_trainer::kResidualStageE0;
+	if (it->second == "e1" || it->second == "E1")
+		return MTPR_trainer::kResidualStageE1;
+	ERROR("--residual-stage should be one of: full, e0, e1");
+}
+
+const char* DevResidualStageName(int stage)
+{
+	switch (stage) {
+	case MTPR_trainer::kResidualStageE0:
+		return "e0";
+	case MTPR_trainer::kResidualStageE1:
+		return "e1";
+	case MTPR_trainer::kResidualStageFull:
+	default:
+		return "full";
+	}
+}
+
 class DevLossGradientProbe : public MTPR_trainer {
 public:
 	struct Result {
@@ -63,6 +88,9 @@ public:
 		double worst_fd = 0.0;
 		double base_loss = 0.0;
 	};
+
+	int residual_stage = kResidualStageFull;
+	bool stage_active_only = false;
 
 	DevLossGradientProbe(MLMTPR* mtpr,
 	                     double energy_weight,
@@ -77,6 +105,43 @@ public:
 		fixed_atomic_energies.clear();
 	}
 
+	bool CoeffActiveForProbeStage(int coeff_index) const
+	{
+		MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip);
+		if (mtpr == nullptr
+		    || !mtpr->TwoLayerResidualEnabled()
+		    || residual_stage == kResidualStageFull)
+			return true;
+		switch (residual_stage) {
+		case kResidualStageE0: {
+			const int base_end = mtpr->BaseNonlinearCoeffCount();
+			const int e0_begin = mtpr->TwoLayerResidualE0CoeffOffset();
+			const int e0_end = e0_begin + mtpr->TwoLayerResidualE0CoeffCount();
+			const int linear_begin = mtpr->LinearCoeffOffset();
+			const int species_linear_end = linear_begin + mtpr->species_count;
+			return coeff_index < base_end
+			    || (coeff_index >= e0_begin && coeff_index < e0_end)
+			    || (coeff_index >= linear_begin && coeff_index < species_linear_end);
+		}
+		case kResidualStageE1: {
+			const int gate_radial_begin = mtpr->TwoLayerGateRadialCoeffOffset();
+			const int gate_radial_end =
+				gate_radial_begin + mtpr->TwoLayerGateRadialCoeffCount();
+			const int gate_weight_begin = mtpr->TwoLayerGateWeightOffset();
+			const int gate_weight_end =
+				gate_weight_begin + mtpr->TwoLayerGateWeightCount();
+			const int linear_begin = mtpr->LinearCoeffOffset();
+			const int linear_end = linear_begin + mtpr->LinearCoeffCount();
+			return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
+			    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
+			    || (coeff_index >= linear_begin + mtpr->species_count
+			        && coeff_index < linear_end);
+		}
+		default:
+			return true;
+		}
+	}
+
 	Result Check(std::vector<Configuration>& configs,
 	             double displacement,
 	             double abs_tolerance,
@@ -85,15 +150,25 @@ public:
 	             int coeff_end)
 	{
 		Result result;
+		MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip);
+		const int saved_stage =
+			(mtpr == nullptr) ? 0 : mtpr->two_layer_residual_eval_stage_;
+		if (mtpr != nullptr)
+			mtpr->two_layer_residual_eval_stage_ =
+				mtpr->TwoLayerResidualEnabled() ? residual_stage : 0;
 		CalcObjectiveFunctionGrad(configs);
 		std::vector<double> analytic = loss_grad_;
 		result.base_loss = ObjectiveFunction(configs);
+		if (mtpr != nullptr)
+			mtpr->two_layer_residual_eval_stage_ = saved_stage;
 		const int coeff_count = p_mlip->CoeffCount();
 		coeff_begin = std::max(0, coeff_begin);
 		coeff_end = coeff_end <= 0 ? coeff_count : std::min(coeff_end, coeff_count);
 		if (coeff_begin >= coeff_end)
 			ERROR("Invalid coefficient range for loss-gradient check.");
 		for (int i = coeff_begin; i < coeff_end; ++i) {
+			if (stage_active_only && !CoeffActiveForProbeStage(i))
+				continue;
 			const double original = p_mlip->Coeff()[i];
 			p_mlip->Coeff()[i] = original + displacement;
 			const double loss_plus = ObjectiveFunction(configs);
@@ -115,6 +190,8 @@ public:
 				result.worst_fd = fd;
 			}
 		}
+		if (result.checked_count == 0)
+			ERROR("No coefficients selected for loss-gradient check.");
 		if (result.worst_abs_err <= abs_tolerance)
 			result.worst_rel_err = 0.0;
 		return result;
@@ -150,6 +227,23 @@ struct DevLinearComponentsFDResult {
 	double worst_rel_err = 0.0;
 	double worst_analytic = 0.0;
 	double worst_fd = 0.0;
+};
+
+struct DevLinearReadoutResult {
+	int energy_components = 0;
+	int force_components = 0;
+	int worst_energy_config = -1;
+	int worst_force_config = -1;
+	int worst_force_atom = -1;
+	int worst_force_component = -1;
+	double worst_energy_abs_err = 0.0;
+	double worst_energy_rel_err = 0.0;
+	double worst_energy_direct = 0.0;
+	double worst_energy_linear = 0.0;
+	double worst_force_abs_err = 0.0;
+	double worst_force_rel_err = 0.0;
+	double worst_force_direct = 0.0;
+	double worst_force_linear = 0.0;
 };
 
 struct DevGateFastPathResult {
@@ -400,7 +494,7 @@ DevLinearComponentsFDResult CheckLinearComponentsFiniteDifference(
 	int coeff_end)
 {
 	DevLinearComponentsFDResult result;
-	const int coeff_count = mtpr.alpha_count - 1 + mtpr.species_count;
+	const int coeff_count = mtpr.LinearEquationCount();
 	coeff_begin = std::max(0, coeff_begin);
 	coeff_end = coeff_end <= 0 ? coeff_count : std::min(coeff_end, coeff_count);
 	if (coeff_begin >= coeff_end)
@@ -454,6 +548,87 @@ DevLinearComponentsFDResult CheckLinearComponentsFiniteDifference(
 					}
 					++result.checked_components;
 				}
+			}
+		}
+	}
+	return result;
+}
+
+double LinearEquationCurrentCoeff(const MLMTPR& mtpr, int column)
+{
+	const int linear_count = mtpr.LinearCoeffCount();
+	const int linear_begin = mtpr.LinearCoeffOffset();
+	if (column < linear_count) {
+		if (column < mtpr.species_count)
+			return mtpr.regression_coeffs[column]
+			     + mtpr.regression_coeffs[linear_begin + column];
+		const int scalar_index = column - mtpr.species_count;
+		double value = mtpr.regression_coeffs[linear_begin + column];
+		if (scalar_index >= 0 && scalar_index < static_cast<int>(mtpr.linear_mults.size()))
+			value *= mtpr.linear_mults[scalar_index];
+		return value;
+	}
+	const int e0_index = column - linear_count;
+	const int e0_begin = mtpr.TwoLayerResidualE0CoeffOffset();
+	double value = 0.0;
+	if (e0_index >= 0 && e0_index < mtpr.TwoLayerResidualE0CoeffCount())
+		value = mtpr.regression_coeffs[e0_begin + e0_index];
+	if (e0_index >= 0 && e0_index < static_cast<int>(mtpr.linear_mults.size()))
+		value *= mtpr.linear_mults[e0_index];
+	return value;
+}
+
+DevLinearReadoutResult CheckLinearReadout(
+	MLMTPR& mtpr,
+	const std::vector<Configuration>& configs,
+	int max_atoms)
+{
+	DevLinearReadoutResult result;
+	const int coeff_count = mtpr.LinearEquationCount();
+	std::vector<double> coeffs(coeff_count, 0.0);
+	for (int k = 0; k < coeff_count; ++k)
+		coeffs[k] = LinearEquationCurrentCoeff(mtpr, k);
+
+	for (int cfg_index = 0; cfg_index < static_cast<int>(configs.size()); ++cfg_index) {
+		Configuration direct = configs[cfg_index];
+		Neighborhoods neighborhoods(direct, mtpr.CutOff());
+		mtpr.CalcEFS(direct, neighborhoods);
+
+		Configuration component_cfg = configs[cfg_index];
+		mtpr.CalcEFSComponents(component_cfg, neighborhoods, true, false);
+		double linear_energy = 0.0;
+		for (int k = 0; k < coeff_count; ++k)
+			linear_energy += mtpr.energy_cmpnts[k] * coeffs[k];
+		const double old_energy_abs = result.worst_energy_abs_err;
+		UpdateWorst(direct.energy, linear_energy,
+		            result.worst_energy_abs_err,
+		            result.worst_energy_rel_err,
+		            result.worst_energy_direct,
+		            result.worst_energy_linear);
+		if (result.worst_energy_abs_err > old_energy_abs)
+			result.worst_energy_config = cfg_index;
+		++result.energy_components;
+
+		const int atom_limit = max_atoms <= 0
+			? direct.size()
+			: std::min(max_atoms, direct.size());
+		for (int i = 0; i < atom_limit; ++i) {
+			for (int a = 0; a < 3; ++a) {
+				double linear_force = 0.0;
+				for (int k = 0; k < coeff_count; ++k)
+					linear_force += mtpr.forces_cmpnts(i, k, a) * coeffs[k];
+				const double old_force_abs = result.worst_force_abs_err;
+				UpdateWorst(direct.force(i, a), linear_force,
+				            result.worst_force_abs_err,
+				            result.worst_force_rel_err,
+				            result.worst_force_direct,
+				            result.worst_force_linear);
+				if (result.worst_force_abs_err > old_force_abs) {
+					result.worst_force_config = cfg_index;
+					result.worst_force_atom = i;
+					result.worst_force_component = a;
+				}
+				++result.force_components;
 			}
 		}
 	}
@@ -576,7 +751,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-loss-gradient-dev",
 		"checks MTPR loss gradient against finite differences",
-		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0\n"
+		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-loss-gradient-dev: model and cfg arguments are required\n";
@@ -607,12 +782,16 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-4);
 		const int coeff_start = ParseDevIntOption(opts, "coeff-start", 0);
 		const int coeff_end = ParseDevIntOption(opts, "coeff-end", 0);
+		const int residual_stage = ParseDevResidualStageOption(opts);
+		const bool stage_active_only = opts["stage-active-only"] != "";
 		if (displacement <= 0.0)
 			ERROR("--displacement should be positive.");
 
 		DevLossGradientProbe probe(&mtpr, energy_weight, force_weight, stress_weight);
 		probe.radial_smooth_regularization = radial_smooth;
 		probe.radial_smooth_grid = radial_smooth_grid;
+		probe.residual_stage = residual_stage;
+		probe.stage_active_only = stage_active_only;
 		DevLossGradientProbe::Result result =
 			probe.Check(configs, displacement, abs_tolerance, rel_tolerance,
 			            coeff_start, coeff_end);
@@ -626,6 +805,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			          << " gate_begin=" << mtpr.TwoLayerGateWeightOffset()
 			          << " gate_end=" << mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount()
 			          << " linear_begin=" << mtpr.LinearCoeffOffset()
+			          << " residual_stage=" << DevResidualStageName(residual_stage)
+			          << " stage_active_only=" << (stage_active_only ? 1 : 0)
 			          << " base_loss=" << result.base_loss
 			          << " worst_index=" << result.worst_index
 			          << " worst_group=" << DescribeMTPRCoeffIndex(mtpr, result.worst_index)
@@ -740,7 +921,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		if (mpi_rank == 0) {
 			std::cout << std::setprecision(12)
 			          << "checked_components=" << result.checked_components
-			          << " coeff_count=" << (mtpr.alpha_count - 1 + mtpr.species_count)
+			          << " coeff_count=" << mtpr.LinearEquationCount()
 			          << " worst_config=" << result.worst_config
 			          << " worst_atom=" << result.worst_atom
 			          << " worst_component=" << result.worst_component
@@ -753,6 +934,64 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		}
 		if (result.worst_abs_err > abs_tolerance
 		    && result.worst_rel_err > rel_tolerance)
+			exit(1);
+	} END_COMMAND;
+
+	BEGIN_COMMAND("check-linear-readout-dev",
+		"checks direct E/F prediction against the current linear component readout",
+		"mlp-sus2 check-linear-readout-dev model.mtp cfg --max-configs=1 --max-atoms=1 --abs-tolerance=1e-8 --rel-tolerance=1e-8\n"
+	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 check-linear-readout-dev: model and cfg arguments are required\n";
+			return 1;
+		}
+		MLMTPR mtpr(args[0]);
+		std::ifstream ifs(args[1], std::ios::binary);
+		if (!ifs)
+			ERROR("Cannot open configuration file for linear-readout check.");
+
+		const int max_configs = ParseDevIntOption(opts, "max-configs", 1);
+		std::vector<Configuration> configs;
+		Configuration cfg;
+		while ((max_configs <= 0 || static_cast<int>(configs.size()) < max_configs)
+		       && cfg.Load(ifs)) {
+			configs.push_back(cfg);
+		}
+		if (configs.empty())
+			ERROR("No configurations loaded for linear-readout check.");
+
+		const int max_atoms = ParseDevIntOption(opts, "max-atoms", 1);
+		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-8);
+		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-8);
+
+		const DevLinearReadoutResult result =
+			CheckLinearReadout(mtpr, configs, max_atoms);
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "energy_components=" << result.energy_components
+			          << " force_components=" << result.force_components
+			          << " coeff_count=" << mtpr.LinearEquationCount()
+			          << " energy_worst_config=" << result.worst_energy_config
+			          << " energy_direct=" << result.worst_energy_direct
+			          << " energy_linear=" << result.worst_energy_linear
+			          << " energy_abs_err=" << result.worst_energy_abs_err
+			          << " energy_rel_err=" << result.worst_energy_rel_err
+			          << " force_worst_config=" << result.worst_force_config
+			          << " force_worst_atom=" << result.worst_force_atom
+			          << " force_worst_component=" << result.worst_force_component
+			          << " force_direct=" << result.worst_force_direct
+			          << " force_linear=" << result.worst_force_linear
+			          << " force_abs_err=" << result.worst_force_abs_err
+			          << " force_rel_err=" << result.worst_force_rel_err
+			          << std::endl;
+		}
+		const bool energy_failed =
+			result.worst_energy_abs_err > abs_tolerance
+			&& result.worst_energy_rel_err > rel_tolerance;
+		const bool force_failed =
+			result.worst_force_abs_err > abs_tolerance
+			&& result.worst_force_rel_err > rel_tolerance;
+		if (energy_failed || force_failed)
 			exit(1);
 	} END_COMMAND;
 
@@ -829,7 +1068,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
 			"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
 			"         --two-layer-gate, --two-layer-gate-body-order=<int> (default=3),\n"
-			"         --two-layer-gate-shared-radial\n"
+			"         --two-layer-gate-shared-radial, --two-layer-residual\n"
 		) {
 		if (args.size() != 1) {
 			std::cout << "mlp-sus2 init-sh: 1 output .mtp argument is required\n";

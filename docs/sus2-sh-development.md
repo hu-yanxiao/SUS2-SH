@@ -364,6 +364,224 @@ the pre-directed-cache final-cache profile, the cumulative accepted
 two-layer-only optimizations reduce the gradient-side total by about 55%
 (`242634 -> 108769 us`).
 
+## Residual staged two-layer mode
+
+The developer branch also has an opt-in residual two-layer variant for staged
+training:
+
+```text
+E = E0 + E1
+E0_i = sum_s c_s^0 Phi_s^(0)(i) + one-body_i
+g_j = b + sum_q w_q Phi_q^(0)(j)
+B_i^(1)(k,l,m) = sum_j g_j R_{k,l}(r_ij) Y_lm(rhat_ij)
+E1_i = sum_s c_s^1 Phi_s^(1)(i)
+```
+
+This mode is initialized with `--two-layer-residual` together with
+`--two-layer-gate`. It uses direct neighbor scaling metadata:
+
+```text
+two_layer_residual_enabled = true
+two_layer_gate_scale_mode = direct
+two_layer_gate_bias = 1
+```
+
+So the final layer does not use the old literal `1 + f(n_j)` expression.
+Instead, the scale is the direct scalar `g_j`; the fixed bias starts at 1 so
+the B-stage residual linear solve has nonzero E1 columns while the trainable
+inner weights `w_q` still initialize to zero. Old `--two-layer-gate` models
+without residual metadata keep the legacy `1+f` scale and old coefficient
+layout.
+
+Perception radius:
+
+- `E0` is an ordinary one-cutoff SH readout from unmodulated moments.
+- `E1` is effectively two-cutoff because the outer site energy around center
+  `i` uses `g_j`, and `g_j` depends on the one-cutoff environment around
+  neighbor `j`.
+- One-body terms are included only in `E0`.
+
+The staged training CLI is:
+
+```bash
+--two-layer-residual-staged \
+--stage-a-steps=<int> \
+--stage-b-steps=<int> \
+--stage-c-steps=<int>
+```
+
+Stage A optimizes the E0 nonlinear block, E0 scalar coefficients, and species
+one-body coefficients. Stage B freezes E0 and optimizes the E1 residual block:
+gate shared-radial coefficients, gate weights, and final scalar coefficients,
+excluding species one-body columns. Stage C releases all active residual
+parameters. A and B each begin with one linear solve projected onto that
+stage's active block; inactive columns are subtracted into the right-hand side
+using the current frozen coefficients, so the B-stage linear solve is a true
+residual solve rather than an independent refit. During the subsequent BFGS
+part of A/B/C, staged training disables the ordinary internal `do-lin` and
+`do-lin-rescale` refreshes. This avoids repeatedly re-solving or re-scaling
+the same block inside the stage and ensures C does not perform a simultaneous
+full linear solve.
+
+Implementation notes:
+
+- The residual coefficient layout is
+  `[base nonlinear][gate radial][gate weights][E0 scalar coeffs][E1 linear tail]`.
+- `LinearEquationCount()` is larger than the saved E1 linear tail because the
+  staged normal equations include extra E0 scalar columns.
+- `CalcSHResidualSiteEnergyDers()` evaluates E0 by temporarily using the
+  ordinary SH path with cached residual E0 coefficients, then evaluates E1 with
+  the direct gated final moments. The temporary non-residual recursion remaps
+  component-gradient offsets back to the residual layout; this is required
+  because disabling residual mode changes `LinearCoeffOffset()`.
+- In residual mode, scalar readouts are not multiplied by the center species
+  linear coefficient. The temporary ordinary SH readout therefore sets the
+  center-linear gauge to 1 for both E0 and E1 scalar paths, then adds the E0
+  one-body term explicitly. This keeps direct E/F prediction, coefficient
+  gradients, and staged linear columns on the same model even if a test model
+  has non-unit `species_coeffs`.
+- The gate-chain force/stress terms are still attached only to E1, since E0
+  has no second-layer dependency.
+- In E1-only stage B, the residual gradient wrapper skips outer base
+  radial/type/scaling gradient accumulation because those coefficients are not
+  active in that stage. The gate adjoint, gate radial, gate weights, and E1
+  scalar-linear gradients are still accumulated and are covered by a staged
+  active-only loss-gradient finite-difference check.
+- Legacy two-layer tests are intentionally left unchanged and still exercise
+  the old `1+f` mode.
+
+Server validation used:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+```
+
+Build command:
+
+```bash
+make mlp -j8 USE_MPI=1 CXX_EXE=mpicxx CC_EXE=mpicc FC_EXE=true \
+  CXXFLAGS='-std=c++11 -O2 -DMLIP_DEV -DMLIP_MPI' \
+  CPPFLAGS='-O2 -I./cblas' TARGET_PRERQ=
+```
+
+Focused residual and legacy checks run on the server:
+
+```bash
+bash dev_test/sh_two_layer_residual_init_check.sh
+bash dev_test/sh_two_layer_residual_forward_check.sh
+bash dev_test/sh_two_layer_residual_staged_train_check.sh
+bash dev_test/sh_two_layer_residual_force_fd_check.sh
+bash dev_test/sh_two_layer_residual_loss_gradient_check.sh
+bash dev_test/sh_two_layer_residual_readout_check.sh
+bash dev_test/sh_two_layer_gate_zero_compat_check.sh
+bash dev_test/sh_two_layer_gate_init_check.sh
+```
+
+Additional legacy gate checks were also run:
+
+```bash
+bash dev_test/sh_two_layer_gate_forward_check.sh
+bash dev_test/sh_two_layer_gate_force_fd_check.sh
+bash dev_test/sh_two_layer_gate_train_weight_check.sh
+bash dev_test/sh_two_layer_gate_loss_gradient_check.sh
+bash dev_test/sh_two_layer_gate_shared_radial_check.sh
+```
+
+The residual direct-readout check with non-unit species coefficients reported
+`energy_abs_err=1.42e-14` and force absolute error below `1e-18` between
+direct E/F prediction and the current linear component readout. The residual
+finite-difference force checker passed with max absolute error below
+`1e-6 eV/A`. The residual loss-gradient checker passed in both full residual
+mode and E1-stage active-only mode; the E1-stage check covered 66 active
+coefficients and reported no failing coefficient block.
+
+The 500-configuration, 100-step comparison used the first 500 structures from
+`/work/phy-weigw/hyx/200w/5.31-new-44421/` and ran with 120 MPI ranks. The
+plain reference run is:
+
+```text
+/work/phy-weigw/hyx/200w/5.31-new-44421/codex_residual_staged_500x100_stagecompact
+plain_100.log
+```
+
+Plain run result:
+
+```text
+runtime_sec=316
+Energy MAE = 4.746 meV/atom
+Energy RMSE = 5.797 meV/atom
+Force MAE  = 179.118 meV/A
+Force RMSE = 251.379 meV/A
+```
+
+Important timing note: this plain run did not use `--skip-preinit`. Its log has
+a pre-training block with 75 BFGS steps (`step=0..74`) ending at
+`Pre-training ended`, then a separate formal block with 100 BFGS steps
+(`step=0..99`). Therefore `runtime_sec=316` is the total wall time for
+pre-training plus formal 100 steps, while the reported final MAE/RMSE values
+are from the formal block's final step.
+
+The residual staged run is:
+
+```text
+/work/phy-weigw/hyx/200w/5.31-new-44421/codex_residual_staged_500x100_stagefast
+job id: 3741968
+residual_100.log
+```
+
+It uses A/B/C = `30/30/40` steps and the same final SH topology plus:
+
+```text
+--two-layer-gate --two-layer-gate-body-order=3 \
+--two-layer-gate-shared-radial --two-layer-residual \
+--two-layer-residual-staged --stage-a-steps=30 \
+--stage-b-steps=30 --stage-c-steps=40
+```
+
+Residual 100-step result after staged-speed fixes:
+
+```text
+runtime_sec=313
+Energy MAE = 5.869 meV/atom
+Energy RMSE = 7.623 meV/atom
+Force MAE  = 251.120 meV/A
+Force RMSE = 348.672 meV/A
+```
+
+The log shows exactly two linear solves in the staged residual run:
+
+```text
+TrainLinear[residual stage A E0 solve] n=1008 full_n=2012
+TrainLinear[residual stage B E1 residual solve] n=1004 full_n=2012
+```
+
+There are no `rescale bracket`, `rescale fine trial`, or `bfgs refresh step 0`
+linear solves inside A/B, and no `TrainLinear` after stage C starts. The older
+correctness-first residual run under
+`codex_residual_staged_500x100_readoutfix` took `runtime_sec=995` with force
+MAE `281.395 meV/A`; the current staged-speed run is therefore about `3.18x`
+faster and has lower force error for this short 100-step comparison. The plain
+SH reference remains more accurate at 100 formal steps. Do not use the `316s`
+plain runtime as a pure formal-100-step speed baseline, because it includes the
+75-step pre-training block; a fair pure-speed comparison should rerun the plain
+case with `--skip-preinit` or report the two plain blocks separately.
+
+Two-layer-only optimization notes from the read-only performance audit:
+
+- The next highest-value C-stage path is reusing the two-layer edge/gate cache
+  from forward loss evaluation when immediately accumulating gradients for the
+  same configuration, neighborhoods, and coefficients.
+- Residual full C still allocates and clears separate full-size E0 and E1
+  temporary gradient vectors per site. A lower-risk improvement is to reuse
+  member scratch buffers; a more invasive improvement is direct residual
+  scatter into the final coefficient layout.
+- The staged active-index normal equation can still be improved by generating
+  only active residual rows while preserving the inactive frozen contribution
+  as an aggregate RHS subtraction.
+- Any future component-generation optimization must still subtract frozen
+  inactive contributions into the RHS; otherwise B-stage residual solves would
+  drop the fixed E0 model.
+
 ## Training model
 
 The training `.mtp` keeps the ordinary SUS2 radial/scaling/linear parameters and adds `potential_tag = SUS2-SH`. For SH models, `alpha_index_basic` stores `{k, l, m}`. Internally this is converted to `mu = k * (l_max + 1) + l`, so the radial channel is still compatible with the SUS2 coefficient layout.

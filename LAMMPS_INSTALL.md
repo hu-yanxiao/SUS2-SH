@@ -90,4 +90,4 @@ Current validated binaries:
 /work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex/bin/lmp.sus2_sh_cpu_avx2
 ```
 
-Use `RBChebyshev_sss_lmp` to enable the radial table path. The default `tabstep` is `1.0e-4 A`.
+Use `RBChebyshev_sss_lmp` or `RBChebyshev_sss_rational_lmp` to enable the radial table path. The default `tabstep` is `1.0e-4 A`.

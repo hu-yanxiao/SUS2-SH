@@ -153,6 +153,7 @@ The current table path supports:
 
 ```text
 RBChebyshev_sss_lmp
+RBChebyshev_sss_rational_lmp
 RBLaguerre_log1p_lmp
 RBLaguerre_log1p_pos_lmp
 RBJacobi_sss_lmp

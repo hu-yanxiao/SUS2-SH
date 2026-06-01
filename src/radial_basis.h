@@ -37,6 +37,7 @@ public:
 	virtual ~AnyRadialBasis() {};
 	
 	virtual void RB_Calc(double r,double scal=0.1, double s= 0.1,int k=0) = 0;	// calculates values and derivatives
+	virtual void RB_CalcValsOnly(double r,double scal=0.1, double s= 0.1,int k=0); // calculates values only when available
 };
 
 
@@ -147,6 +148,24 @@ public:
                 : AnyRadialBasis(ifs) {};
 
         void RB_Calc(double r,double scal=0.1, double s= 0.1,int k=0) override;
+        void RB_CalcValsOnly(double r,double scal=0.1, double s= 0.1,int k=0) override;
+};
+
+class RadialBasis_Chebyshev_sss_rational : public AnyRadialBasis
+{
+public:
+        std::string GetRBTypeString() override
+        {
+                return "RBChebyshev_sss_rational";
+        }
+
+        RadialBasis_Chebyshev_sss_rational(double _min_dist, double _max_dist, int _size)
+                : AnyRadialBasis(_min_dist, _max_dist, _size) {};
+        RadialBasis_Chebyshev_sss_rational(std::ifstream& ifs)
+                : AnyRadialBasis(ifs) {};
+
+        void RB_Calc(double r,double scal=0.1, double s= 0.1,int k=0) override;
+        void RB_CalcValsOnly(double r,double scal=0.1, double s= 0.1,int k=0) override;
 };
 
 
@@ -182,6 +201,22 @@ public:
 	RadialBasis_Chebyshev_sss_lmp(double _min_dist, double _max_dist, int _size)
 		: AnyRadialBasis(_min_dist, _max_dist, _size) {};
 	RadialBasis_Chebyshev_sss_lmp(std::ifstream& ifs)
+		: AnyRadialBasis(ifs) {};
+
+	void RB_Calc(double r,double scal=0.1, double s= 0.1,int k=0) override;
+};
+
+class RadialBasis_Chebyshev_sss_rational_lmp : public AnyRadialBasis
+{
+public:
+	std::string GetRBTypeString() override
+	{
+		return "RBChebyshev_sss_rational_lmp";
+	}
+
+	RadialBasis_Chebyshev_sss_rational_lmp(double _min_dist, double _max_dist, int _size)
+		: AnyRadialBasis(_min_dist, _max_dist, _size) {};
+	RadialBasis_Chebyshev_sss_rational_lmp(std::ifstream& ifs)
 		: AnyRadialBasis(ifs) {};
 
 	void RB_Calc(double r,double scal=0.1, double s= 0.1,int k=0) override;

@@ -118,6 +118,7 @@ void env_gate_activation(double r,
 bool uses_preinterpolation_table(int basis_type)
 {
   return basis_type == SUS2RadialMTPBasis::CHEBYSHEV_SSS_LMP ||
+         basis_type == SUS2RadialMTPBasis::CHEBYSHEV_SSS_RATIONAL_LMP ||
          basis_type == SUS2RadialMTPBasis::LAGUERRE_LOG1P_LMP ||
          basis_type == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS_LMP ||
          basis_type == SUS2RadialMTPBasis::JACOBI_SSS_LMP;
@@ -1090,15 +1091,23 @@ access to the buffer size that is not provided in PFR.
       radial_basis = new RBChebyshev_ss(tfr, lmp);
       radial_basis_type_index = SUS2RadialMTPBasis::CHEBYSHEV_SS;
       radial_basis->scaling = scaling;
-    } else if (radial_basis_type == "RBChebyshev_sss") {
-      radial_basis = new RBChebyshev_sss(tfr, lmp);
-      radial_basis_type_index = SUS2RadialMTPBasis::CHEBYSHEV_SSS;
-      radial_basis->scaling = scaling;
-    } else if (radial_basis_type == "RBChebyshev_sss_lmp") {
-      radial_basis = new RBChebyshev_sss_lmp(tfr, lmp);
-      radial_basis_type_index = SUS2RadialMTPBasis::CHEBYSHEV_SSS_LMP;
-      radial_basis->scaling = scaling;
-    } else if (radial_basis_type == "RBLaguerre_log1p") {
+	    } else if (radial_basis_type == "RBChebyshev_sss") {
+	      radial_basis = new RBChebyshev_sss(tfr, lmp);
+	      radial_basis_type_index = SUS2RadialMTPBasis::CHEBYSHEV_SSS;
+	      radial_basis->scaling = scaling;
+	    } else if (radial_basis_type == "RBChebyshev_sss_rational") {
+	      radial_basis = new RBChebyshev_sss_rational(tfr, lmp);
+	      radial_basis_type_index = SUS2RadialMTPBasis::CHEBYSHEV_SSS_RATIONAL;
+	      radial_basis->scaling = scaling;
+	    } else if (radial_basis_type == "RBChebyshev_sss_lmp") {
+	      radial_basis = new RBChebyshev_sss_lmp(tfr, lmp);
+	      radial_basis_type_index = SUS2RadialMTPBasis::CHEBYSHEV_SSS_LMP;
+	      radial_basis->scaling = scaling;
+	    } else if (radial_basis_type == "RBChebyshev_sss_rational_lmp") {
+	      radial_basis = new RBChebyshev_sss_rational_lmp(tfr, lmp);
+	      radial_basis_type_index = SUS2RadialMTPBasis::CHEBYSHEV_SSS_RATIONAL_LMP;
+	      radial_basis->scaling = scaling;
+	    } else if (radial_basis_type == "RBLaguerre_log1p") {
       radial_basis = new RBLaguerre_log1p(tfr, lmp);
       radial_basis_type_index = SUS2RadialMTPBasis::LAGUERRE_LOG1P;
       radial_basis->scaling = scaling;
@@ -1876,13 +1885,19 @@ access to the buffer size that is not provided in PFR.
     } else if (radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SS) {
       radial_basis = new RBChebyshev_ss(radial_basis_size, lmp);
       radial_basis->scaling = scaling;
-    } else if (radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS) {
-      radial_basis = new RBChebyshev_sss(radial_basis_size, lmp);
-      radial_basis->scaling = scaling;
-    } else if (radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS_LMP) {
-      radial_basis = new RBChebyshev_sss_lmp(radial_basis_size, lmp);
-      radial_basis->scaling = scaling;
-    } else if (radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P) {
+	    } else if (radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS) {
+	      radial_basis = new RBChebyshev_sss(radial_basis_size, lmp);
+	      radial_basis->scaling = scaling;
+	    } else if (radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS_RATIONAL) {
+	      radial_basis = new RBChebyshev_sss_rational(radial_basis_size, lmp);
+	      radial_basis->scaling = scaling;
+	    } else if (radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS_LMP) {
+	      radial_basis = new RBChebyshev_sss_lmp(radial_basis_size, lmp);
+	      radial_basis->scaling = scaling;
+	    } else if (radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS_RATIONAL_LMP) {
+	      radial_basis = new RBChebyshev_sss_rational_lmp(radial_basis_size, lmp);
+	      radial_basis->scaling = scaling;
+	    } else if (radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P) {
       radial_basis = new RBLaguerre_log1p(radial_basis_size, lmp);
       radial_basis->scaling = scaling;
     } else if (radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_LMP) {

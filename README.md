@@ -65,6 +65,10 @@ bin/mlp-sus2 init-sh untrained_sus2sh_l3k3_b5_l3322.mtp \
   --radial-basis-type=RBChebyshev_sss
 ```
 
+`RBChebyshev_sss_rational` is also supported. It keeps the same Chebyshev
+recurrence and scaling parameters as `RBChebyshev_sss`, but maps
+`x = scal * (r - s) / 2` by `x / sqrt(1 + x*x)` instead of `tanh(x)`.
+
 For 6body models, pass five body-specific l cutoffs. The current 6body
 generator uses the rank-diagonal standard-tree rule:
 
@@ -244,7 +248,8 @@ layer, and the Intel CPU make targets used by the maintained server build. See
 `interfaces/lammps/README.md` for the full CPU/GPU build workflow.
 
 **Note**: Setting `radial_basis_type = RBChebyshev_sss_lmp`,
-`RBLaguerre_log1p_lmp`, `RBLaguerre_log1p_pos_lmp`, or `RBJacobi_sss_lmp`
+`RBChebyshev_sss_rational_lmp`, `RBLaguerre_log1p_lmp`,
+`RBLaguerre_log1p_pos_lmp`, or `RBJacobi_sss_lmp`
 enables the list-based treatment of radial functions in the LAMMPS interface.
 The optional `tabstep` keyword controls the table spacing, with a default of
 `1.0e-4` Angstrom. The preinterpolation table is built only for species pairs

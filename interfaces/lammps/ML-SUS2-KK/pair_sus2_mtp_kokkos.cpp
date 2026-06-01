@@ -642,6 +642,7 @@ void PairSUS2MTPKokkos<DeviceType>::build_preinterpolation_table()
 {
   // Check if preinterpolation table should be used
   if (radial_basis_type_index != SUS2RadialMTPBasis::CHEBYSHEV_SSS_LMP &&
+      radial_basis_type_index != SUS2RadialMTPBasis::CHEBYSHEV_SSS_RATIONAL_LMP &&
       radial_basis_type_index != SUS2RadialMTPBasis::LAGUERRE_LOG1P_LMP &&
       radial_basis_type_index != SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS_LMP &&
       radial_basis_type_index != SUS2RadialMTPBasis::JACOBI_SSS_LMP) {
@@ -884,10 +885,14 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_basic_mu_
     }
   } else {
     const F_FLOAT transformed = scal * (dist - s_param) / 2.0;
-    const F_FLOAT ksi = Kokkos::tanh(transformed);
+    const bool use_rational =
+        radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS_RATIONAL ||
+        radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS_RATIONAL_LMP;
+    const F_FLOAT inv = use_rational ? 1.0 / Kokkos::sqrt(1.0 + transformed * transformed) : 0.0;
+    const F_FLOAT ksi = use_rational ? transformed * inv : Kokkos::tanh(transformed);
     const F_FLOAT Dr = dist - max_cutoff;
     const F_FLOAT cutoff = Dr * Dr;
-    const F_FLOAT der_ksi = 1.0 - ksi * ksi;
+    const F_FLOAT der_ksi = use_rational ? inv * inv * inv : 1.0 - ksi * ksi;
     const F_FLOAT mult = der_ksi * scal / 2.0;
 
     F_FLOAT basis_prev2 = scaling * cutoff;

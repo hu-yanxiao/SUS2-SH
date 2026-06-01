@@ -655,6 +655,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const bool two_layer_gate = HasOpt(opts, "two-layer-gate");
 	const bool two_layer_gate_shared_radial =
 		HasOpt(opts, "two-layer-gate-shared-radial");
+	const bool two_layer_residual = HasOpt(opts, "two-layer-residual");
 	const int two_layer_gate_body_order = IntOpt(opts, "two-layer-gate-body-order", 3);
 	const bool write_scalar_info = HasOpt(opts, "write-sh-scalar-info") || two_layer_gate;
 	std::ostringstream default_name;
@@ -672,6 +673,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-body-order should be between 2 and --body-order.");
 	if (two_layer_gate_shared_radial && !two_layer_gate)
 		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate.");
+	if (two_layer_residual && !two_layer_gate)
+		ERROR("--two-layer-residual requires --two-layer-gate.");
 	if (!IsSupportedSHRadialBasis(rbasis))
 		ERROR("init-sh currently writes RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, or RBJacobi_sss models.");
 	if (rbasis == "RBJacobi_sss" && kmax > 6)
@@ -763,6 +766,11 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ofs << "two_layer_gate_enabled = true\n";
 		ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
 		ofs << "two_layer_gate_include_one_body = false\n";
+		if (two_layer_residual) {
+			ofs << "two_layer_residual_enabled = true\n";
+			ofs << "two_layer_gate_scale_mode = direct\n";
+			ofs << "two_layer_gate_bias = 1.0\n";
+		}
 		if (two_layer_gate_shared_radial) {
 			const int gate_radial_count = kmax * (lmax + 1) * rb_size;
 			ofs << "two_layer_gate_radial_mode = shared-radial\n";
@@ -790,5 +798,16 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << 0.0;
 		}
 		ofs << "}\n";
+		if (two_layer_residual) {
+			ofs << "two_layer_residual_e0_coeff_count = "
+			    << graph.scalars_.size() << "\n";
+			ofs << "two_layer_residual_e0_coeffs = {";
+			for (size_t i = 0; i < graph.scalars_.size(); ++i) {
+				if (i != 0)
+					ofs << ", ";
+				ofs << 0.0;
+			}
+			ofs << "}\n";
+		}
 	}
 }
