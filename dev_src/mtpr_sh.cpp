@@ -2313,7 +2313,8 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 
 void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
                                          std::vector<double>& out_grad_accumulator,
-                                         const std::vector<double>& neighbor_gate_tangent)
+                                         const std::vector<double>& neighbor_gate_tangent,
+                                         int cache_atom_index)
 {
 	if (SHUsesPrecomputedLmpTable(p_RadialBasis))
 		ERROR("SUS2-SH coefficient gradients require direct radial basis evaluation.");
@@ -2329,7 +2330,6 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 	if (!has_tangent)
 		return;
 
-	CalcSHMomentValuesOnly(nbh);
 	out_grad_accumulator.resize(CoeffCount());
 
 	const int C = species_count;
@@ -2343,45 +2343,86 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int radial_val_stride = eval_block_count * R;
 
-	site_energy_ders_wrt_moments_.resize(alpha_moments_count);
-	std::fill(site_energy_ders_wrt_moments_.begin(), site_energy_ders_wrt_moments_.end(), 0.0);
+	bool loaded_final_cache = false;
+	if (cache_atom_index >= 0 && alpha_moments_count > 0) {
+		const size_t offset =
+			static_cast<size_t>(cache_atom_index) * alpha_moments_count;
+		if (offset + alpha_moments_count <=
+		    two_layer_final_moment_values_cache_.size()
+		    && offset + alpha_moments_count <=
+		    two_layer_final_moment_ders_cache_.size()) {
+			std::copy(two_layer_final_moment_values_cache_.data() + offset,
+			          two_layer_final_moment_values_cache_.data() + offset
+			              + alpha_moments_count,
+			          moment_vals);
+			site_energy_ders_wrt_moments_.assign(
+				two_layer_final_moment_ders_cache_.data() + offset,
+				two_layer_final_moment_ders_cache_.data() + offset
+				    + alpha_moments_count);
+			loaded_final_cache = true;
+		}
+	}
+	if (!loaded_final_cache) {
+		CalcSHMomentValuesOnly(nbh);
+		site_energy_ders_wrt_moments_.resize(alpha_moments_count);
+		std::fill(site_energy_ders_wrt_moments_.begin(),
+		          site_energy_ders_wrt_moments_.end(), 0.0);
+		for (int i = 0; i < alpha_scalar_moments; ++i) {
+			const int node = alpha_moment_mapping[i];
+			const double moment_coeff = linear_coeffs[species_count + i] * linear_mults[i];
+			site_energy_ders_wrt_moments_[node] += moment_coeff;
+		}
+		if (UseSHProductRows()) {
+			BackpropSHProductRows(site_energy_ders_wrt_moments_);
+		} else {
+			for (int p = static_cast<int>(sh_products_.size()) - 1; p >= 0; --p) {
+				const SHProduct& product = sh_products_[p];
+				const double adj_target = site_energy_ders_wrt_moments_[product.target];
+				if (adj_target == 0.0)
+					continue;
+				site_energy_ders_wrt_moments_[product.left] +=
+					product.coeff * moment_vals[product.right] * adj_target;
+				site_energy_ders_wrt_moments_[product.right] +=
+					product.coeff * moment_vals[product.left] * adj_target;
+			}
+		}
+	}
 	grad_dloss_dsenders_.assign(alpha_moments_count, 0.0);
 	grad_dloss_dmom_.assign(alpha_moments_count, 0.0);
 
-	for (int i = 0; i < alpha_scalar_moments; ++i) {
-		const int node = alpha_moment_mapping[i];
-		const double moment_coeff = linear_coeffs[species_count + i] * linear_mults[i];
-		site_energy_ders_wrt_moments_[node] += moment_coeff;
-	}
-	if (UseSHProductRows()) {
-		BackpropSHProductRows(site_energy_ders_wrt_moments_);
-	} else {
-		for (int p = static_cast<int>(sh_products_.size()) - 1; p >= 0; --p) {
-			const SHProduct& product = sh_products_[p];
-			const double adj_target = site_energy_ders_wrt_moments_[product.target];
-			if (adj_target == 0.0)
-				continue;
-			site_energy_ders_wrt_moments_[product.left] +=
-				product.coeff * moment_vals[product.right] * adj_target;
-			site_energy_ders_wrt_moments_[product.right] +=
-				product.coeff * moment_vals[product.left] * adj_target;
-		}
-	}
-
-	double sh_values[kMaxSHComponents];
-	double sh_ders[3 * kMaxSHComponents];
-	(void)sh_ders;
-	std::vector<double>& rb_vals = radial_vals_buffer_;
-	std::vector<double>& radial_values = grad_mu_contract_vals_;
+	const int radial_der_stride = radial_val_stride * 5;
+	const size_t neighbor_count = static_cast<size_t>(nbh.count);
+	std::vector<double>& cached_sh_values_all = grad_neighbor_sh_values_cache_;
+	std::vector<double>& cached_rb_vals_all = grad_neighbor_radial_vals_cache_;
+	std::vector<double>& cached_radial_values_all = grad_neighbor_mu_contract_vals_cache_;
+	std::vector<double>& cached_radial_s_all = grad_neighbor_mu_contract_ders_s_cache_;
+	std::vector<double>& cached_radial_ss_all = grad_neighbor_mu_contract_ders_ss_cache_;
+	std::vector<double>& rb_ders = radial_ders_buffer_;
+	cached_sh_values_all.resize(neighbor_count * sh_count);
+	cached_rb_vals_all.resize(neighbor_count * radial_val_stride);
+	cached_radial_values_all.resize(neighbor_count * radial_func_count);
+	cached_radial_s_all.resize(neighbor_count * radial_func_count);
+	cached_radial_ss_all.resize(neighbor_count * radial_func_count);
+	if (static_cast<int>(rb_ders.size()) < radial_der_stride)
+		rb_ders.resize(radial_der_stride);
+	const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
 
 	for (int j = 0; j < nbh.count; ++j) {
 		const double tangent = neighbor_gate_tangent[j];
-		if (tangent == 0.0)
-			continue;
 		const Vector3& rvec = nbh.vecs[j];
 		const double r = nbh.dists[j];
 		const int type_outer = nbh.types[j];
-		EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+		double* cached_sh_values =
+			cached_sh_values_all.data() + static_cast<size_t>(j) * sh_count;
+		double* cached_rb_vals =
+			cached_rb_vals_all.data() + static_cast<size_t>(j) * radial_val_stride;
+		double* cached_radial_values =
+			cached_radial_values_all.data() + static_cast<size_t>(j) * radial_func_count;
+		double* cached_radial_s =
+			cached_radial_s_all.data() + static_cast<size_t>(j) * radial_func_count;
+		double* cached_radial_ss =
+			cached_radial_ss_all.data() + static_cast<size_t>(j) * radial_func_count;
+		EvalRealSHValuesOnly(rvec, r, sh_l_max_, cached_sh_values);
 		for (int eval_block = 0; eval_block < eval_block_count; ++eval_block) {
 			const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 			const int basis_k = radial_eval_to_basis_k_[eval_block];
@@ -2391,25 +2432,38 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 				regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
 				basis_k);
 			for (int xi = 0; xi < R; ++xi)
-				rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
+				cached_rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
+			for (int xi = 0; xi < R * 5; ++xi)
+				rb_ders[eval_block * R * 5 + xi] = p_RadialBasis->rb_ders[xi] * scaling;
 		}
 		for (int mu = 0; mu < radial_func_count; ++mu) {
 			const int radial_base = mu_to_radial_eval_block_[mu] * R;
+			const int deriv_base = 5 * radial_base;
 			const int radial_offset = radial_coeff_base + mu * (R + C);
 			double radial_value = 0.0;
-			for (int xi = 0; xi < R; ++xi)
-				radial_value += regression_coeffs[radial_offset + xi] * rb_vals[radial_base + xi];
-			radial_values[mu] = radial_value;
+			double radial_s = 0.0;
+			double radial_ss = 0.0;
+			for (int xi = 0; xi < R; ++xi) {
+				const double coeff = regression_coeffs[radial_offset + xi];
+				radial_value += coeff * cached_rb_vals[radial_base + xi];
+				radial_s += coeff * rb_ders[deriv_base + xi + R];
+				radial_ss += coeff * rb_ders[deriv_base + xi + 3 * R];
+			}
+			cached_radial_values[mu] = radial_value;
+			cached_radial_s[mu] = radial_s;
+			cached_radial_ss[mu] = radial_ss;
 		}
+		if (tangent == 0.0)
+			continue;
 
-		const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
 		const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
 		const double pair_type_scale = center_type_coeff * outer_type_coeff;
 		for (int i = 0; i < alpha_index_basic_count; ++i) {
 			const int mu = basic_mu_cache_[i];
 			const int sh_index = basic_sh_index_cache_[i];
 			grad_dloss_dsenders_[i] +=
-				pair_type_scale * tangent * radial_values[mu] * sh_values[sh_index];
+				pair_type_scale * tangent
+				* cached_radial_values[mu] * cached_sh_values[sh_index];
 		}
 	}
 
@@ -2491,48 +2545,19 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 	if (static_cast<int>(grad_radial_coeff_coord_accum_.size()) != radial_func_count)
 		grad_radial_coeff_coord_accum_.resize(radial_func_count);
 
-	std::vector<double>& radial_s_derivatives = grad_mu_contract_ders_s_;
-	std::vector<double>& radial_ss_derivatives = grad_mu_contract_ders_ss_;
-	std::vector<double>& rb_ders = radial_ders_buffer_;
-	const int radial_der_stride = radial_val_stride * 5;
-
 	for (int j = 0; j < nbh.count; ++j) {
-		const Vector3& rvec = nbh.vecs[j];
-		const double r = nbh.dists[j];
 		const int type_outer = nbh.types[j];
-		EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
-		for (int eval_block = 0; eval_block < eval_block_count; ++eval_block) {
-			const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-			const int basis_k = radial_eval_to_basis_k_[eval_block];
-			p_RadialBasis->RB_Calc(
-				r,
-				regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
-				regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-				basis_k);
-			for (int xi = 0; xi < R; ++xi)
-				rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
-			for (int xi = 0; xi < R * 5; ++xi)
-				rb_ders[eval_block * R * 5 + xi] = p_RadialBasis->rb_ders[xi] * scaling;
-		}
-		for (int mu = 0; mu < radial_func_count; ++mu) {
-			const int radial_base = mu_to_radial_eval_block_[mu] * R;
-			const int deriv_base = 5 * radial_base;
-			const int radial_offset = radial_coeff_base + mu * (R + C);
-			double radial_value = 0.0;
-			double radial_s = 0.0;
-			double radial_ss = 0.0;
-			for (int xi = 0; xi < R; ++xi) {
-				const double coeff = regression_coeffs[radial_offset + xi];
-				radial_value += coeff * rb_vals[radial_base + xi];
-				radial_s += coeff * rb_ders[deriv_base + xi + R];
-				radial_ss += coeff * rb_ders[deriv_base + xi + 3 * R];
-			}
-			radial_values[mu] = radial_value;
-			radial_s_derivatives[mu] = radial_s;
-			radial_ss_derivatives[mu] = radial_ss;
-		}
+		const double* cached_sh_values =
+			cached_sh_values_all.data() + static_cast<size_t>(j) * sh_count;
+		const double* cached_rb_vals =
+			cached_rb_vals_all.data() + static_cast<size_t>(j) * radial_val_stride;
+		const double* cached_radial_values =
+			cached_radial_values_all.data() + static_cast<size_t>(j) * radial_func_count;
+		const double* cached_radial_s =
+			cached_radial_s_all.data() + static_cast<size_t>(j) * radial_func_count;
+		const double* cached_radial_ss =
+			cached_radial_ss_all.data() + static_cast<size_t>(j) * radial_func_count;
 
-		const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
 		const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
 		const double gate_scale = TwoLayerGateNeighborScale(nbh, j);
 		const double pair_type_scale = center_type_coeff * outer_type_coeff;
@@ -2548,8 +2573,8 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 			const int mu = basic_mu_cache_[i];
 			const int scaling_block = basic_scaling_block_cache_[i];
 			const int sh_index = basic_sh_index_cache_[i];
-			const double y = sh_values[sh_index];
-			const double dot_val = radial_values[mu];
+			const double y = cached_sh_values[sh_index];
+			const double dot_val = cached_radial_values[mu];
 			const double value_weight = center_linear * grad_dloss_dmom_[i];
 			const double direct_weight =
 				center_linear * site_energy_ders_wrt_moments_[i] * tangent;
@@ -2564,9 +2589,9 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 				out_grad_accumulator[shared_type_offset + type_outer] +=
 					value_weight * center_type_coeff * gate_scale * dot_val * y;
 				out_grad_accumulator[sigma_coeff_offset] +=
-					value_weight * type_scale * radial_s_derivatives[mu] * y;
+					value_weight * type_scale * cached_radial_s[mu] * y;
 				out_grad_accumulator[sigma_coeff_offset + C * C] +=
-					value_weight * type_scale * radial_ss_derivatives[mu] * y;
+					value_weight * type_scale * cached_radial_ss[mu] * y;
 			}
 			if (direct_weight != 0.0) {
 				radial_coeff_direct_accum[mu] += direct_weight * y;
@@ -2575,9 +2600,9 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 				out_grad_accumulator[shared_type_offset + type_outer] +=
 					direct_weight * center_type_coeff * dot_val * y;
 				out_grad_accumulator[sigma_coeff_offset] +=
-					direct_weight * pair_type_scale * radial_s_derivatives[mu] * y;
+					direct_weight * pair_type_scale * cached_radial_s[mu] * y;
 				out_grad_accumulator[sigma_coeff_offset + C * C] +=
-					direct_weight * pair_type_scale * radial_ss_derivatives[mu] * y;
+					direct_weight * pair_type_scale * cached_radial_ss[mu] * y;
 			}
 		}
 		for (int mu = 0; mu < radial_func_count; ++mu) {
@@ -2588,7 +2613,7 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 			const int radial_base = mu_to_radial_eval_block_[mu] * R;
 			const int radial_offset = radial_coeff_base + mu * (R + C);
 			for (int xi = 0; xi < R; ++xi) {
-				const double rb_val = rb_vals[radial_base + xi];
+				const double rb_val = cached_rb_vals[radial_base + xi];
 				if (value_accum != 0.0)
 					out_grad_accumulator[radial_offset + xi] +=
 						type_scale * rb_val * value_accum;

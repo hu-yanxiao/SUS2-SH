@@ -64,7 +64,11 @@ Implementation notes:
 - LAMMPS and GPUMD should not use a real `2*r_c` halo for this feature. The
   intended interface design is to compute `f` on owned atoms, communicate the
   scalar to ghosts, use it in the main pass, reverse-communicate `dE/df`, then
-  run the first-layer gate reverse pass on owners.
+  run the first-layer gate reverse pass on owners. The required interface
+  buffers are two-layer-only: `gate_scale[nall]`, `gate_adjoint[nall]`, and a
+  compact owned-atom first-layer gate-moment cache. The gate is neighbor
+  centered, not pair symmetric; final edge `a-b` uses `1 + f_b`, while edge
+  `b-a` uses `1 + f_a`.
 
 Validation added:
 
@@ -214,6 +218,49 @@ One-step 120-rank profile comparison on the same 500-configuration subset:
 | scalar cache only | `codex_two_layer_gate_profile_1step_gatecache` | 258.053 | 170.196 | 16.0840 | 24 | measured |
 | accepted scalar+moment cache | `codex_two_layer_gate_profile_1step_momentcache` | 255.885 | 167.429 | 15.9410 | 24 | accepted |
 | rejected directional-cache trial | `codex_two_layer_gate_profile_1step_directioncache` | 257.064 | 168.175 | 16.0600 | 26 | reverted |
+
+Two-layer-specific profile timers were added with
+`SUS2_SH_TWO_LAYER_PROFILE=1` and `SUS2_SH_TWO_LAYER_PROFILE_INTERVAL=<n>`.
+They report only the new gate paths: gate preparation, gated final SH
+accumulation, final site-energy adjoints, gate scalar directional derivatives,
+mixed final-layer tangent gradients, gate-weight gradients, scalar-parameter
+gate-chain gradients, and the two-layer linear-component correction. On
+`codex_two_layer_gate_profile_1step_finalcache`, the gradient-side profile was:
+
+```text
+avg_us_total=242634
+avg_us_prepare_gate=19178.3
+avg_us_main_gated_grad=42874.8
+avg_us_energy_adjoint=28670.7
+avg_us_directional=40977.6
+avg_us_tangent_grad=57159.1
+avg_us_gate_weight=12.6762
+avg_us_scalar_param=53759.1
+```
+
+An edge-primitive cache inside the two-layer-only final tangent gradient reuses
+per-neighbor SH values, radial-basis values, and contracted radial
+value/sigma/shift derivatives between the tangent seed pass and the coefficient
+gradient pass. It does not change the generic single-layer SH accumulator. On
+`codex_two_layer_gate_profile_1step_edgecache`, the same 1-step profile became:
+
+```text
+avg_us_total=225239
+avg_us_prepare_gate=19196.7
+avg_us_main_gated_grad=42970.1
+avg_us_energy_adjoint=28633.7
+avg_us_directional=40824.8
+avg_us_tangent_grad=38785.8
+avg_us_gate_weight=12.9078
+avg_us_scalar_param=54814.2
+runtime_sec=21
+```
+
+The edge cache reduced the final tangent-gradient stage by about 32% versus the
+previous final-cache profile (`57159.1 -> 38785.8 us`) and reduced the
+two-layer gradient-side total by about 7% (`242634 -> 225239 us`). The remaining
+largest two-layer-only hotspots are scalar-parameter gate-chain gradients and
+gate scalar directional derivatives.
 
 ## Training model
 

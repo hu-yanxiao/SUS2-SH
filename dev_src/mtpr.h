@@ -195,9 +195,10 @@ protected:
 			const std::vector<Vector3>& direction_weights,
 			std::vector<double>& gate_scalar_tangents);
 		void CalcSHSiteEnergyDers(const Neighborhood& nbh);
-	void AccumulateSHGateTangentGrad(const Neighborhood& nbh,
-										std::vector<double>& out_grad_accumulator,
-										const std::vector<double>& neighbor_gate_tangent);
+		void AccumulateSHGateTangentGrad(const Neighborhood& nbh,
+											std::vector<double>& out_grad_accumulator,
+											const std::vector<double>& neighbor_gate_tangent,
+											int cache_atom_index = -1);
 	void AccumulateSHCombinationGrad(const Neighborhood& nbh,
 										std::vector<double>& out_grad_accumulator,
 										const double se_weight = 0.0,
@@ -270,6 +271,8 @@ public:
 	std::vector<double> two_layer_gate_values_;
 	std::vector<double> two_layer_gate_scalar_values_cache_;
 	std::vector<double> two_layer_gate_moment_values_cache_;
+	std::vector<double> two_layer_final_moment_values_cache_;
+	std::vector<double> two_layer_final_moment_ders_cache_;
 	std::vector<double> two_layer_gate_adjoints_;
 	const std::vector<double>* active_two_layer_gate_values_ = nullptr;
 	std::vector<double>* active_two_layer_gate_adjoints_ = nullptr;
