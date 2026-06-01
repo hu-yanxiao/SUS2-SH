@@ -40,7 +40,8 @@ void CheckFiniteArray(const Array1D& values, int size, const std::string& name)
 
 bool BFGSShouldBacktrackNonFinite(bool is_in_linesearch, const Linesearch& linesearch)
 {
-	return is_in_linesearch && linesearch.x() != 0.0;
+	(void)is_in_linesearch;
+	return linesearch.x() != 0.0;
 }
 
 } // namespace

@@ -1358,15 +1358,18 @@ void MLMTPR::Load(const string& filename)
 		ReadDoubleList(ifs, two_layer_gate_weights_, gate_weight_count);
 		ifs.ignore(1000, '\n');
 
-		for (int index : two_layer_gate_scalar_indices_)
+		if (!has_sh_scalar_info_)
+			ERROR("SUS2-SH two-layer gate requires sh_scalar_info metadata");
+		for (int index : two_layer_gate_scalar_indices_) {
 			if (index < 0 || index >= alpha_scalar_moments)
 				ERROR("SUS2-SH two-layer gate scalar index is out of range");
+			if (sh_scalar_info_[index].body_order > two_layer_gate_body_order_max_)
+				ERROR("SUS2-SH two-layer gate scalar index exceeds two_layer_gate_body_order_max");
+		}
 		if (two_layer_gate_include_one_body_)
 			ERROR("SUS2-SH two-layer gate currently requires two_layer_gate_include_one_body = false");
 		if (two_layer_gate_body_order_max_ < 2 || two_layer_gate_body_order_max_ > sh_body_order_)
 			ERROR("SUS2-SH two-layer gate body order is out of range");
-		if (!has_sh_scalar_info_)
-			ERROR("SUS2-SH two-layer gate requires sh_scalar_info metadata");
 		if (!(ifs >> tmpstr))
 			tmpstr = "";
 	}
@@ -1687,6 +1690,12 @@ void MLMTPR::Save(const string& filename)
 			ERROR("SUS2-SH two-layer gate requires sh_scalar_info metadata");
 		if (two_layer_gate_scalar_indices_.size() != two_layer_gate_weights_.size())
 			ERROR("SUS2-SH two-layer gate metadata has inconsistent sizes");
+		for (int index : two_layer_gate_scalar_indices_) {
+			if (index < 0 || index >= static_cast<int>(sh_scalar_info_.size()))
+				ERROR("SUS2-SH two-layer gate scalar index is out of range");
+			if (sh_scalar_info_[index].body_order > two_layer_gate_body_order_max_)
+				ERROR("SUS2-SH two-layer gate scalar index exceeds two_layer_gate_body_order_max");
+		}
 		ofs << "two_layer_gate_enabled = true\n";
 		ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order_max_ << '\n';
 		ofs << "two_layer_gate_include_one_body = false\n";

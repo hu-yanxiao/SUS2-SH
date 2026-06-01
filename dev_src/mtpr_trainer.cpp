@@ -1295,6 +1295,25 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		}
 #endif
 
+		if ((distributed_bfgs || prank == 0) && !converge) {
+			const int bad_grad_active_idx = FirstNonFinite(&bfgs_g[0], opt_n);
+			if (bad_grad_active_idx >= 0 && prank == 0) {
+				const int bad_grad_full_idx = active_coeff_indices[bad_grad_active_idx];
+				const std::string dump_name = curr_pot_name.empty()
+					? "nonfinite-gradient-step-" + std::to_string(num_step) + ".mtp"
+					: curr_pot_name + ".nonfinite-gradient-step-" + std::to_string(num_step) + ".mtp";
+				std::cerr << "[" << CurrentTimestamp() << "] "
+				          << "BFGS non-finite gradient diagnostic"
+				          << " step=" << num_step
+				          << " active_index=" << bad_grad_active_idx
+				          << " full_index=" << bad_grad_full_idx
+				          << " gradient=" << bfgs_g[bad_grad_active_idx]
+				          << " coeff=" << x[bad_grad_full_idx]
+				          << " dump=" << dump_name << std::endl;
+				p_mlmtpr->Save(dump_name);
+			}
+		}
+
 		int bfgs_status = 0;
 		if ((distributed_bfgs || prank == 0) && !converge) {
 			auto run_bfgs_iterate = [&]() {
@@ -1302,13 +1321,23 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				bfgs.Iterate(bfgs_f, bfgs_g);
 				mask_frozen_coordinates(freeze_species_coeffs);
 
-				const int guarded_full_idx = p_mlmtpr->species_count * p_mlmtpr->species_count;
-				if (guarded_full_idx >= 0 && guarded_full_idx < n) {
-					const int guarded_active_idx = full_to_active_index[guarded_full_idx];
-					if (guarded_active_idx >= 0) {
-						while (abs(bfgs.x(guarded_active_idx) - x[guarded_full_idx]) > 0.5) {
-							bfgs.ReduceStep(0.25);
+				int scaling_step_reductions = 0;
+				bool scaling_step_too_large = true;
+				while (scaling_step_too_large) {
+					scaling_step_too_large = false;
+					for (int full_idx = scal_coeff_begin; full_idx < scal_coeff_end; ++full_idx) {
+						const int active_idx = full_to_active_index[full_idx];
+						if (active_idx < 0)
+							continue;
+						if (std::abs(bfgs.x(active_idx) - x[full_idx]) > 0.5) {
+							scaling_step_too_large = true;
+							break;
 						}
+					}
+					if (scaling_step_too_large) {
+						bfgs.ReduceStep(0.25);
+						if (++scaling_step_reductions > 64)
+							ERROR("BFGS could not reduce scaling-coefficient step below the safety limit.");
 					}
 				}
 				RequireFiniteArray(bfgs.Data(), opt_n, "BFGS proposed coefficients");

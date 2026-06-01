@@ -571,7 +571,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-loss-gradient-dev",
 		"checks MTPR loss gradient against finite differences",
-		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0\n"
+		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-loss-gradient-dev: model and cfg arguments are required\n";
@@ -595,6 +595,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const double energy_weight = ParseDevDoubleOption(opts, "energy-weight", 1.0);
 		const double force_weight = ParseDevDoubleOption(opts, "force-weight", 1.0);
 		const double stress_weight = ParseDevDoubleOption(opts, "stress-weight", 0.0);
+		const double radial_smooth = ParseDevDoubleOption(opts, "radial-smooth", 0.0);
+		const int radial_smooth_grid = ParseDevIntOption(opts, "radial-smooth-grid", 128);
 		const double displacement = ParseDevDoubleOption(opts, "displacement", 1.0e-7);
 		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-5);
 		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-4);
@@ -604,6 +606,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			ERROR("--displacement should be positive.");
 
 		DevLossGradientProbe probe(&mtpr, energy_weight, force_weight, stress_weight);
+		probe.radial_smooth_regularization = radial_smooth;
+		probe.radial_smooth_grid = radial_smooth_grid;
 		DevLossGradientProbe::Result result =
 			probe.Check(configs, displacement, abs_tolerance, rel_tolerance,
 			            coeff_start, coeff_end);
