@@ -105,6 +105,8 @@ struct TwoLayerLinearProfileState {
 	double main_components_s = 0.0;
 	double gate_adjoints_s = 0.0;
 	double chain_apply_s = 0.0;
+	double basis_calc_s = 0.0;
+	double component_fill_s = 0.0;
 };
 
 TwoLayerGradProfileState& TwoLayerGradProfile()
@@ -194,7 +196,9 @@ void RecordTwoLayerLinearProfile(int atom_count,
                                  double prepare_s,
                                  double main_components_s,
                                  double gate_adjoints_s,
-                                 double chain_apply_s)
+                                 double chain_apply_s,
+                                 double basis_calc_s,
+                                 double component_fill_s)
 {
 	TwoLayerLinearProfileState& state = TwoLayerLinearProfile();
 	state.calls += 1;
@@ -204,6 +208,8 @@ void RecordTwoLayerLinearProfile(int atom_count,
 	state.main_components_s += main_components_s;
 	state.gate_adjoints_s += gate_adjoints_s;
 	state.chain_apply_s += chain_apply_s;
+	state.basis_calc_s += basis_calc_s;
+	state.component_fill_s += component_fill_s;
 	const int interval = TwoLayerProfileInterval();
 	if (state.calls % interval != 0)
 		return;
@@ -215,6 +221,8 @@ void RecordTwoLayerLinearProfile(int atom_count,
 	          << " avg_us_main_components=" << 1.0e6 * state.main_components_s * inv_calls
 	          << " avg_us_gate_adjoints=" << 1.0e6 * state.gate_adjoints_s * inv_calls
 	          << " avg_us_chain_apply=" << 1.0e6 * state.chain_apply_s * inv_calls
+	          << " avg_us_basis_calc=" << 1.0e6 * state.basis_calc_s * inv_calls
+	          << " avg_us_component_fill=" << 1.0e6 * state.component_fill_s * inv_calls
 	          << std::endl;
 }
 
@@ -407,6 +415,12 @@ bool MLMTPR::TwoLayerResidualEnabled() const
 bool MLMTPR::TwoLayerGateUsesDirectScale() const
 {
 	return two_layer_gate_scale_mode_ == "direct";
+}
+
+void MLMTPR::RequestTwoLayerFullEdgeCacheForNextCalcEFS()
+{
+	two_layer_full_edge_cache_for_next_calc_ = true;
+	two_layer_reuse_full_edge_cache_once_ = false;
 }
 
 int MLMTPR::TwoLayerGateRadialCoeffCount() const
@@ -981,12 +995,25 @@ void MLMTPR::Load(const string& filename)
 	two_layer_gate_radial_coeffs_.clear();
 	two_layer_gate_weights_.clear();
 	two_layer_residual_e0_coeffs_.clear();
+	two_layer_gate_required_moments_.clear();
+	two_layer_gate_required_moment_indices_.clear();
+	two_layer_gate_required_basic_indices_.clear();
+	two_layer_gate_required_basic_dense_mu_indices_.clear();
+	two_layer_gate_required_product_indices_.clear();
+	two_layer_gate_required_mu_indices_.clear();
+	two_layer_gate_mu_dense_index_.clear();
+	two_layer_gate_required_radial_eval_blocks_.clear();
 	two_layer_gate_values_.clear();
 	two_layer_gate_scalar_values_cache_.clear();
-	two_layer_gate_moment_values_cache_.clear();
-	two_layer_final_moment_values_cache_.clear();
-	two_layer_final_moment_ders_cache_.clear();
-	two_layer_gate_adjoints_.clear();
+		two_layer_gate_moment_values_cache_.clear();
+		two_layer_final_moment_values_cache_.clear();
+		two_layer_final_moment_ders_cache_.clear();
+		two_layer_forward_energy_gate_adjoints_cache_.clear();
+		two_layer_gate_adjoints_.clear();
+		two_layer_gate_values_from_edge_cache_ready_ = false;
+		two_layer_forward_final_moment_cache_ready_ = false;
+		two_layer_full_edge_cache_for_next_calc_ = false;
+		two_layer_reuse_full_edge_cache_once_ = false;
 	active_two_layer_gate_values_ = nullptr;
 	active_two_layer_gate_adjoints_ = nullptr;
 	ClearTwoLayerEdgePrimitiveCache();
@@ -2141,18 +2168,34 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 {
 	const double default_gate =
 		TwoLayerGateUsesDirectScale() ? two_layer_gate_bias_ : 1.0;
-	two_layer_gate_values_.assign(cfg.size(), default_gate);
 	if (two_layer_gate_scalar_indices_.size() != two_layer_gate_weights_.size())
 		ERROR("SUS2-SH two-layer gate metadata has inconsistent sizes");
 	const int gate_count = static_cast<int>(two_layer_gate_scalar_indices_.size());
-	two_layer_gate_scalar_values_cache_.clear();
-	two_layer_gate_moment_values_cache_.clear();
-	if (gate_count == 0)
+	if (gate_count == 0) {
+		two_layer_gate_values_.assign(cfg.size(), default_gate);
+		two_layer_gate_scalar_values_cache_.clear();
+		two_layer_gate_moment_values_cache_.clear();
+		two_layer_gate_values_from_edge_cache_ready_ = false;
 		return;
-	two_layer_gate_scalar_values_cache_.assign(
-		static_cast<size_t>(cfg.size()) * gate_count, 0.0);
-	two_layer_gate_moment_values_cache_.assign(
-		static_cast<size_t>(cfg.size()) * alpha_moments_count, 0.0);
+	}
+	if (two_layer_gate_required_moments_.empty()
+	    || two_layer_gate_required_moment_indices_.empty())
+		BuildTwoLayerGateProductProgram();
+	const int cached_moment_count =
+		static_cast<int>(two_layer_gate_required_moment_indices_.size());
+	const size_t expected_scalar_size =
+		static_cast<size_t>(cfg.size()) * gate_count;
+	const size_t expected_moment_size =
+		static_cast<size_t>(cfg.size()) * cached_moment_count;
+	if (two_layer_gate_values_from_edge_cache_ready_
+	    && static_cast<int>(two_layer_gate_values_.size()) == cfg.size()
+	    && two_layer_gate_scalar_values_cache_.size() == expected_scalar_size
+	    && two_layer_gate_moment_values_cache_.size() == expected_moment_size)
+		return;
+	two_layer_gate_values_from_edge_cache_ready_ = false;
+	two_layer_gate_values_.resize(cfg.size());
+	two_layer_gate_scalar_values_cache_.resize(expected_scalar_size);
+	two_layer_gate_moment_values_cache_.resize(expected_moment_size);
 
 	const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
 	active_two_layer_gate_values_ = nullptr;
@@ -2164,8 +2207,10 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 		double* cached_scalars = two_layer_gate_scalar_values_cache_.data()
 			+ static_cast<size_t>(ind) * gate_count;
 		double* cached_moments = two_layer_gate_moment_values_cache_.data()
-			+ static_cast<size_t>(ind) * alpha_moments_count;
-		std::copy(moment_vals, moment_vals + alpha_moments_count, cached_moments);
+			+ static_cast<size_t>(ind) * cached_moment_count;
+		for (int i = 0; i < cached_moment_count; ++i)
+			cached_moments[i] =
+				moment_vals[two_layer_gate_required_moment_indices_[i]];
 		for (int q = 0; q < gate_count; ++q) {
 			const int scalar_index = two_layer_gate_scalar_indices_[q];
 			if (scalar_index < 0 || scalar_index >= alpha_scalar_moments)
@@ -2244,25 +2289,42 @@ void MLMTPR::CalcEFS(Configuration& cfg)
 
 void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 {
-	if (!RequiresTwoLayerGateEvaluation()) {
-		active_two_layer_gate_values_ = nullptr;
-		active_two_layer_gate_adjoints_ = nullptr;
-		active_two_layer_edge_cache_atom_index_ = -1;
+		if (!RequiresTwoLayerGateEvaluation()) {
+			two_layer_full_edge_cache_for_next_calc_ = false;
+			two_layer_reuse_full_edge_cache_once_ = false;
+			two_layer_forward_final_moment_cache_ready_ = false;
+			active_two_layer_gate_values_ = nullptr;
+			active_two_layer_gate_adjoints_ = nullptr;
+			active_two_layer_edge_cache_atom_index_ = -1;
 		AnyLocalMLIP::CalcEFS(cfg, neighborhoods);
 		return;
 	}
 
 	ResetEFS(cfg);
 	PrepareEvalCaches();
-	const bool profile_two_layer = TwoLayerProfileEnabledOnRank0();
-	const double profile_start = profile_two_layer ? TwoLayerProfileNow() : 0.0;
-	BuildTwoLayerEdgePrimitiveCache(neighborhoods, true, false);
-	PrepareTwoLayerGateValues(cfg, neighborhoods);
+		const bool build_full_edge_cache =
+			two_layer_full_edge_cache_for_next_calc_;
+		two_layer_full_edge_cache_for_next_calc_ = false;
+		two_layer_reuse_full_edge_cache_once_ = false;
+		two_layer_forward_final_moment_cache_ready_ = false;
+		const bool profile_two_layer = TwoLayerProfileEnabledOnRank0();
+		const double profile_start = profile_two_layer ? TwoLayerProfileNow() : 0.0;
+		BuildTwoLayerEdgePrimitiveCache(neighborhoods, true, build_full_edge_cache);
+		PrepareTwoLayerGateValues(cfg, neighborhoods);
 	const double profile_after_prepare =
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
-	two_layer_gate_adjoints_.assign(cfg.size(), 0.0);
-	active_two_layer_gate_values_ = &two_layer_gate_values_;
-	active_two_layer_gate_adjoints_ = &two_layer_gate_adjoints_;
+		two_layer_gate_adjoints_.assign(cfg.size(), 0.0);
+		active_two_layer_gate_values_ = &two_layer_gate_values_;
+		active_two_layer_gate_adjoints_ = &two_layer_gate_adjoints_;
+		const bool cache_forward_final_moments =
+			build_full_edge_cache && alpha_moments_count > 0;
+		if (cache_forward_final_moments) {
+			two_layer_final_moment_values_cache_.resize(
+				static_cast<size_t>(cfg.size()) * alpha_moments_count);
+			two_layer_final_moment_ders_cache_.resize(
+				static_cast<size_t>(cfg.size()) * alpha_moments_count);
+			two_layer_forward_energy_gate_adjoints_cache_.assign(cfg.size(), 0.0);
+		}
 
 	cfg.has_energy(true);
 	cfg.has_forces(true);
@@ -2278,11 +2340,21 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 		buff_site_energy_0 = 0;
 		buff_site_energy_ = 0;
 		buff_site_energy_ders_.resize(nbh.count);
-		active_two_layer_edge_cache_atom_index_ = ind;
-		CalcSiteEnergyDers(nbh);
-		cfg.cal_se[ind] = buff_site_energy_;
-		cfg.cal_se0[ind] = buff_site_energy_0;
-		cfg.energy += buff_site_energy_;
+			active_two_layer_edge_cache_atom_index_ = ind;
+			CalcSiteEnergyDers(nbh);
+			if (cache_forward_final_moments) {
+				const size_t offset =
+					static_cast<size_t>(ind) * alpha_moments_count;
+				std::copy(moment_vals,
+				          moment_vals + alpha_moments_count,
+				          two_layer_final_moment_values_cache_.data() + offset);
+				std::copy(site_energy_ders_wrt_moments_.begin(),
+				          site_energy_ders_wrt_moments_.end(),
+				          two_layer_final_moment_ders_cache_.data() + offset);
+			}
+			cfg.cal_se[ind] = buff_site_energy_;
+			cfg.cal_se0[ind] = buff_site_energy_0;
+			cfg.energy += buff_site_energy_;
 
 		for (int j = 0; j < nbh.count; j++) {
 			cfg.force(ind) += buff_site_energy_ders_[j];
@@ -2294,9 +2366,22 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 				for (int b = 0; b < 3; b++)
 					cfg.stresses[a][b] -= buff_site_energy_ders_[j][a] * nbh.vecs[j][b];
 	}
-	const double profile_after_main =
-		profile_two_layer ? TwoLayerProfileNow() : 0.0;
-	active_two_layer_edge_cache_atom_index_ = -1;
+		const double profile_after_main =
+			profile_two_layer ? TwoLayerProfileNow() : 0.0;
+		if (cache_forward_final_moments) {
+			two_layer_forward_energy_gate_adjoints_cache_ =
+				two_layer_gate_adjoints_;
+			two_layer_forward_final_moment_cache_ready_ =
+				cfg.size() > 0
+				&& HasTwoLayerEdgePrimitiveCache(0, true, true)
+				&& two_layer_final_moment_values_cache_.size()
+					== static_cast<size_t>(cfg.size()) * alpha_moments_count
+				&& two_layer_final_moment_ders_cache_.size()
+					== static_cast<size_t>(cfg.size()) * alpha_moments_count
+				&& two_layer_forward_energy_gate_adjoints_cache_.size()
+					== static_cast<size_t>(cfg.size());
+		}
+		active_two_layer_edge_cache_atom_index_ = -1;
 	active_two_layer_gate_values_ = nullptr;
 	active_two_layer_gate_adjoints_ = nullptr;
 	AccumulateTwoLayerGateForceChain(cfg, neighborhoods);
@@ -2309,6 +2394,9 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 			profile_after_main - profile_after_prepare,
 			profile_end - profile_after_main);
 	}
+	two_layer_reuse_full_edge_cache_once_ =
+		build_full_edge_cache && cfg.size() > 0
+		&& HasTwoLayerEdgePrimitiveCache(0, true, true);
 }
 
 void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
@@ -2340,7 +2428,14 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 	PrepareEvalCaches();
 	const bool profile_two_layer = TwoLayerProfileEnabledOnRank0();
 	const double profile_start = profile_two_layer ? TwoLayerProfileNow() : 0.0;
-	BuildTwoLayerEdgePrimitiveCache(neighborhoods, true);
+	const bool reuse_full_edge_cache =
+		two_layer_reuse_full_edge_cache_once_
+		&& neighborhoods.size() == two_layer_edge_cache_atom_count_
+		&& neighborhoods.size() > 0
+		&& HasTwoLayerEdgePrimitiveCache(0, true, true);
+	two_layer_reuse_full_edge_cache_once_ = false;
+	if (!reuse_full_edge_cache)
+		BuildTwoLayerEdgePrimitiveCache(neighborhoods, true);
 	PrepareTwoLayerGateValues(cfg, neighborhoods);
 	const double profile_after_prepare =
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
@@ -2399,35 +2494,52 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 					need_gate_chain_force_weight_grad = true;
 					break;
 				}
-	if (need_gate_chain_force_weight_grad && TwoLayerGateWeightCount() > 0) {
-		energy_gate_adjoints.assign(cfg.size(), 0.0);
-		two_layer_final_moment_values_cache_.assign(
-			static_cast<size_t>(cfg.size()) * alpha_moments_count, 0.0);
-		two_layer_final_moment_ders_cache_.assign(
-			static_cast<size_t>(cfg.size()) * alpha_moments_count, 0.0);
-		active_two_layer_gate_values_ = &two_layer_gate_values_;
-		active_two_layer_gate_adjoints_ = &energy_gate_adjoints;
-		for (int ind = 0; ind < cfg.size(); ++ind) {
-			active_two_layer_edge_cache_atom_index_ = ind;
-			CalcSHSiteEnergyDers(neighborhoods[ind]);
-			const size_t offset =
-				static_cast<size_t>(ind) * alpha_moments_count;
-			std::copy(moment_vals,
-			          moment_vals + alpha_moments_count,
-			          two_layer_final_moment_values_cache_.data() + offset);
-			std::copy(site_energy_ders_wrt_moments_.begin(),
-			          site_energy_ders_wrt_moments_.end(),
-			          two_layer_final_moment_ders_cache_.data() + offset);
+		if (need_gate_chain_force_weight_grad && TwoLayerGateWeightCount() > 0) {
+			const size_t final_moment_cache_size =
+				static_cast<size_t>(cfg.size()) * alpha_moments_count;
+			const bool reuse_forward_final_moment_cache =
+				reuse_full_edge_cache
+				&& two_layer_forward_final_moment_cache_ready_
+				&& two_layer_final_moment_values_cache_.size()
+					== final_moment_cache_size
+				&& two_layer_final_moment_ders_cache_.size()
+					== final_moment_cache_size
+				&& two_layer_forward_energy_gate_adjoints_cache_.size()
+					== static_cast<size_t>(cfg.size());
+			if (reuse_forward_final_moment_cache) {
+				energy_gate_adjoints =
+					two_layer_forward_energy_gate_adjoints_cache_;
+			} else {
+				energy_gate_adjoints.assign(cfg.size(), 0.0);
+				two_layer_final_moment_values_cache_.assign(
+					final_moment_cache_size, 0.0);
+				two_layer_final_moment_ders_cache_.assign(
+					final_moment_cache_size, 0.0);
+				active_two_layer_gate_values_ = &two_layer_gate_values_;
+				active_two_layer_gate_adjoints_ = &energy_gate_adjoints;
+				for (int ind = 0; ind < cfg.size(); ++ind) {
+					active_two_layer_edge_cache_atom_index_ = ind;
+					CalcSHSiteEnergyDers(neighborhoods[ind]);
+					const size_t offset =
+						static_cast<size_t>(ind) * alpha_moments_count;
+					std::copy(moment_vals,
+					          moment_vals + alpha_moments_count,
+					          two_layer_final_moment_values_cache_.data() + offset);
+					std::copy(site_energy_ders_wrt_moments_.begin(),
+					          site_energy_ders_wrt_moments_.end(),
+					          two_layer_final_moment_ders_cache_.data() + offset);
+				}
+				active_two_layer_edge_cache_atom_index_ = -1;
+				active_two_layer_gate_values_ = nullptr;
+				active_two_layer_gate_adjoints_ = nullptr;
+			}
+		} else {
+			two_layer_final_moment_values_cache_.clear();
+			two_layer_final_moment_ders_cache_.clear();
 		}
-		active_two_layer_edge_cache_atom_index_ = -1;
-		active_two_layer_gate_values_ = nullptr;
-		active_two_layer_gate_adjoints_ = nullptr;
-	} else {
-		two_layer_final_moment_values_cache_.clear();
-		two_layer_final_moment_ders_cache_.clear();
-	}
-	const double profile_after_energy_adjoint =
-		profile_two_layer ? TwoLayerProfileNow() : 0.0;
+		two_layer_forward_final_moment_cache_ready_ = false;
+		const double profile_after_energy_adjoint =
+			profile_two_layer ? TwoLayerProfileNow() : 0.0;
 
 	double profile_directional_s = 0.0;
 	double profile_tangent_grad_s = 0.0;
@@ -2691,15 +2803,17 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
 	const bool need_gate_linear_chain =
 		use_two_layer_gate && (need_forces || need_stress);
-		if (need_gate_linear_chain) {
-			sh_gate_linear_adjoints_.assign(
-				static_cast<size_t>(cfg.size()) * alpha_scalar_moments, 0.0);
-		}
+	if (need_gate_linear_chain) {
+		sh_gate_linear_adjoints_.assign(
+			static_cast<size_t>(cfg.size()) * alpha_scalar_moments, 0.0);
+	}
 
 		if (TwoLayerResidualEnabled()) {
 			const int e1_linear_count = LinearCoeffCount();
 			const int e0_col_offset = e1_linear_count;
 			double profile_gate_adjoints_s = 0.0;
+			double profile_basis_calc_s = 0.0;
+			double profile_component_fill_s = 0.0;
 			for (int ind = 0; ind < cfg.size(); ind++) {
 				const Neighborhood& nbh = neighborhoods[ind];
 				if (nbh.my_type >= species_count)
@@ -2708,7 +2822,13 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 				// E1 columns: final direct-gated scalar basis, no one-body column.
 				active_two_layer_gate_values_ = &two_layer_gate_values_;
 				active_two_layer_edge_cache_atom_index_ = ind;
+				const double profile_basis_start =
+					profile_two_layer ? TwoLayerProfileNow() : 0.0;
 				CalcBasisFuncsDers(nbh);
+				const double profile_after_basis =
+					profile_two_layer ? TwoLayerProfileNow() : 0.0;
+				if (profile_two_layer)
+					profile_basis_calc_s += profile_after_basis - profile_basis_start;
 				for (int k = species_count; k < e1_linear_count; k++) {
 					const int i = k - species_count + 1;
 					energy_cmpnts[k] += basis_vals[i];
@@ -2721,9 +2841,11 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 					if (need_stress)
 						for (int j = 0; j < nbh.count; j++)
 							for (int a = 0; a < 3; a++)
-								for (int b = 0; b < 3; b++)
-										stress_cmpnts[k][a][b] -= basis_ders(i, j, a) * nbh.vecs[j][b];
-					}
+									for (int b = 0; b < 3; b++)
+											stress_cmpnts[k][a][b] -= basis_ders(i, j, a) * nbh.vecs[j][b];
+						}
+				if (profile_two_layer)
+					profile_component_fill_s += TwoLayerProfileNow() - profile_after_basis;
 				if (need_gate_linear_chain) {
 					const double profile_gate_adjoints_start =
 						profile_two_layer ? TwoLayerProfileNow() : 0.0;
@@ -2735,7 +2857,13 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 
 				// E0 columns: one-cutoff unmodulated scalar basis plus one-body.
 				active_two_layer_gate_values_ = nullptr;
+				const double profile_e0_basis_start =
+					profile_two_layer ? TwoLayerProfileNow() : 0.0;
 				CalcBasisFuncsDers(nbh);
+				const double profile_after_e0_basis =
+					profile_two_layer ? TwoLayerProfileNow() : 0.0;
+				if (profile_two_layer)
+					profile_basis_calc_s += profile_after_e0_basis - profile_e0_basis_start;
 				energy_cmpnts[nbh.my_type] += basis_vals[0];
 				for (int i = 0; i < alpha_scalar_moments; ++i) {
 					const int col = e0_col_offset + i;
@@ -2752,6 +2880,8 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 								for (int b = 0; b < 3; b++)
 									stress_cmpnts[col][a][b] -= basis_ders(1 + i, j, a) * nbh.vecs[j][b];
 				}
+				if (profile_two_layer)
+					profile_component_fill_s += TwoLayerProfileNow() - profile_after_e0_basis;
 			}
 			active_two_layer_edge_cache_atom_index_ = -1;
 
@@ -2810,36 +2940,41 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 		}
 
 		double profile_gate_adjoints_s = 0.0;
+		double profile_basis_calc_s = 0.0;
+		double profile_component_fill_s = 0.0;
 		for (int ind = 0; ind < cfg.size(); ind++) {
 			const Neighborhood& nbh = neighborhoods[ind];
 			if (use_two_layer_gate)
 				active_two_layer_edge_cache_atom_index_ = ind;
+			const double profile_basis_start =
+				profile_two_layer ? TwoLayerProfileNow() : 0.0;
 			CalcBasisFuncsDers(nbh);
+			const double profile_after_basis =
+				profile_two_layer ? TwoLayerProfileNow() : 0.0;
+			if (profile_two_layer)
+				profile_basis_calc_s += profile_after_basis - profile_basis_start;
 
 			if (nbh.my_type>=species_count)
 				throw MlipException("Too few species count in the MTP potential!");
 
-		energy_cmpnts[nbh.my_type] += basis_vals[0];
-
-		for (int k = species_count; k < n; k++) {
-			int i = k - species_count + 1;
-
-
+			energy_cmpnts[nbh.my_type] += basis_vals[0];
+			for (int k = species_count; k < n; k++) {
+				int i = k - species_count + 1;
 				energy_cmpnts[k] += basis_vals[i];
-
 				if (need_forces)
 					for (int j = 0; j < nbh.count; j++)
 						for (int a = 0; a < 3; a++) {
 							forces_cmpnts(ind, k, a) += basis_ders(i, j, a);
 							forces_cmpnts(nbh.inds[j], k, a) -= basis_ders(i, j, a);
 						}
-
 				if (need_stress)
 					for (int j = 0; j < nbh.count; j++)
 						for (int a = 0; a < 3; a++)
 							for (int b = 0; b < 3; b++)
-									stress_cmpnts[k][a][b] -= basis_ders(i, j, a) * nbh.vecs[j][b];
-					}
+								stress_cmpnts[k][a][b] -= basis_ders(i, j, a) * nbh.vecs[j][b];
+			}
+			if (profile_two_layer)
+				profile_component_fill_s += TwoLayerProfileNow() - profile_after_basis;
 			if (need_gate_linear_chain) {
 				const double profile_gate_adjoints_start =
 					profile_two_layer ? TwoLayerProfileNow() : 0.0;
@@ -2919,7 +3054,9 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 			(profile_after_main_components - profile_after_prepare)
 				- profile_gate_adjoints_s,
 			profile_gate_adjoints_s,
-			profile_after_chain_apply - profile_after_main_components);
+			profile_after_chain_apply - profile_after_main_components,
+			profile_basis_calc_s,
+			profile_component_fill_s);
 	}
 }
 
@@ -3485,9 +3622,12 @@ void MLMTPR::BuildSHProductProgram()
 void MLMTPR::BuildTwoLayerGateProductProgram()
 {
 	two_layer_gate_required_moments_.clear();
+	two_layer_gate_required_moment_indices_.clear();
 	two_layer_gate_required_basic_indices_.clear();
+	two_layer_gate_required_basic_dense_mu_indices_.clear();
 	two_layer_gate_required_product_indices_.clear();
 	two_layer_gate_required_mu_indices_.clear();
+	two_layer_gate_mu_dense_index_.clear();
 	two_layer_gate_required_radial_eval_blocks_.clear();
 	if (!is_sh_potential_ || !two_layer_gate_enabled_)
 		return;
@@ -3521,6 +3661,8 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 	std::vector<char> required_mu(have_radial_caches ? radial_func_count : 0, 0);
 	std::vector<char> required_eval_blocks(
 		have_radial_caches ? radial_eval_to_scaling_block_.size() : 0, 0);
+	if (have_radial_caches)
+		two_layer_gate_mu_dense_index_.assign(radial_func_count, -1);
 	for (int i = 0; i < alpha_index_basic_count; ++i) {
 		if (two_layer_gate_required_moments_[i]) {
 			two_layer_gate_required_basic_indices_.push_back(i);
@@ -3530,8 +3672,12 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 					ERROR("SUS2-SH two-layer gate basic mu index is out of range");
 				if (!required_mu[mu]) {
 					required_mu[mu] = 1;
+					two_layer_gate_mu_dense_index_[mu] =
+						static_cast<int>(two_layer_gate_required_mu_indices_.size());
 					two_layer_gate_required_mu_indices_.push_back(mu);
 				}
+				two_layer_gate_required_basic_dense_mu_indices_.push_back(
+					two_layer_gate_mu_dense_index_[mu]);
 				const int eval_block = mu_to_radial_eval_block_[mu];
 				if (eval_block < 0 || eval_block >= static_cast<int>(required_eval_blocks.size()))
 					ERROR("SUS2-SH two-layer gate radial eval block is out of range");
@@ -3545,6 +3691,9 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 	for (int p = 0; p < static_cast<int>(sh_products_.size()); ++p)
 		if (required_products[p])
 			two_layer_gate_required_product_indices_.push_back(p);
+	for (int i = 0; i < alpha_moments_count; ++i)
+		if (two_layer_gate_required_moments_[i])
+			two_layer_gate_required_moment_indices_.push_back(i);
 }
 
 void MLMTPR::WriteSHProductGraph(std::ofstream& ofs)

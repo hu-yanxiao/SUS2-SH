@@ -20,6 +20,7 @@
 #include <algorithm>
 
 #include "non_linear_regression.h"
+#include "mtpr.h"
 #include "../src/common/bfgs.h"
 
 using namespace std;
@@ -243,6 +244,10 @@ void NonLinearRegression::AddLossGrad(const Configuration & orig, const Neighbor
 
 	const bool need_std_terms = NeedStdTerms();
 	Configuration cfg = orig;
+	if (neighborhoods != nullptr) {
+		if (MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip))
+			mtpr->RequestTwoLayerFullEdgeCacheForNextCalcEFS();
+	}
 	if (neighborhoods != nullptr)
 		p_mlip->CalcEFS(cfg, *neighborhoods);
 	else
