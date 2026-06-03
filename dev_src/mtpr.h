@@ -95,6 +95,7 @@ protected:
 	std::vector<int> two_layer_gate_required_radial_eval_blocks_;
 	bool sh_product_rows_trace_printed_ = false;
 	bool sh_site_der_cache_trace_printed_ = false;
+	void EnsureSHScalarInfoForGateUpgrade();
 	
 	double *moment_vals; //!< Array of basis function values calculated for certain atomic neighborhood
 	Array3D moment_ders;//!< Array of basis function derivatives w.r.t. motion of neighboring atoms calculated for certain atomic neighborhood
@@ -409,6 +410,10 @@ public:
 			bool TwoLayerGateUsesSharedRadial() const;
 			bool TwoLayerResidualEnabled() const;
 			bool TwoLayerGateUsesDirectScale() const;
+			bool IsSHPotential() const { return is_sh_potential_; }
+			bool TwoLayerGateEnabled() const { return two_layer_gate_enabled_; }
+			void UpgradePlainSHToTwoLayerGate(int gate_body_order,
+			                                  bool independent_gate_radial_coeffs);
 			void RequestTwoLayerFullEdgeCacheForNextCalcEFS();
 			int TwoLayerGateRadialCoeffCount() const;
 		int TwoLayerGateRadialCoeffOffset() const;

@@ -417,6 +417,91 @@ bool MLMTPR::TwoLayerGateUsesDirectScale() const
 	return two_layer_gate_scale_mode_ == "direct";
 }
 
+void MLMTPR::EnsureSHScalarInfoForGateUpgrade()
+{
+	if (has_sh_scalar_info_)
+		return;
+	if (!is_sh_potential_)
+		ERROR("SUS2-SH gate upgrade requires a SUS2-SH model");
+	if (alpha_scalar_moments <= 0)
+		ERROR("SUS2-SH gate upgrade found no scalar basis functions");
+	if (alpha_moments_count <= 0)
+		ERROR("SUS2-SH gate upgrade found no moment graph");
+
+	std::vector<int> body_order(alpha_moments_count, -1);
+	for (int i = 0; i < alpha_index_basic_count && i < alpha_moments_count; ++i)
+		body_order[i] = 2;
+
+	for (const SHProduct& product : sh_products_) {
+		if (product.left < 0 || product.left >= alpha_moments_count
+		    || product.right < 0 || product.right >= alpha_moments_count
+		    || product.target < 0 || product.target >= alpha_moments_count)
+			ERROR("SUS2-SH gate upgrade found an invalid product graph index");
+		if (body_order[product.left] < 0 || body_order[product.right] < 0)
+			ERROR("SUS2-SH gate upgrade cannot infer scalar body orders from this product graph");
+		const int inferred = body_order[product.left] + body_order[product.right] - 1;
+		if (inferred < 2 || inferred > sh_body_order_)
+			ERROR("SUS2-SH gate upgrade inferred an out-of-range scalar body order");
+		if (body_order[product.target] >= 0 && body_order[product.target] != inferred)
+			ERROR("SUS2-SH gate upgrade found inconsistent body orders for one product target");
+		body_order[product.target] = inferred;
+	}
+
+	sh_scalar_info_.assign(alpha_scalar_moments, SHScalarInfo());
+	for (int scalar = 0; scalar < alpha_scalar_moments; ++scalar) {
+		const int moment = alpha_moment_mapping[scalar];
+		if (moment < 0 || moment >= alpha_moments_count)
+			ERROR("SUS2-SH gate upgrade found an invalid scalar moment mapping");
+		if (body_order[moment] < 0)
+			ERROR("SUS2-SH gate upgrade cannot infer one scalar body order");
+		sh_scalar_info_[scalar].body_order = body_order[moment];
+	}
+	has_sh_scalar_info_ = true;
+}
+
+void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
+                                          bool independent_gate_radial_coeffs)
+{
+	if (!is_sh_potential_)
+		ERROR("--two-layer-gate can only upgrade a SUS2-SH model");
+	if (two_layer_gate_enabled_)
+		ERROR("SUS2-SH model is already initialized with two-layer gate metadata");
+	if (gate_body_order < 2 || gate_body_order > sh_body_order_)
+		ERROR("--two-layer-gate-body-order should be between 2 and the SH body order");
+	if (p_RadialBasis == nullptr)
+		ERROR("SUS2-SH gate upgrade requires an initialized radial basis");
+
+	EnsureSHScalarInfoForGateUpgrade();
+
+	two_layer_gate_scalar_indices_.clear();
+	for (int scalar = 0; scalar < alpha_scalar_moments; ++scalar) {
+		const int body_order = sh_scalar_info_[scalar].body_order;
+		if (body_order >= 2 && body_order <= gate_body_order)
+			two_layer_gate_scalar_indices_.push_back(scalar);
+	}
+	if (two_layer_gate_scalar_indices_.empty())
+		ERROR("--two-layer-gate selected no SH scalar basis functions");
+
+	two_layer_gate_enabled_ = true;
+	two_layer_gate_body_order_max_ = gate_body_order;
+	two_layer_gate_include_one_body_ = false;
+	two_layer_gate_shared_radial_ = independent_gate_radial_coeffs;
+	two_layer_residual_enabled_ = false;
+	two_layer_gate_scale_mode_ = "legacy";
+	two_layer_gate_bias_ = 1.0;
+	two_layer_gate_weights_.assign(two_layer_gate_scalar_indices_.size(), 0.0);
+	two_layer_residual_e0_coeffs_.clear();
+
+	if (two_layer_gate_shared_radial_)
+		InitializeTwoLayerGateRadialCoeffsFromBase();
+	else
+		two_layer_gate_radial_coeffs_.clear();
+
+	DistributeCoeffs();
+	BuildTwoLayerGateProductProgram();
+	ClearTwoLayerEdgePrimitiveCache();
+}
+
 void MLMTPR::RequestTwoLayerFullEdgeCacheForNextCalcEFS()
 {
 	two_layer_full_edge_cache_for_next_calc_ = true;

@@ -1027,6 +1027,33 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			end = 10;
 		}
 	}
+	const bool requested_two_layer_gate = opts["two-layer-gate"] != "";
+	const bool requested_two_layer_gate_shared_radial =
+		opts["two-layer-gate-shared-radial"] != "";
+	const bool requested_two_layer_residual = opts["two-layer-residual"] != "";
+	bool plain_to_gate_upgrade = false;
+	bool plain_to_gate_disabled_controls = false;
+	int plain_to_gate_body_order = 3;
+	bool plain_to_gate_independent_radial = false;
+	if (requested_two_layer_gate_shared_radial && !requested_two_layer_gate
+	    && !mtpr.TwoLayerGateEnabled())
+		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate when upgrading a plain SH model");
+	if (requested_two_layer_gate && !mtpr.TwoLayerGateEnabled()) {
+		if (!mtpr.IsSHPotential())
+			ERROR("--two-layer-gate can only upgrade or train a SUS2-SH model");
+		if (requested_two_layer_residual)
+			ERROR("plain SH to gate continuation uses non-residual legacy gate; remove --two-layer-residual");
+		if (opts["two-layer-gate-body-order"] != "")
+			plain_to_gate_body_order = stoi(opts["two-layer-gate-body-order"]);
+		plain_to_gate_independent_radial = requested_two_layer_gate_shared_radial;
+		mtpr.UpgradePlainSHToTwoLayerGate(plain_to_gate_body_order,
+		                                  plain_to_gate_independent_radial);
+		plain_to_gate_upgrade = true;
+		plain_to_gate_disabled_controls = do_lin || do_lin_rescale || fine_tune;
+		do_lin = false;
+		do_lin_rescale = false;
+		fine_tune = false;
+	}
 	if (fine_tune && !mtpr.HasCompleteParameters())
 		ERROR("--fine-tune requires a complete trained model with shift/scal/radial/linear coefficients.");
 	if (!fixed_atomic_energies.empty() &&
@@ -1071,6 +1098,18 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		std::cout << "scal-range override: " << scal_range.first << ", " << scal_range.second << std::endl;
 	if (prank == 0 && custom_s_range)
 		std::cout << "s-range override: " << s_range.first << ", " << s_range.second << std::endl;
+	if (prank == 0 && plain_to_gate_upgrade) {
+		std::cout << "SUS2-SH plain-to-gate upgrade enabled: "
+		          << "gate_body_order=" << plain_to_gate_body_order
+		          << " independent_gate_radial_coeffs="
+		          << (plain_to_gate_independent_radial ? "true" : "false")
+		          << " gate_weight_count=" << mtpr.TwoLayerGateWeightCount()
+		          << " gate_radial_coeff_count=" << mtpr.TwoLayerGateRadialCoeffCount()
+		          << std::endl;
+		if (plain_to_gate_disabled_controls)
+			std::cout << "plain-to-gate upgrade disabled do-lin/do-lin-rescale/fine-tune"
+			          << std::endl;
+	}
 	if (prank == 0)
 		std::cout << "radial smoothness penalty: " << radial_smooth
 		          << " grid=" << radial_smooth_grid << std::endl;
