@@ -28,6 +28,7 @@ PairStyle(sus2mtp,PairSUS2MTP);
 #include "pair.h"
 #include <atomic>    // 原子操作支持
 #include <mutex>     // 互斥锁支持
+#include <vector>
 
 namespace LAMMPS_NS {
 
@@ -40,6 +41,10 @@ class PairSUS2MTP : public Pair {
   void coeff(int, char **) override;       // Reads args from "pair_coeff" (only * * for mtp)
   void init_style() override;              //Init style
   double init_one(int, int) override;      // Checks that species are inited
+  int pack_forward_comm(int, int *, double *, int, int *) override;
+  void unpack_forward_comm(int, int, double *) override;
+  int pack_reverse_comm(int, int, double *) override;
+  void unpack_reverse_comm(int, int *, double *) override;
 
 
 
@@ -48,6 +53,8 @@ class PairSUS2MTP : public Pair {
        // radial list
   double ***radial_list = nullptr;    // First created during read_file
 	  double ***radial_der_list = nullptr;    // First created during read_file
+	  double ***two_layer_gate_radial_list = nullptr;
+	  double ***two_layer_gate_radial_der_list = nullptr;
 	  double ***env_gate_radial_list = nullptr;
 	  double ***env_gate_radial_der_list = nullptr;
 	  double **env_gate_rho_list = nullptr;
@@ -69,6 +76,7 @@ class PairSUS2MTP : public Pair {
   bool is_sh_model = false;           // SUS2-SH uses real spherical harmonics for angular channels
   int sh_l_max = 0;
   int sh_k_max = 0;
+  int sh_body_order = 0;
 
   int species_count = 0;     // Number of species (initialize to 0 to prevent uninitialized memory usage)
   double scaling =1;    // All forces are multiplied by scaling (global scaling)   // Initialize to 0
@@ -120,6 +128,17 @@ class PairSUS2MTP : public Pair {
 
   double *linear_coeffs;     // These are the moment tensor basis coeffs (xi)
   double *species_coeffs;    // For the species coefficients (0th rank moment tensor)
+  bool two_layer_gate_enabled = false;
+  bool two_layer_gate_shared_radial = false;
+  bool two_layer_residual_enabled = false;
+  bool two_layer_gate_direct_scale = false;
+  double two_layer_gate_bias = 1.0;
+  int two_layer_gate_body_order_max = 0;
+  int two_layer_gate_weight_count = 0;
+  std::vector<int> sh_scalar_body_order;
+  std::vector<int> two_layer_gate_scalar_indices;
+  std::vector<double> two_layer_gate_weights;
+  std::vector<double> two_layer_gate_radial_coeffs;
   int alpha_moment_count, alpha_index_basic_count, alpha_index_times_count, alpha_scalar_count,
       max_alpha_index_basic;    // Counts of various alpha indicies
   int **alpha_index_basic;      // Indicies how to construct elementary moments from coords and dist
@@ -152,6 +171,14 @@ class PairSUS2MTP : public Pair {
   double *coord_powers_z;   // Buffer used for powers of dz
   double *radial_vals;      // Buffer used for radial basis function values for each mu
   double *radial_ders;      // Buffer used for radial basis function derivatives for each mu
+  double *two_layer_raw_basic_vals = nullptr;
+  double *two_layer_gate_values = nullptr;
+  double *two_layer_gate_adjoints = nullptr;
+  double *two_layer_radial_cache_vals = nullptr;
+  double *two_layer_radial_cache_ders = nullptr;
+  int two_layer_raw_jac_size = 0;
+  int two_layer_atom_buffer_size = 0;
+  int two_layer_radial_cache_size = 0;
   double *moment_jacobian_x = nullptr;    // SoA layout for x-component
   double *moment_jacobian_y = nullptr;    // SoA layout for y-component
   double *moment_jacobian_z = nullptr;    // SoA layout for z-component
@@ -164,6 +191,16 @@ class PairSUS2MTP : public Pair {
 
   // Cache whether to calculate forces based on cutoff as calculated in alpha basics
   bool *within_cutoff = nullptr;    // First created during compute using grow
+
+  bool has_nonzero_two_layer_gate_weights() const;
+  bool requires_two_layer_gate_sh() const;
+  void compute_two_layer_gate_sh(int, int);
+  void calc_pair_radial_values(int, int, double, bool);
+  void accumulate_sh_basic_edge(int, const double *, double, double, bool, int);
+  void forward_sh_products();
+  void backprop_sh_products();
+  void ensure_two_layer_atom_buffers();
+  void ensure_two_layer_edge_buffer(int);
 };
 
 }    // namespace LAMMPS_NS

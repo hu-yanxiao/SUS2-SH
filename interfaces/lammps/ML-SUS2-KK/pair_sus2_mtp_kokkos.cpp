@@ -1036,6 +1036,9 @@ template <class DeviceType> struct FindMaxNumNeighs {
 
 template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
 {
+  if (!host_flag && requires_two_layer_gate_sh())
+    error->all(FLERR, "SUS2-SH two-layer gate is not implemented for the Kokkos device path; use pair_style sus2mtp or sus2mtp/kk/host");
+
   if (host_flag) {
     atomKK->sync(Host, X_MASK | F_MASK | TYPE_MASK);
     PairSUS2MTP::compute(eflag_in, vflag_in);

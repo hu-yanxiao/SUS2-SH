@@ -266,6 +266,8 @@ public:
     BasicIndices alpha_index_times_;
     Array3D radial_list;
     Array3D radial_der_list;
+	Array3D two_layer_gate_radial_list;
+	Array3D two_layer_gate_radial_der_list;
     //const Array3D& get_radial_list() const { return radial_list; }
     //const Array3D& get_radial_der_list() const { return radial_der_list; }
     double inv_dr;

@@ -977,6 +977,8 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 
 	radial_list.resize(0, 0, 0);
 	radial_der_list.resize(0, 0, 0);
+	two_layer_gate_radial_list.resize(0, 0, 0);
+	two_layer_gate_radial_der_list.resize(0, 0, 0);
 	max_radial.clear();
 	inited = true;
 	has_shift_coeffs = true;
@@ -1745,6 +1747,15 @@ void MLMTPR::Load(const string& filename)
 		radial_der_list.resize(species_count * species_count, 200002, radial_func_count);
 		radial_list.set(0);
 		radial_der_list.set(0);
+		if (is_sh_potential_ && TwoLayerGateUsesSharedRadial()) {
+			two_layer_gate_radial_list.resize(species_count * species_count, 200002, radial_func_count);
+			two_layer_gate_radial_der_list.resize(species_count * species_count, 200002, radial_func_count);
+			two_layer_gate_radial_list.set(0);
+			two_layer_gate_radial_der_list.set(0);
+		} else {
+			two_layer_gate_radial_list.resize(0, 0, 0);
+			two_layer_gate_radial_der_list.resize(0, 0, 0);
+		}
 
 		inv_dr = 200000 / p_RadialBasis->max_dist;
 		double dr = 1 / inv_dr;
@@ -1771,11 +1782,20 @@ void MLMTPR::Load(const string& filename)
 								basis_k);
 						for (int xi = 0; xi < R; xi++)
 						{
-							factor = regression_coeffs[C + 2 * C * C * K_ + mu * (R + C) + xi]
-							       * regression_coeffs[C + 2 * C * C * K_ + R + i]
-							       * regression_coeffs[C + 2 * C * C * K_ + R + j];
+							factor = regression_coeffs[C + 2 * C * C * K_ + mu * (R + C) + xi];
+							if (!is_sh_potential_) {
+								factor *= regression_coeffs[C + 2 * C * C * K_ + R + i]
+								       * regression_coeffs[C + 2 * C * C * K_ + R + j];
+							}
 							radial_list(i * C + j, n, mu) += p_RadialBasis->rb_vals[xi] * scaling * factor;
 							radial_der_list(i * C + j, n, mu) += p_RadialBasis->rb_ders[xi] * scaling * factor;
+							if (is_sh_potential_ && TwoLayerGateUsesSharedRadial()) {
+								const double gate_factor = TwoLayerGateRadialCoeff(mu, xi);
+								two_layer_gate_radial_list(i * C + j, n, mu) +=
+									p_RadialBasis->rb_vals[xi] * scaling * gate_factor;
+								two_layer_gate_radial_der_list(i * C + j, n, mu) +=
+									p_RadialBasis->rb_ders[xi] * scaling * gate_factor;
+							}
 						}
 					}
 				}
@@ -1786,6 +1806,8 @@ void MLMTPR::Load(const string& filename)
 	{
 		radial_list.resize(0, 0, 0);
 		radial_der_list.resize(0, 0, 0);
+		two_layer_gate_radial_list.resize(0, 0, 0);
+		two_layer_gate_radial_der_list.resize(0, 0, 0);
 	}
 		MemAlloc();
 		DistributeCoeffs();
