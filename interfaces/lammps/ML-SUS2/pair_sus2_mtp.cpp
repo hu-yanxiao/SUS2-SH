@@ -196,6 +196,22 @@ bool parse_bool_assignment(const std::string &line)
   return value == "true" || value == "1" || value == "yes" || value == "on";
 }
 
+void reset_zbl_storage(LAMMPS_NS::Memory *memory,
+                       int *&atomic_numbers,
+                       double *&pair_inner_cutoffs,
+                       double *&pair_outer_cutoffs,
+                       double *&pair_outer_sq)
+{
+  memory->destroy(atomic_numbers);
+  memory->destroy(pair_inner_cutoffs);
+  memory->destroy(pair_outer_cutoffs);
+  memory->destroy(pair_outer_sq);
+  atomic_numbers = nullptr;
+  pair_inner_cutoffs = nullptr;
+  pair_outer_cutoffs = nullptr;
+  pair_outer_sq = nullptr;
+}
+
 void interpolate_table(double ***table,
                        double ***der_table,
                        int table_index,
@@ -375,7 +391,11 @@ PairSUS2MTP::~PairSUS2MTP()
 	    memory->destroy(env_gate_rho_list);
 	    memory->destroy(env_gate_rho_der_list);
 	    memory->destroy(pair_to_table_index);
-    memory->destroy(moment_tensor_vals);
+	    memory->destroy(zbl_atomic_numbers);
+	    memory->destroy(zbl_pair_inner_cutoffs);
+	    memory->destroy(zbl_pair_outer_cutoffs);
+	    memory->destroy(zbl_pair_outer_sq);
+	    memory->destroy(moment_tensor_vals);
     memory->destroy(regression_coeffs);
     memory->destroy(linear_coeffs);
     memory->destroy(species_coeffs);
@@ -411,9 +431,10 @@ PairSUS2MTP::~PairSUS2MTP()
     memory->destroy(two_layer_radial_cache_vals);
     memory->destroy(two_layer_radial_cache_ders);
     memory->destroy(weighted_basic_moment_ders);
-    memory->destroy(env_rho_dr);
-    memory->destroy(env_activation_basic_vals);
-    memory->destroy(mu_to_K);
+	    memory->destroy(env_rho_dr);
+	    memory->destroy(env_activation_basic_vals);
+	    memory->destroy(zbl_force_prefactors);
+	    memory->destroy(mu_to_K);
     memory->destroy(mu_to_sigma);
 
     delete radial_basis;
@@ -798,7 +819,7 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
         error->one(FLERR, "Too few species count in the MTP potential!");
       const double r[3] = {x[j][0] - xi[0], x[j][1] - xi[1], x[j][2] - xi[2]};
       const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
-      if (rsq > cutsq[itype + 1][jtype + 1]) continue;
+      if (rsq > max_cutoff_sq) continue;
       const double dist = std::sqrt(rsq);
       two_layer_gate_edge_neighbors.push_back(j);
       two_layer_gate_edge_types.push_back(jtype);
@@ -1002,6 +1023,80 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   }
 }
 
+void PairSUS2MTP::compute_zbl(int eflag, int vflag)
+{
+  if (!zbl_enabled) return;
+  double **x = atom->x;
+  double **f = atom->f;
+  int *type = atom->type;
+  const int inum = list->inum;
+  int *ilist = list->ilist;
+  int *numneigh = list->numneigh;
+  int **firstneigh = list->firstneigh;
+  const int C = species_count;
+
+  for (int ii = 0; ii < inum; ii++) {
+    const int i = ilist[ii];
+    const int itype = type[i] - 1;
+    if (itype < 0 || itype >= C)
+      error->one(FLERR, "ZBL atom type is outside the SUS2 model species map.");
+    const int Zi = zbl_atomic_numbers[itype];
+    const double xi[3] = {x[i][0], x[i][1], x[i][2]};
+    const int jnum = numneigh[i];
+    for (int jj = 0; jj < jnum; jj++) {
+      int j = firstneigh[i][jj];
+      j &= NEIGHMASK;
+      const int jtype = type[j] - 1;
+      if (jtype < 0 || jtype >= C)
+        error->one(FLERR, "ZBL neighbor type is outside the SUS2 model species map.");
+      const int pair_index = itype * C + jtype;
+      const double r[3] = {x[j][0] - xi[0], x[j][1] - xi[1], x[j][2] - xi[2]};
+      const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+      if (rsq <= 0.0 || rsq >= zbl_pair_outer_sq[pair_index]) continue;
+      const double dist = std::sqrt(rsq);
+      const int Zj = zbl_atomic_numbers[jtype];
+      const SUS2MTPZBLPairValue pair =
+          sus2_mtp_zbl::ComputePairHost(Zi, Zj, dist,
+                                        zbl_pair_inner_cutoffs[pair_index],
+                                        zbl_pair_outer_cutoffs[pair_index]);
+      if (pair.energy == 0.0 && pair.dEdr == 0.0) continue;
+
+      const double pref = 0.5 * pair.dEdr / dist;
+      const double fx = pref * r[0];
+      const double fy = pref * r[1];
+      const double fz = pref * r[2];
+      f[i][0] += fx;
+      f[i][1] += fy;
+      f[i][2] += fz;
+      f[j][0] -= fx;
+      f[j][1] -= fy;
+      f[j][2] -= fz;
+
+      if (eflag_global) eng_vdwl += 0.5 * pair.energy;
+      if (eflag_atom) eatom[i] += 0.5 * pair.energy;
+	      if (vflag) {
+	        virial[0] -= fx * r[0];
+	        virial[1] -= fy * r[1];
+	        virial[2] -= fz * r[2];
+	        virial[3] -= fx * r[1];
+	        virial[4] -= fx * r[2];
+	        virial[5] -= fy * r[2];
+	        if (cvflag_atom) {
+	          cvatom[j][0] -= fx * r[0];
+	          cvatom[j][1] -= fy * r[1];
+	          cvatom[j][2] -= fz * r[2];
+	          cvatom[j][3] -= fx * r[1];
+	          cvatom[j][4] -= fx * r[2];
+	          cvatom[j][5] -= fy * r[2];
+	          cvatom[j][6] -= fy * r[0];
+	          cvatom[j][7] -= fz * r[0];
+	          cvatom[j][8] -= fz * r[1];
+	        }
+	      }
+    }
+  }
+}
+
 /* ----------------------------------------------------------------------
    Straightfoward SUS2-MTP implementation based on SUS2-MLIP-1.1
    ---------------------------------------------------------------------- */
@@ -1021,6 +1116,7 @@ void PairSUS2MTP::compute(int eflag, int vflag)
 
   if (requires_two_layer_gate_sh()) {
     compute_two_layer_gate_sh(eflag, vflag);
+    compute_zbl(eflag, vflag);
     return;
   }
 
@@ -1157,7 +1253,7 @@ void PairSUS2MTP::compute(int eflag, int vflag)
       const double r[3] = {x[j][0] - xi[0], x[j][1] - xi[1], x[j][2] - xi[2]};
       const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
 
-      if (rsq > cutsq[itype + 1][jtype + 1]) {    //1 indexing
+      if (rsq > max_cutoff_sq) {
         within_cutoff[jj] = false;
         continue;
       }
@@ -1391,15 +1487,15 @@ void PairSUS2MTP::compute(int eflag, int vflag)
             moment_jacobian_x[jac_idx] = pair_gate * raw_jac_x + activation_der_factor * r[0];
             moment_jacobian_y[jac_idx] = pair_gate * raw_jac_y + activation_der_factor * r[1];
             moment_jacobian_z[jac_idx] = pair_gate * raw_jac_z + activation_der_factor * r[2];
-          } else {
-            moment_tensor_vals[k] += raw_contrib;
-            moment_jacobian_x[jac_idx] = raw_jac_x;
-            moment_jacobian_y[jac_idx] = raw_jac_y;
-            moment_jacobian_z[jac_idx] = raw_jac_z;
-          }
-        }
-      }
-    }
+	          } else {
+	            moment_tensor_vals[k] += raw_contrib;
+	            moment_jacobian_x[jac_idx] = raw_jac_x;
+	            moment_jacobian_y[jac_idx] = raw_jac_y;
+	            moment_jacobian_z[jac_idx] = raw_jac_z;
+	          }
+	        }
+	      }
+	    }
 
     // ------------ Contruct Other Alphas  ------------
     const int * __restrict times_a0 = alpha_times_a0;
@@ -1485,13 +1581,13 @@ void PairSUS2MTP::compute(int eflag, int vflag)
         const double * __restrict weighted = weighted_basic_moment_ders;
 
         #pragma omp simd reduction(+:fx,fy,fz)
-        for (int k = 0; k < alpha_index_basic_count; k++) {
-          const double pref = weighted[k];
-          fx += pref * jac_x[k];
-          fy += pref * jac_y[k];
-          fz += pref * jac_z[k];
-        }
-      }
+	        for (int k = 0; k < alpha_index_basic_count; k++) {
+	          const double pref = weighted[k];
+	          fx += pref * jac_x[k];
+	          fy += pref * jac_y[k];
+	          fz += pref * jac_z[k];
+	        }
+	      }
       double r[3] = {0.0, 0.0, 0.0};
       bool have_r = false;
       if (env_gate_enabled && env_rho_dr[jj] != 0.0) {
@@ -1500,14 +1596,14 @@ void PairSUS2MTP::compute(int eflag, int vflag)
         r[2] = x[j][2] - xi[2];
         have_r = true;
         const double dist = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
-        if (dist > 0.0) {
-          const double rho_der_factor = env_rho_force_prefactor * env_rho_dr[jj] / dist;
-          fx += rho_der_factor * r[0];
-          fy += rho_der_factor * r[1];
-          fz += rho_der_factor * r[2];
-        }
-      }
-      temp_force[0] = fx;
+	        if (dist > 0.0) {
+	          const double rho_der_factor = env_rho_force_prefactor * env_rho_dr[jj] / dist;
+	          fx += rho_der_factor * r[0];
+	          fy += rho_der_factor * r[1];
+	          fz += rho_der_factor * r[2];
+	        }
+	      }
+	      temp_force[0] = fx;
       temp_force[1] = fy;
       temp_force[2] = fz;
 
@@ -1549,8 +1645,9 @@ void PairSUS2MTP::compute(int eflag, int vflag)
           cvatom[j][8] -= temp_force[2] * r[1] ;    //zy
         }
       }
-    }
-  }
+	    }
+	  }
+  compute_zbl(eflag, vflag);
 }
 /* ----------------------------------------------------------------------
    global settings
@@ -1624,7 +1721,7 @@ double PairSUS2MTP::init_one(int i, int j)
 
   if (setflag[i][j] == 0) error->all(FLERR, "Not all pair coeffs are set. See types {}-{}.", i, j);
 
-  return radial_basis->max_cutoff;
+  return interaction_cutoff > 0.0 ? interaction_cutoff : radial_basis->max_cutoff;
 }
 
 /* ----------------------------------------------------------------------
@@ -1652,6 +1749,16 @@ access to the buffer size that is not provided in PFR.
   two_layer_gate_weights.clear();
   two_layer_gate_radial_coeffs.clear();
   two_layer_gate_additive_coeffs.clear();
+  zbl_enabled = false;
+  zbl_inner = sus2_mtp_zbl::DefaultInnerCutoff();
+  zbl_outer = sus2_mtp_zbl::DefaultOuterCutoff();
+  zbl_outer_sq = zbl_outer * zbl_outer;
+  zbl_typewise_cutoff_enabled = false;
+  zbl_typewise_cutoff_factor = sus2_mtp_zbl::DefaultTypewiseCutoffFactor();
+  interaction_cutoff = 0.0;
+  interaction_cutoff_sq = 0.0;
+  reset_zbl_storage(memory, zbl_atomic_numbers, zbl_pair_inner_cutoffs,
+                    zbl_pair_outer_cutoffs, zbl_pair_outer_sq);
 
   //Open the MTP file on proc 0
   if (comm->me == 0) {
@@ -1741,8 +1848,66 @@ access to the buffer size that is not provided in PFR.
       }
     }
 
+    std::string header_line = std::string(tfr.next_line());
+    keyword = first_keyword(header_line);
+    if (keyword == "zbl_enabled") {
+      zbl_enabled = parse_bool_assignment(header_line);
+      if (zbl_enabled) {
+        header_line = std::string(tfr.next_line());
+        if (first_keyword(header_line) != "zbl_inner")
+          error->one(FLERR, "SUS2 ZBL section is missing zbl_inner.");
+        zbl_inner = parse_double_assignment(header_line);
+
+        header_line = std::string(tfr.next_line());
+        if (first_keyword(header_line) != "zbl_outer")
+          error->one(FLERR, "SUS2 ZBL section is missing zbl_outer.");
+        zbl_outer = parse_double_assignment(header_line);
+
+        header_line = std::string(tfr.next_line());
+        if (first_keyword(header_line) != "zbl_typewise_cutoff_enabled")
+          error->one(FLERR, "SUS2 ZBL section is missing zbl_typewise_cutoff_enabled.");
+        zbl_typewise_cutoff_enabled = parse_bool_assignment(header_line);
+
+        header_line = std::string(tfr.next_line());
+        if (first_keyword(header_line) != "zbl_typewise_cutoff_factor")
+          error->one(FLERR, "SUS2 ZBL section is missing zbl_typewise_cutoff_factor.");
+        zbl_typewise_cutoff_factor = parse_double_assignment(header_line);
+
+        header_line = std::string(tfr.next_line());
+        if (first_keyword(header_line) != "zbl_atomic_numbers")
+          error->one(FLERR, "SUS2 ZBL section is missing zbl_atomic_numbers.");
+        const std::vector<int> zbl_numbers = parse_int_list_line(header_line);
+        if (static_cast<int>(zbl_numbers.size()) != species_count)
+          error->one(FLERR, "SUS2 ZBL atomic-number count should match species_count.");
+        if (!std::isfinite(zbl_inner) || zbl_inner < 0.0)
+          error->one(FLERR, "SUS2 ZBL inner cutoff should be finite and non-negative.");
+        if (!std::isfinite(zbl_outer) || zbl_outer <= 0.0)
+          error->one(FLERR, "SUS2 ZBL outer cutoff should be finite and positive.");
+        if (!zbl_typewise_cutoff_enabled && zbl_outer <= zbl_inner)
+          error->one(FLERR, "SUS2 ZBL fixed cutoffs should satisfy inner < outer.");
+        if (!std::isfinite(zbl_typewise_cutoff_factor) ||
+            zbl_typewise_cutoff_factor < 0.5)
+          error->one(FLERR, "SUS2 ZBL typewise cutoff factor should be finite and >= 0.5.");
+        memory->create(zbl_atomic_numbers, species_count, "zbl_atomic_numbers");
+        for (int i = 0; i < species_count; ++i) {
+          if (zbl_numbers[i] < 1 || zbl_numbers[i] > 94)
+            error->one(FLERR, "SUS2 ZBL atomic number should be in [1, 94].");
+          zbl_atomic_numbers[i] = zbl_numbers[i];
+        }
+      }
+      do {
+        header_line = std::string(tfr.next_line());
+        keyword = first_keyword(header_line);
+      } while (!zbl_enabled &&
+               (keyword == "zbl_inner" ||
+                keyword == "zbl_outer" ||
+                keyword == "zbl_typewise_cutoff_enabled" ||
+                keyword == "zbl_typewise_cutoff_factor" ||
+                keyword == "zbl_atomic_numbers"));
+    }
+
     // Read the potential tag (also optional)
-    line_tokens = ValueTokenizer(tfr.next_line(), separators);
+    line_tokens = ValueTokenizer(header_line, separators);
     keyword = line_tokens.next_string();
     if (keyword == "potential_tag") {
       try {
@@ -2272,7 +2437,10 @@ access to the buffer size that is not provided in PFR.
     }
 
     // Setup cutoff values
-    double rcutmaxsq = radial_basis->max_cutoff * radial_basis->max_cutoff;
+    interaction_cutoff = radial_basis->max_cutoff;
+    if (zbl_enabled) interaction_cutoff = std::max(interaction_cutoff, zbl_outer);
+    interaction_cutoff_sq = interaction_cutoff * interaction_cutoff;
+    double rcutmaxsq = interaction_cutoff_sq;
     for (int i = 0; i < species_count; i++) {
       for (int j = 0; j < species_count; j++) {
         setflag[i + 1][j + 1] = 1;
@@ -2687,6 +2855,32 @@ access to the buffer size that is not provided in PFR.
   MPI_Bcast(&env_gate_cutoff_ratio, 1, MPI_DOUBLE, 0, world);
   MPI_Bcast(&env_gate_activation_on_ratio, 1, MPI_DOUBLE, 0, world);
   MPI_Bcast(&env_gate_channel_count, 1, MPI_INT, 0, world);
+  int zbl_enabled_int = zbl_enabled ? 1 : 0;
+  int zbl_typewise_cutoff_enabled_int = zbl_typewise_cutoff_enabled ? 1 : 0;
+  MPI_Bcast(&zbl_enabled_int, 1, MPI_INT, 0, world);
+  MPI_Bcast(&zbl_inner, 1, MPI_DOUBLE, 0, world);
+  MPI_Bcast(&zbl_outer, 1, MPI_DOUBLE, 0, world);
+  MPI_Bcast(&zbl_typewise_cutoff_enabled_int, 1, MPI_INT, 0, world);
+  MPI_Bcast(&zbl_typewise_cutoff_factor, 1, MPI_DOUBLE, 0, world);
+  zbl_enabled = (zbl_enabled_int != 0);
+  zbl_typewise_cutoff_enabled = (zbl_typewise_cutoff_enabled_int != 0);
+  zbl_outer_sq = zbl_outer * zbl_outer;
+  if (zbl_enabled) {
+    if (comm->me != 0)
+      memory->create(zbl_atomic_numbers, species_count, "zbl_atomic_numbers");
+    MPI_Bcast(zbl_atomic_numbers, species_count, MPI_INT, 0, world);
+    const int zbl_pair_count = species_count * species_count;
+    memory->create(zbl_pair_inner_cutoffs, zbl_pair_count, "zbl_pair_inner_cutoffs");
+    memory->create(zbl_pair_outer_cutoffs, zbl_pair_count, "zbl_pair_outer_cutoffs");
+    memory->create(zbl_pair_outer_sq, zbl_pair_count, "zbl_pair_outer_sq");
+    sus2_mtp_zbl::FillPairCutoffTables(species_count, zbl_atomic_numbers,
+                                       zbl_inner, zbl_outer,
+                                       zbl_typewise_cutoff_enabled,
+                                       zbl_typewise_cutoff_factor,
+                                       zbl_pair_inner_cutoffs,
+                                       zbl_pair_outer_cutoffs,
+                                       zbl_pair_outer_sq);
+  }
   int two_layer_gate_enabled_int = two_layer_gate_enabled ? 1 : 0;
   int two_layer_gate_shared_radial_int = two_layer_gate_shared_radial ? 1 : 0;
   int two_layer_residual_enabled_int = two_layer_residual_enabled ? 1 : 0;
@@ -2874,6 +3068,9 @@ access to the buffer size that is not provided in PFR.
   min_cutoff = radial_basis->min_cutoff;
   max_cutoff = radial_basis->max_cutoff;
   max_cutoff_sq = max_cutoff * max_cutoff;
+  interaction_cutoff = max_cutoff;
+  if (zbl_enabled) interaction_cutoff = std::max(interaction_cutoff, zbl_outer);
+  interaction_cutoff_sq = interaction_cutoff * interaction_cutoff;
 
   //Now we B Cast into arrays
   //Flags

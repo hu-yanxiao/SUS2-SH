@@ -46,9 +46,13 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 		"cutoff",
 		"max-dist",
 		"min-dist",
-		"radial-basis-size",
-		"radial-basis-type",
-			"scaling",
+			"radial-basis-size",
+			"radial-basis-type",
+			"zbl-elements",
+			"zbl-inner",
+			"zbl-outer",
+			"zbl-typewise-cutoff-factor",
+				"scaling",
 			"potential-name",
 			"inline-sh-model",
 			"two-layer-gate",
@@ -557,9 +561,15 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 		"    --radial-smooth-grid=<int>: midpoint quadrature grid for --radial-smooth. Default=128\n"
 		"    --atomic-energies=<e0,e1,...>: fix isolated element energies by enforcing\n"
 		"                                   shift_t + species_t = e_t. Default=off\n"
-		"    --atomic-energy-weight=<double>: BFGS penalty weight for --atomic-energies.\n"
-		"                                     Default=1e8\n"
-		"    --weighting=<string>: how to weight configuration wtih different sizes\n"
+			"    --atomic-energy-weight=<double>: BFGS penalty weight for --atomic-energies.\n"
+			"                                     Default=1e8\n"
+			"    --zbl-elements=<e0,e1,...>: enable fixed ZBL short-range repulsion with\n"
+			"        one element symbol or atomic number per model species.\n"
+			"    --zbl-inner=<double>: fixed-cutoff ZBL inner radius. Default=0.7\n"
+			"    --zbl-outer=<double>: global ZBL outer cutoff. Default=1.4\n"
+			"    --zbl-typewise-cutoff-factor=<double>: use NEP-style typewise ZBL cutoffs,\n"
+			"        inner=0 and outer_ij=min(zbl_outer, factor*(Rcov_i+Rcov_j)).\n"
+			"    --weighting=<string>: how to weight configuration wtih different sizes\n"
 		"        relative to each other. Default=vibrations. Other=molecules, structures.\n"
 		"    --init-params=<string>: how to initialize parameters if a potential was not\n"
 		"        pre-fitted. Default is random. Other is same - this is when interaction\n"
@@ -585,8 +595,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"                                from the init-sh options.\n"
 			"    --two-layer-gate: initialize the non-recursive SUS2-SH neighbor scalar gate.\n"
 			"    --two-layer-gate-body-order=<int>: scalar body cutoff for the gate. Default=3\n"
-			"    --two-layer-gate-shared-radial: give the gate independent radial contraction coefficients.\n"
-			"    --two-layer-residual: initialize residual two-layer SUS2-SH with E=E0+E1.\n"
+				"    --two-layer-gate-shared-radial: give the gate independent radial contraction coefficients.\n"
+				"    --two-layer-residual: initialize residual two-layer SUS2-SH with E=E0+E1.\n"
 			"    --two-layer-residual-staged: train residual two-layer model in A(E0), B(E1 residual), C(full) phases.\n"
 			"    --stage-a-steps=<int>: BFGS steps for residual stage A. Default=0\n"
 			"    --stage-b-steps=<int>: BFGS steps for residual stage B. Default=0\n"

@@ -19,6 +19,7 @@
 
 #include "mtpr_train.h"
 #include "../sh_model_init.h"
+#include "../../src/zbl.h"
 
 using namespace std;
 
@@ -145,6 +146,75 @@ std::vector<double> ParseDoubleListOption(const std::string& value, const std::s
 	if (values.empty())
 		ERROR(opt_name + " should be a comma-separated list of finite doubles");
 	return values;
+}
+
+double ParseStrictDoubleOption(const std::string& value, const std::string& opt_name)
+{
+	std::size_t parsed = 0;
+	double result = 0.0;
+	try {
+		result = std::stod(value, &parsed);
+	} catch (const std::exception&) {
+		ERROR(opt_name + " should be a finite double.");
+	}
+	if (parsed != value.size() || !std::isfinite(result))
+		ERROR(opt_name + " should be a finite double.");
+	return result;
+}
+
+struct ZBLTrainOptions {
+	bool enabled = false;
+	double inner = DefaultZBLInnerCutoff();
+	double outer = DefaultZBLOuterCutoff();
+	bool typewise = false;
+	double typewise_factor = DefaultZBLTypewiseCutoffFactor();
+	std::vector<int> atomic_numbers;
+};
+
+bool HasOption(const std::map<std::string, std::string>& opts, const std::string& name)
+{
+	std::map<std::string, std::string>::const_iterator it = opts.find(name);
+	return it != opts.end() && !it->second.empty();
+}
+
+bool HasAnyZBLOption(const std::map<std::string, std::string>& opts)
+{
+	return HasOption(opts, "zbl-elements")
+	    || HasOption(opts, "zbl-inner")
+	    || HasOption(opts, "zbl-outer")
+	    || HasOption(opts, "zbl-typewise-cutoff-factor");
+}
+
+ZBLTrainOptions ParseZBLTrainOptions(const std::map<std::string, std::string>& opts)
+{
+	ZBLTrainOptions zbl;
+	if (!HasAnyZBLOption(opts))
+		return zbl;
+	if (!HasOption(opts, "zbl-elements"))
+		ERROR("ZBL requires --zbl-elements=<comma-separated symbols or atomic numbers>.");
+	zbl.enabled = true;
+	zbl.atomic_numbers = ParseZBLAtomicNumbers(opts.find("zbl-elements")->second);
+	if (HasOption(opts, "zbl-inner"))
+		zbl.inner = ParseStrictDoubleOption(opts.find("zbl-inner")->second,
+		                                    "--zbl-inner");
+	if (HasOption(opts, "zbl-outer"))
+		zbl.outer = ParseStrictDoubleOption(opts.find("zbl-outer")->second,
+		                                    "--zbl-outer");
+	if (!std::isfinite(zbl.inner) || zbl.inner < 0.0)
+		ERROR("--zbl-inner should be finite and non-negative.");
+	if (!std::isfinite(zbl.outer) || zbl.outer <= 0.0)
+		ERROR("--zbl-outer should be finite and positive.");
+	zbl.typewise = HasOption(opts, "zbl-typewise-cutoff-factor");
+	if (zbl.typewise) {
+		zbl.typewise_factor =
+			ParseStrictDoubleOption(opts.find("zbl-typewise-cutoff-factor")->second,
+			                        "--zbl-typewise-cutoff-factor");
+		if (!std::isfinite(zbl.typewise_factor) || zbl.typewise_factor < 0.5)
+			ERROR("--zbl-typewise-cutoff-factor should be finite and >= 0.5.");
+	} else if (zbl.outer <= zbl.inner) {
+		ERROR("--zbl-inner and --zbl-outer should satisfy 0 <= inner < outer.");
+	}
+	return zbl;
 }
 
 MomentCoeffStats ComputeMomentCoeffStats(const MLMTPR& mtpr)
@@ -366,7 +436,11 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"min-dist",
 		"radial-basis-size",
 		"radial-basis-type",
-		"scaling",
+			"zbl-elements",
+			"zbl-inner",
+			"zbl-outer",
+			"zbl-typewise-cutoff-factor",
+			"scaling",
 		"potential-name",
 			"inline-sh-model",
 			"two-layer-gate",
@@ -1009,6 +1083,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	bool mindist_update = false;
 	if (opts["update-mindist"] != "")
 		mindist_update = true;
+	const ZBLTrainOptions zbl_options = ParseZBLTrainOptions(opts);
 
 	SetTagLogStream("dev", &std::cout);
 	int end = 1;
@@ -1026,6 +1101,15 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << exp.What() << std::endl;
 			end = 10;
 		}
+	}
+	if (zbl_options.enabled) {
+		if (static_cast<int>(zbl_options.atomic_numbers.size()) != mtpr.species_count)
+			ERROR("--zbl-elements count should match species_count");
+		mtpr.ConfigureZBL(zbl_options.atomic_numbers,
+		                  zbl_options.inner,
+		                  zbl_options.outer,
+		                  zbl_options.typewise,
+		                  zbl_options.typewise_factor);
 	}
 	const bool requested_two_layer_gate = opts["two-layer-gate"] != "";
 	const bool requested_two_layer_gate_shared_radial =

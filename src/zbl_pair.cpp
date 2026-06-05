@@ -1,7 +1,10 @@
 #include "zbl.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <sstream>
+#include <string>
 
 #include "common/utils.h"
 
@@ -18,11 +21,36 @@ const double kZBLCovalentRadius[94] = {
 	2.02667,  2.01333,  2.0,     1.98667, 1.98667, 1.97333, 2.04,     1.94667, 1.82667,
 	1.74667,  1.64,     1.57333, 1.54667, 1.48,    1.49333, 1.50667,  1.76,    1.73333,
 	1.73333,  1.81333,  1.74667, 1.84,    1.89333, 2.68,    2.41333,  2.22667, 2.10667,
-	2.02667,  2.04,     2.05333, 2.06667};
+		2.02667,  2.04,     2.05333, 2.06667};
+
+const char* const kZBLElementSymbols[94] = {
+	"H",  "He", "Li", "Be", "B",  "C",  "N",  "O",  "F",  "Ne",
+	"Na", "Mg", "Al", "Si", "P",  "S",  "Cl", "Ar", "K",  "Ca",
+	"Sc", "Ti", "V",  "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+	"Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y",  "Zr",
+	"Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
+	"Sb", "Te", "I",  "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
+	"Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb",
+	"Lu", "Hf", "Ta", "W",  "Re", "Os", "Ir", "Pt", "Au", "Hg",
+	"Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th",
+	"Pa", "U",  "Np", "Pu"};
 
 bool UseTypewiseZBLCutoff(double typewise_cutoff_factor)
 {
 	return typewise_cutoff_factor > 0.0;
+}
+
+std::string Trim(const std::string& value)
+{
+	std::size_t begin = 0;
+	while (begin < value.size() &&
+	       std::isspace(static_cast<unsigned char>(value[begin])))
+		++begin;
+	std::size_t end = value.size();
+	while (end > begin &&
+	       std::isspace(static_cast<unsigned char>(value[end - 1])))
+		--end;
+	return value.substr(begin, end - begin);
 }
 
 } // namespace
@@ -40,6 +68,39 @@ double DefaultZBLOuterCutoff()
 double DefaultZBLTypewiseCutoffFactor()
 {
 	return 0.7;
+}
+
+int ZBLAtomicNumberFromSymbol(const std::string& symbol)
+{
+	const std::string token = Trim(symbol);
+	if (token.empty())
+		ERROR("ZBL element list contains an empty token.");
+	bool digits = true;
+	for (char ch : token)
+		digits = digits && std::isdigit(static_cast<unsigned char>(ch));
+	if (digits) {
+		const int atomic_number = std::stoi(token);
+		if (atomic_number < 1 || atomic_number > 94)
+			ERROR("ZBL atomic numbers should be in [1, 94].");
+		return atomic_number;
+	}
+	for (int i = 0; i < 94; ++i)
+		if (token == kZBLElementSymbols[i])
+			return i + 1;
+	ERROR("Unknown ZBL element symbol: " + token);
+	return 0;
+}
+
+std::vector<int> ParseZBLAtomicNumbers(const std::string& value)
+{
+	std::vector<int> atomic_numbers;
+	std::stringstream ss(value);
+	std::string token;
+	while (std::getline(ss, token, ','))
+		atomic_numbers.push_back(ZBLAtomicNumberFromSymbol(token));
+	if (atomic_numbers.empty())
+		ERROR("ZBL requires at least one element.");
+	return atomic_numbers;
 }
 
 double ZBLCovalentRadius(int atomic_number)

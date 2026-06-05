@@ -2,6 +2,7 @@
 
 #include "../src/common/stdafx.h"
 #include "../src/common/utils.h"
+#include "../src/zbl.h"
 
 #include <algorithm>
 #include <cmath>
@@ -111,6 +112,92 @@ bool HasOpt(const std::map<std::string, std::string>& opts, const std::string& n
 {
 	std::map<std::string, std::string>::const_iterator it = opts.find(name);
 	return it != opts.end() && !it->second.empty();
+}
+
+double ParseStrictDoubleOption(const std::string& value,
+                               const std::string& opt_name)
+{
+	std::size_t parsed = 0;
+	double result = 0.0;
+	try {
+		result = std::stod(value, &parsed);
+	} catch (const std::exception&) {
+		ERROR(opt_name + " should be a finite double.");
+	}
+	if (parsed != value.size() || !std::isfinite(result))
+		ERROR(opt_name + " should be a finite double.");
+	return result;
+}
+
+struct ZBLInitOptions {
+	bool enabled = false;
+	double inner = DefaultZBLInnerCutoff();
+	double outer = DefaultZBLOuterCutoff();
+	bool typewise = false;
+	double typewise_factor = DefaultZBLTypewiseCutoffFactor();
+	std::vector<int> atomic_numbers;
+};
+
+bool HasAnyZBLOpt(const std::map<std::string, std::string>& opts)
+{
+	return HasOpt(opts, "zbl-elements")
+	    || HasOpt(opts, "zbl-inner")
+	    || HasOpt(opts, "zbl-outer")
+	    || HasOpt(opts, "zbl-typewise-cutoff-factor");
+}
+
+ZBLInitOptions ParseZBLInitOptions(const std::map<std::string, std::string>& opts,
+                                   int species_count)
+{
+	ZBLInitOptions zbl;
+	if (!HasAnyZBLOpt(opts))
+		return zbl;
+	if (!HasOpt(opts, "zbl-elements"))
+		ERROR("ZBL requires --zbl-elements=<comma-separated symbols or atomic numbers>.");
+	zbl.enabled = true;
+	zbl.atomic_numbers = ParseZBLAtomicNumbers(opts.find("zbl-elements")->second);
+	if (static_cast<int>(zbl.atomic_numbers.size()) != species_count)
+		ERROR("--zbl-elements count should match --species-count.");
+	if (HasOpt(opts, "zbl-inner"))
+		zbl.inner = ParseStrictDoubleOption(opts.find("zbl-inner")->second,
+		                                    "--zbl-inner");
+	if (HasOpt(opts, "zbl-outer"))
+		zbl.outer = ParseStrictDoubleOption(opts.find("zbl-outer")->second,
+		                                    "--zbl-outer");
+	if (!std::isfinite(zbl.inner) || zbl.inner < 0.0)
+		ERROR("--zbl-inner should be finite and non-negative.");
+	if (!std::isfinite(zbl.outer) || zbl.outer <= 0.0)
+		ERROR("--zbl-outer should be finite and positive.");
+	zbl.typewise = HasOpt(opts, "zbl-typewise-cutoff-factor");
+	if (zbl.typewise) {
+		zbl.typewise_factor =
+			ParseStrictDoubleOption(opts.find("zbl-typewise-cutoff-factor")->second,
+			                        "--zbl-typewise-cutoff-factor");
+		if (!std::isfinite(zbl.typewise_factor) || zbl.typewise_factor < 0.5)
+			ERROR("--zbl-typewise-cutoff-factor should be finite and >= 0.5.");
+	} else if (zbl.outer <= zbl.inner) {
+		ERROR("--zbl-inner and --zbl-outer should satisfy 0 <= inner < outer.");
+	}
+	return zbl;
+}
+
+void WriteZBLSection(std::ofstream& ofs, const ZBLInitOptions& zbl)
+{
+	if (!zbl.enabled)
+		return;
+	ofs << "zbl_enabled = true\n";
+	ofs << "zbl_inner = " << (zbl.typewise ? 0.0 : zbl.inner) << "\n";
+	ofs << "zbl_outer = " << zbl.outer << "\n";
+	ofs << "zbl_typewise_cutoff_enabled = "
+	    << (zbl.typewise ? "true" : "false") << "\n";
+	ofs << "zbl_typewise_cutoff_factor = " << zbl.typewise_factor << "\n";
+	ofs << "zbl_atomic_numbers = {";
+	for (size_t i = 0; i < zbl.atomic_numbers.size(); ++i) {
+		if (i != 0)
+			ofs << ", ";
+		ofs << zbl.atomic_numbers[i];
+	}
+	ofs << "}\n";
 }
 
 SHFactorPruning ParseFactorPruning(const std::map<std::string, std::string>& opts)
@@ -662,6 +749,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	default_name << "sus2sh_l" << lmax << "k" << kmax << "_b" << body_order;
 	const std::string name = StringOpt(opts, "potential-name", default_name.str());
 	const std::vector<int> body_lmax = ParseBodyLMax(opts, lmax, body_order);
+	const ZBLInitOptions zbl_options = ParseZBLInitOptions(opts, species_count);
 
 	if (lmax < 0 || lmax > 6)
 		ERROR("init-sh currently supports --l-max from 0 to 6.");
@@ -697,6 +785,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	ofs << "L = " << lmax << "\n";
 	ofs << "scaling_map = LK\n";
 	ofs << "species_count = " << species_count << "\n";
+	WriteZBLSection(ofs, zbl_options);
 	ofs << "potential_tag = SUS2-SH\n";
 	ofs << "sh_l_max = " << lmax << "\n";
 	ofs << "sh_k_max = " << kmax << "\n";

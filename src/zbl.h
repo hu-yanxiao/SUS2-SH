@@ -3,6 +3,7 @@
 #ifndef MLIP_ZBL_H
 #define MLIP_ZBL_H
 
+#include <string>
 #include <vector>
 
 #include "configuration.h"
@@ -26,6 +27,8 @@ struct ZBLEFS {
 double DefaultZBLInnerCutoff();
 double DefaultZBLOuterCutoff();
 double DefaultZBLTypewiseCutoffFactor();
+int ZBLAtomicNumberFromSymbol(const std::string& symbol);
+std::vector<int> ParseZBLAtomicNumbers(const std::string& value);
 double ZBLCovalentRadius(int atomic_number);
 double ZBLTypewiseOuterCutoff(int atomic_number_i,
                               int atomic_number_j,

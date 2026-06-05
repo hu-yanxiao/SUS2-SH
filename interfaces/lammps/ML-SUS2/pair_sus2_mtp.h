@@ -221,10 +221,11 @@ class PairSUS2MTP : public Pair {
   bool *within_cutoff = nullptr;    // First created during compute using grow
 
   bool has_nonzero_two_layer_gate_weights() const;
-  bool requires_two_layer_gate_sh() const;
-  void prepare_two_layer_gate_additive_ratios();
-  void compute_two_layer_gate_sh(int, int);
-  int two_layer_gate_additive_coeff_index(int, int) const;
+	  bool requires_two_layer_gate_sh() const;
+	  void prepare_two_layer_gate_additive_ratios();
+	  void compute_two_layer_gate_sh(int, int);
+	  void compute_zbl(int, int);
+	  int two_layer_gate_additive_coeff_index(int, int) const;
   double two_layer_gate_additive_coeff(int, int) const;
   void calc_pair_radial_values(int, int, double, bool, double = 0.0, bool = false);
   void accumulate_sh_basic_edge(int, const double *, double, double, bool, int, bool = false);
