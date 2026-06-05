@@ -411,11 +411,15 @@ bool MTPR_trainer::CoeffActiveForStage(int coeff_index) const
 	case kResidualStageE1: {
 		const int gate_radial_begin = p_mlmtpr->TwoLayerGateRadialCoeffOffset();
 		const int gate_radial_end = gate_radial_begin + p_mlmtpr->TwoLayerGateRadialCoeffCount();
+		const int gate_additive_begin = p_mlmtpr->TwoLayerGateAdditiveCoeffOffset();
+		const int gate_additive_end =
+			gate_additive_begin + p_mlmtpr->TwoLayerGateAdditiveCoeffCount();
 		const int gate_weight_begin = p_mlmtpr->TwoLayerGateWeightOffset();
 		const int gate_weight_end = gate_weight_begin + p_mlmtpr->TwoLayerGateWeightCount();
 		const int linear_begin = p_mlmtpr->LinearCoeffOffset();
 		const int linear_end = linear_begin + p_mlmtpr->LinearCoeffCount();
 		return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
+		    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
 		    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
 		    || (coeff_index >= linear_begin + p_mlmtpr->species_count && coeff_index < linear_end);
 	}

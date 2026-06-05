@@ -489,6 +489,7 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 	two_layer_residual_enabled_ = false;
 	two_layer_gate_scale_mode_ = "legacy";
 	two_layer_gate_bias_ = 1.0;
+	InitializeTwoLayerGateAdditiveCoeffs();
 	two_layer_gate_weights_.assign(two_layer_gate_scalar_indices_.size(), 0.0);
 	two_layer_residual_e0_coeffs_.clear();
 
@@ -527,9 +528,19 @@ int MLMTPR::TwoLayerGateWeightCount() const
 		: 0;
 }
 
-int MLMTPR::TwoLayerGateWeightOffset() const
+int MLMTPR::TwoLayerGateAdditiveCoeffCount() const
+{
+	return two_layer_gate_enabled_ ? species_count * radial_func_count : 0;
+}
+
+int MLMTPR::TwoLayerGateAdditiveCoeffOffset() const
 {
 	return BaseNonlinearCoeffCount() + TwoLayerGateRadialCoeffCount();
+}
+
+int MLMTPR::TwoLayerGateWeightOffset() const
+{
+	return TwoLayerGateAdditiveCoeffOffset() + TwoLayerGateAdditiveCoeffCount();
 }
 
 int MLMTPR::TwoLayerResidualE0CoeffCount() const
@@ -585,6 +596,31 @@ double MLMTPR::TwoLayerGateRadialCoeff(int mu, int xi) const
 	return 0.0;
 }
 
+int MLMTPR::TwoLayerGateAdditiveCoeffIndex(int type_outer, int mu) const
+{
+	if (!two_layer_gate_enabled_)
+		return -1;
+	if (type_outer < 0 || type_outer >= species_count)
+		ERROR("SUS2-SH two-layer gate additive type index is out of range");
+	if (mu < 0 || mu >= radial_func_count)
+		ERROR("SUS2-SH two-layer gate additive mu index is out of range");
+	return TwoLayerGateAdditiveCoeffOffset() + type_outer * radial_func_count + mu;
+}
+
+double MLMTPR::TwoLayerGateAdditiveCoeff(int type_outer, int mu) const
+{
+	if (!two_layer_gate_enabled_)
+		return 0.0;
+	const int coeff_index = TwoLayerGateAdditiveCoeffIndex(type_outer, mu);
+	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	const int local_index = type_outer * radial_func_count + mu;
+	if (local_index >= 0
+	    && local_index < static_cast<int>(two_layer_gate_additive_coeffs_.size()))
+		return two_layer_gate_additive_coeffs_[local_index];
+	return 1.0;
+}
+
 double MLMTPR::TwoLayerGateWeight(int weight_index) const
 {
 	if (!two_layer_gate_enabled_)
@@ -633,6 +669,16 @@ void MLMTPR::InitializeTwoLayerGateRadialCoeffsFromBase()
 			two_layer_gate_radial_coeffs_[target_offset + xi] =
 				regression_coeffs[source_offset + xi];
 	}
+}
+
+void MLMTPR::InitializeTwoLayerGateAdditiveCoeffs(double value)
+{
+	const int gate_additive_count = TwoLayerGateAdditiveCoeffCount();
+	if (gate_additive_count == 0) {
+		two_layer_gate_additive_coeffs_.clear();
+		return;
+	}
+	two_layer_gate_additive_coeffs_.assign(gate_additive_count, value);
 }
 
 int MLMTPR::EnforcePositiveRadialFirstCoeffs(double min_value)
@@ -884,6 +930,12 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 	const int old_radial_block_size = rb_size + old_species_count;
 	const int new_radial_block_size = rb_size + new_species_count;
 	const int gate_radial_count = TwoLayerGateRadialCoeffCount();
+	const int old_gate_additive_count = two_layer_gate_enabled_
+		? old_species_count * radial_func_count
+		: 0;
+	const int new_gate_additive_count = two_layer_gate_enabled_
+		? new_species_count * radial_func_count
+		: 0;
 	const int gate_weight_count = two_layer_gate_enabled_
 		? static_cast<int>(two_layer_gate_scalar_indices_.size())
 		: 0;
@@ -891,8 +943,10 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		old_radial_offset + radial_func_count * old_radial_block_size;
 	const int new_gate_radial_offset =
 		new_radial_offset + radial_func_count * new_radial_block_size;
-	const int old_gate_offset = old_gate_radial_offset + gate_radial_count;
-	const int new_gate_offset = new_gate_radial_offset + gate_radial_count;
+	const int old_gate_additive_offset = old_gate_radial_offset + gate_radial_count;
+	const int new_gate_additive_offset = new_gate_radial_offset + gate_radial_count;
+	const int old_gate_offset = old_gate_additive_offset + old_gate_additive_count;
+	const int new_gate_offset = new_gate_additive_offset + new_gate_additive_count;
 	const int old_linear_offset = old_gate_offset + gate_weight_count;
 	const int new_linear_offset = new_gate_offset + gate_weight_count;
 	const int old_linear_count = alpha_count + old_species_count - 1;
@@ -946,6 +1000,14 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		new_coeffs[new_gate_radial_offset + i] =
 			old_coeffs[old_gate_radial_offset + i];
 
+	for (int new_type = 0; new_type < new_species_count; ++new_type) {
+		const int old_type = old_species_indices[new_type];
+		for (int mu = 0; mu < radial_func_count; ++mu) {
+			new_coeffs[new_gate_additive_offset + new_type * radial_func_count + mu] =
+				old_coeffs[old_gate_additive_offset + old_type * radial_func_count + mu];
+		}
+	}
+
 	for (int i = 0; i < gate_weight_count; ++i)
 		new_coeffs[new_gate_offset + i] = old_coeffs[old_gate_offset + i];
 
@@ -973,6 +1035,12 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		two_layer_gate_weights_.assign(gate_weight_count, 0.0);
 		for (int i = 0; i < gate_weight_count; ++i)
 			two_layer_gate_weights_[i] = regression_coeffs[new_gate_offset + i];
+	}
+	if (new_gate_additive_count > 0) {
+		two_layer_gate_additive_coeffs_.assign(new_gate_additive_count, 0.0);
+		for (int i = 0; i < new_gate_additive_count; ++i)
+			two_layer_gate_additive_coeffs_[i] =
+				regression_coeffs[new_gate_additive_offset + i];
 	}
 
 	radial_list.resize(0, 0, 0);
@@ -1077,10 +1145,11 @@ void MLMTPR::Load(const string& filename)
 	two_layer_gate_shared_radial_ = false;
 	two_layer_residual_enabled_ = false;
 	two_layer_gate_scale_mode_ = "legacy";
-	two_layer_gate_bias_ = 1.0;
-	two_layer_gate_scalar_indices_.clear();
-	two_layer_gate_radial_coeffs_.clear();
-	two_layer_gate_weights_.clear();
+		two_layer_gate_bias_ = 1.0;
+		two_layer_gate_scalar_indices_.clear();
+		two_layer_gate_radial_coeffs_.clear();
+		two_layer_gate_additive_coeffs_.clear();
+		two_layer_gate_weights_.clear();
 	two_layer_residual_e0_coeffs_.clear();
 	two_layer_gate_required_moments_.clear();
 	two_layer_gate_required_moment_indices_.clear();
@@ -1645,12 +1714,29 @@ void MLMTPR::Load(const string& filename)
 				ifs >> tmpstr;
 				if (tmpstr != "two_layer_gate_radial_coeffs")
 					ERROR("SUS2-SH two-layer shared-radial gate is missing two_layer_gate_radial_coeffs");
-				ReadDoubleList(ifs, two_layer_gate_radial_coeffs_, gate_radial_count);
-				ifs.ignore(1000, '\n');
-				ifs >> tmpstr;
-			}
-			if (tmpstr != "two_layer_gate_weight_count")
-				ERROR("SUS2-SH two-layer gate is missing two_layer_gate_weight_count");
+					ReadDoubleList(ifs, two_layer_gate_radial_coeffs_, gate_radial_count);
+					ifs.ignore(1000, '\n');
+					ifs >> tmpstr;
+				}
+				if (tmpstr == "two_layer_gate_additive_coeff_count") {
+					ifs.ignore(2);
+					int gate_additive_count = 0;
+					ifs >> gate_additive_count;
+					const int expected_gate_additive_count =
+						TwoLayerGateAdditiveCoeffCount();
+					if (gate_additive_count != expected_gate_additive_count)
+						ERROR("SUS2-SH two-layer gate additive coefficient count is inconsistent");
+					ifs >> tmpstr;
+					if (tmpstr != "two_layer_gate_additive_coeffs")
+						ERROR("SUS2-SH two-layer gate is missing two_layer_gate_additive_coeffs");
+					ReadDoubleList(ifs, two_layer_gate_additive_coeffs_, gate_additive_count);
+					ifs.ignore(1000, '\n');
+					ifs >> tmpstr;
+				} else {
+					InitializeTwoLayerGateAdditiveCoeffs();
+				}
+				if (tmpstr != "two_layer_gate_weight_count")
+					ERROR("SUS2-SH two-layer gate is missing two_layer_gate_weight_count");
 		ifs.ignore(2);
 		int gate_weight_count = 0;
 		ifs >> gate_weight_count;
@@ -2076,11 +2162,25 @@ void MLMTPR::Save(const string& filename)
 					const int mu = i / R;
 					const int xi = i % R;
 					ofs << TwoLayerGateRadialCoeff(mu, xi);
+					}
+					ofs << "}\n";
+				}
+				const int gate_additive_count = TwoLayerGateAdditiveCoeffCount();
+				if (gate_additive_count <= 0)
+					ERROR("SUS2-SH two-layer gate has no additive coefficients");
+				ofs << "two_layer_gate_additive_coeff_count = "
+				    << gate_additive_count << '\n';
+				ofs << "two_layer_gate_additive_coeffs = {";
+				for (int i = 0; i < gate_additive_count; ++i) {
+					if (i > 0)
+						ofs << ", ";
+					const int type_outer = i / radial_func_count;
+					const int mu = i % radial_func_count;
+					ofs << TwoLayerGateAdditiveCoeff(type_outer, mu);
 				}
 				ofs << "}\n";
-			}
-			ofs << "two_layer_gate_weight_count = " << two_layer_gate_weights_.size() << '\n';
-		ofs << "two_layer_gate_scalar_indices = {";
+				ofs << "two_layer_gate_weight_count = " << two_layer_gate_weights_.size() << '\n';
+			ofs << "two_layer_gate_scalar_indices = {";
 		for (int i = 0; i < static_cast<int>(two_layer_gate_scalar_indices_.size()); ++i) {
 			if (i > 0)
 				ofs << ", ";
@@ -2341,6 +2441,15 @@ double MLMTPR::TwoLayerGateNeighborScale(const Neighborhood& nbh, int neighbor_i
 	if (atom_index < 0 || atom_index >= static_cast<int>(active_two_layer_gate_values_->size()))
 		ERROR("SUS2-SH two-layer gate neighbor index is out of range");
 	return (*active_two_layer_gate_values_)[atom_index];
+}
+
+double MLMTPR::TwoLayerGateNeighborResidual(const Neighborhood& nbh, int neighbor_index) const
+{
+	if (active_two_layer_gate_values_ == nullptr)
+		return 0.0;
+	const double default_gate =
+		TwoLayerGateUsesDirectScale() ? two_layer_gate_bias_ : 1.0;
+	return TwoLayerGateNeighborScale(nbh, neighbor_index) - default_gate;
 }
 
 void MLMTPR::AddTwoLayerGateAdjoint(const Neighborhood& nbh, int neighbor_index, double adjoint)

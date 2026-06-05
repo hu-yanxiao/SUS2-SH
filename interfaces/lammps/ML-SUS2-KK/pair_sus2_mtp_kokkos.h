@@ -124,6 +124,9 @@ template <class DeviceType> class PairSUS2MTPKokkos : public PairSUS2MTP {
   KOKKOS_INLINE_FUNCTION
   void operator()(TagPairSUS2MTPComputeEnvRhoChain, const int &ii) const;
 
+  template <int NEIGHFLAG, int EVFLAG, bool SHMODEL, bool ENVGATE>
+  KOKKOS_INLINE_FUNCTION void compute_force_impl(const int &ii, EV_FLOAT &ev) const;
+
   template <int NEIGHFLAG, int EVFLAG>
   KOKKOS_INLINE_FUNCTION void
   operator()(TagPairSUS2MTPComputeForce<NEIGHFLAG, EVFLAG>,
@@ -133,9 +136,6 @@ template <class DeviceType> class PairSUS2MTPKokkos : public PairSUS2MTP {
   KOKKOS_INLINE_FUNCTION void
   operator()(TagPairSUS2MTPComputeForce<NEIGHFLAG, EVFLAG>, const int &ii,
              EV_FLOAT &) const;    // With global energy reduction as needed
-
-  template <int NEIGHFLAG, int EVFLAG, bool SHMODEL, bool ENVGATE>
-  KOKKOS_INLINE_FUNCTION void compute_force_impl(const int &ii, EV_FLOAT &ev) const;
 
  protected:
   int input_chunk_size, chunk_size,
@@ -166,10 +166,7 @@ template <class DeviceType> class PairSUS2MTPKokkos : public PairSUS2MTP {
   // Alphas indicies
   Kokkos::View<int **, DeviceType> d_alpha_index_basic;      // For constructing of basic alphas.
   Kokkos::View<int **, DeviceType> d_alpha_index_times;      // For combining alphas
-  Kokkos::View<int *, DeviceType> d_alpha_times_a0;          // Cached lhs moment index
-  Kokkos::View<int *, DeviceType> d_alpha_times_a1;          // Cached rhs moment index
-  Kokkos::View<int *, DeviceType> d_alpha_times_out;         // Cached output moment index
-  Kokkos::View<double *, DeviceType> d_alpha_times_coeff;    // Tensor-product coefficients
+  Kokkos::View<double *, DeviceType> d_alpha_times_coeff;     // Tensor-product coefficients
   Kokkos::View<int *, DeviceType> d_alpha_moment_mapping;    // Maps alphas to basis functions.
 
   // SUS2-MLIP mapping arrays
@@ -184,9 +181,13 @@ template <class DeviceType> class PairSUS2MTPKokkos : public PairSUS2MTP {
   Kokkos::View<int *, DeviceType> d_basic_mu_values;      // Unique mu values appearing in alpha_index_basic
   Kokkos::View<int *, DeviceType> d_basic_grouped_indices;    // alpha_index_basic indices grouped by mu
   Kokkos::View<int *, DeviceType> d_alpha_basic_mu_group; // Compact basic-mu group index for each basic alpha
-  Kokkos::View<int *, DeviceType> d_alpha_basic_sh_index; // Flattened SH component for each basic alpha
-  Kokkos::View<int *, DeviceType> d_basic_grouped_sh_index; // Flattened SH component in grouped order
+  Kokkos::View<int *, DeviceType> d_alpha_basic_sh_index; // Real-SH flat index for each basic alpha
+  Kokkos::View<int *, DeviceType> d_basic_grouped_sh_index; // Real-SH index grouped by mu
   Kokkos::View<int *, DeviceType> d_pair_to_table_index;  // Maps full species pair to sparse table index
+  Kokkos::View<int *, DeviceType> d_zbl_atomic_numbers;   // Atomic numbers by SUS2 species
+  Kokkos::View<double *, DeviceType> d_zbl_pair_inner_cutoffs; // Cached ZBL inner cutoffs by type pair
+  Kokkos::View<double *, DeviceType> d_zbl_pair_outer_cutoffs; // Cached ZBL outer cutoffs by type pair
+  Kokkos::View<double *, DeviceType> d_zbl_pair_outer_sq;      // Cached squared ZBL outer cutoffs by type pair
 
   // The learned coefficients.
   Kokkos::View<double *, DeviceType> d_species_coeffs;     // The species-based constants

@@ -11,6 +11,7 @@
 
 #pragma once
 #include "basic_potentials.h"
+#include "zbl.h"
 #include "radial_basis.h"
 #include "common/multidimensional_arrays.h"
 
@@ -22,6 +23,8 @@ class AnyLocalMLIP : public AnyPotential
 private:
 	bool rb_owner = false;							//!< true if RadialBasis is created by this object (not externally transfered). Requires for correct deletion of RadialBasis
 	std::vector<Vector3> tmp_se_ders_weights_;		//!< Temporal array storing the last argument (se_ders_weights) for AccumulateCombinationGrad function
+	ZBLPotential zbl_potential_;
+	bool zbl_evaluation_enabled_ = true;
 
 protected:
 	Array1D tmp_grad_accumulator_;					//!< Temporal variable storing gradient of site energy w.r.t. coefficients
@@ -92,6 +95,15 @@ public:
 	virtual void CalcE(Configuration& cfg);
 	virtual void CalcEFS(Configuration &cfg);
 	virtual void CalcEFS(Configuration &cfg, const Neighborhoods& neighborhoods);
+	bool HasZBL() const;
+	const ZBLPotential& ZBL() const;
+	ZBLPotential& ZBL();
+	void ClearZBL();
+	void ConfigureZBL(const std::vector<int>& atomic_numbers, double inner_cutoff,
+	                  double outer_cutoff, bool typewise_cutoff_enabled,
+	                  double typewise_cutoff_factor);
+	void SetZBLEvaluationEnabled(bool enabled);
+	bool ZBLEvaluationEnabled() const;
 
 	//! Destructor
 	virtual ~AnyLocalMLIP();

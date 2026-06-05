@@ -234,6 +234,13 @@ void AnyLocalMLIP::CalcE(Configuration& cfg)
 	for (const Neighborhood& nbh : neighborhoods)
 		cfg.energy += SiteEnergy(nbh);
 
+	if (HasZBL() && ZBLEvaluationEnabled()) {
+		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().OuterCutoff())
+			cfg.energy += ZBL().Compute(cfg, neighborhoods).energy;
+		else
+			cfg.energy += ZBL().Compute(cfg).energy;
+	}
+
 	cfg.has_energy(true);
 }
 
@@ -279,6 +286,54 @@ void AnyLocalMLIP::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhood
 				for (int b = 0; b < 3; b++)
 					cfg.stresses[a][b] -= buff_site_energy_ders_[j][a] * nbh.vecs[j][b];
 	}
+	if (HasZBL() && ZBLEvaluationEnabled()) {
+		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().OuterCutoff())
+			ZBL().AddTo(cfg, neighborhoods);
+		else
+			ZBL().AddTo(cfg);
+	}
+}
+
+bool AnyLocalMLIP::HasZBL() const
+{
+	return zbl_potential_.Enabled();
+}
+
+const ZBLPotential& AnyLocalMLIP::ZBL() const
+{
+	return zbl_potential_;
+}
+
+ZBLPotential& AnyLocalMLIP::ZBL()
+{
+	return zbl_potential_;
+}
+
+void AnyLocalMLIP::ClearZBL()
+{
+	zbl_potential_.Clear();
+	zbl_evaluation_enabled_ = true;
+}
+
+void AnyLocalMLIP::ConfigureZBL(const std::vector<int>& atomic_numbers,
+                                double inner_cutoff,
+                                double outer_cutoff,
+                                bool typewise_cutoff_enabled,
+                                double typewise_cutoff_factor)
+{
+	zbl_potential_.Configure(atomic_numbers, inner_cutoff, outer_cutoff,
+	                         typewise_cutoff_enabled, typewise_cutoff_factor);
+	zbl_evaluation_enabled_ = true;
+}
+
+void AnyLocalMLIP::SetZBLEvaluationEnabled(bool enabled)
+{
+	zbl_evaluation_enabled_ = enabled;
+}
+
+bool AnyLocalMLIP::ZBLEvaluationEnabled() const
+{
+	return zbl_evaluation_enabled_;
 }
 
 // Calculate gradient of energy w.r.t. coefficients and write them in second argument

@@ -780,11 +780,21 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				if (i != 0)
 					ofs << ", ";
 				ofs << 1.0e-2;
+				}
+				ofs << "}\n";
+			}
+			const int gate_additive_count = species_count * kmax * (lmax + 1);
+			ofs << "two_layer_gate_additive_coeff_count = "
+			    << gate_additive_count << "\n";
+			ofs << "two_layer_gate_additive_coeffs = {";
+			for (int i = 0; i < gate_additive_count; ++i) {
+				if (i != 0)
+					ofs << ", ";
+				ofs << 1.0;
 			}
 			ofs << "}\n";
-		}
-		ofs << "two_layer_gate_weight_count = " << gate_scalar_indices.size() << "\n";
-		ofs << "two_layer_gate_scalar_indices = {";
+			ofs << "two_layer_gate_weight_count = " << gate_scalar_indices.size() << "\n";
+			ofs << "two_layer_gate_scalar_indices = {";
 		for (size_t i = 0; i < gate_scalar_indices.size(); ++i) {
 			if (i != 0)
 				ofs << ", ";

@@ -123,19 +123,23 @@ public:
 			    || (coeff_index >= e0_begin && coeff_index < e0_end)
 			    || (coeff_index >= linear_begin && coeff_index < species_linear_end);
 		}
-		case kResidualStageE1: {
-			const int gate_radial_begin = mtpr->TwoLayerGateRadialCoeffOffset();
-			const int gate_radial_end =
-				gate_radial_begin + mtpr->TwoLayerGateRadialCoeffCount();
-			const int gate_weight_begin = mtpr->TwoLayerGateWeightOffset();
-			const int gate_weight_end =
-				gate_weight_begin + mtpr->TwoLayerGateWeightCount();
-			const int linear_begin = mtpr->LinearCoeffOffset();
-			const int linear_end = linear_begin + mtpr->LinearCoeffCount();
-			return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
-			    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
-			    || (coeff_index >= linear_begin + mtpr->species_count
-			        && coeff_index < linear_end);
+			case kResidualStageE1: {
+				const int gate_radial_begin = mtpr->TwoLayerGateRadialCoeffOffset();
+				const int gate_radial_end =
+					gate_radial_begin + mtpr->TwoLayerGateRadialCoeffCount();
+				const int gate_additive_begin = mtpr->TwoLayerGateAdditiveCoeffOffset();
+				const int gate_additive_end =
+					gate_additive_begin + mtpr->TwoLayerGateAdditiveCoeffCount();
+				const int gate_weight_begin = mtpr->TwoLayerGateWeightOffset();
+				const int gate_weight_end =
+					gate_weight_begin + mtpr->TwoLayerGateWeightCount();
+				const int linear_begin = mtpr->LinearCoeffOffset();
+				const int linear_end = linear_begin + mtpr->LinearCoeffCount();
+				return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
+				    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
+				    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
+				    || (coeff_index >= linear_begin + mtpr->species_count
+				        && coeff_index < linear_end);
 		}
 		default:
 			return true;
@@ -798,13 +802,15 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		if (mpi_rank == 0) {
 			std::cout << std::setprecision(12)
 			          << "checked_coeffs=" << result.checked_count
-			          << " coeff_count=" << mtpr.CoeffCount()
-			          << " base_nonlinear_end=" << mtpr.BaseNonlinearCoeffCount()
-			          << " gate_radial_begin=" << mtpr.TwoLayerGateRadialCoeffOffset()
-			          << " gate_radial_end=" << mtpr.TwoLayerGateWeightOffset()
-			          << " gate_begin=" << mtpr.TwoLayerGateWeightOffset()
-			          << " gate_end=" << mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount()
-			          << " linear_begin=" << mtpr.LinearCoeffOffset()
+				          << " coeff_count=" << mtpr.CoeffCount()
+				          << " base_nonlinear_end=" << mtpr.BaseNonlinearCoeffCount()
+				          << " gate_radial_begin=" << mtpr.TwoLayerGateRadialCoeffOffset()
+				          << " gate_radial_end=" << mtpr.TwoLayerGateAdditiveCoeffOffset()
+				          << " gate_additive_begin=" << mtpr.TwoLayerGateAdditiveCoeffOffset()
+				          << " gate_additive_end=" << mtpr.TwoLayerGateWeightOffset()
+				          << " gate_weight_begin=" << mtpr.TwoLayerGateWeightOffset()
+				          << " gate_weight_end=" << mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount()
+				          << " linear_begin=" << mtpr.LinearCoeffOffset()
 			          << " residual_stage=" << DevResidualStageName(residual_stage)
 			          << " stage_active_only=" << (stage_active_only ? 1 : 0)
 			          << " base_loss=" << result.base_loss

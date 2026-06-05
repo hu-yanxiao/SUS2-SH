@@ -24,8 +24,9 @@ PairStyle(sus2mtp,PairSUS2MTP);
 #ifndef LMP_PAIR_SUS2_MTP_H
 #define LMP_PAIR_SUS2_MTP_H
 
-#include "sus2_mtp_radial_basis.h"
 #include "pair.h"
+#include "sus2_mtp_radial_basis.h"
+#include "sus2_mtp_zbl.h"
 #include <atomic>    // 原子操作支持
 #include <mutex>     // 互斥锁支持
 #include <vector>
@@ -70,7 +71,7 @@ class PairSUS2MTP : public Pair {
   int used_species_count = 0;
   int used_pair_count = 0;
 
-  void read_file(FILE *);                     //Parsing file using LAMMPS utils
+  void read_file(FILE *, const char *);       //Parsing file using LAMMPS utils
   std::string potential_name = "Untitled";    //An optional name which isn't currently used.
   std::string potential_tag = "";    //An optional tag/description which isn't currently used.
   bool is_sh_model = false;           // SUS2-SH uses real spherical harmonics for angular channels
@@ -107,6 +108,18 @@ class PairSUS2MTP : public Pair {
   double env_gate_cutoff_ratio = 0.5;
   double env_gate_activation_on_ratio = 0.5;
   int env_gate_channel_count = 6;
+  bool zbl_enabled = false;
+  double zbl_inner = 0.7;
+  double zbl_outer = 1.4;
+  double zbl_outer_sq = 1.96;
+  bool zbl_typewise_cutoff_enabled = false;
+  double zbl_typewise_cutoff_factor = 0.7;
+  double interaction_cutoff = 0.0;
+  double interaction_cutoff_sq = 0.0;
+  int *zbl_atomic_numbers = nullptr;
+  double *zbl_pair_inner_cutoffs = nullptr;
+  double *zbl_pair_outer_cutoffs = nullptr;
+  double *zbl_pair_outer_sq = nullptr;
   
   double *shift_coeffs;  // Shift coefficients for each species (species_count elements)
   double *scal_coeffs;   // Scaling coefficients for coordinate transformation (scal_coeffs_count elements)
@@ -139,6 +152,19 @@ class PairSUS2MTP : public Pair {
   std::vector<int> two_layer_gate_scalar_indices;
   std::vector<double> two_layer_gate_weights;
   std::vector<double> two_layer_gate_radial_coeffs;
+  std::vector<double> two_layer_gate_additive_coeffs;
+  std::vector<double> two_layer_gate_additive_ratios;
+  std::vector<unsigned char> two_layer_gate_additive_ratio_valid;
+  std::vector<size_t> two_layer_gate_edge_offsets;
+  std::vector<int> two_layer_gate_edge_neighbors;
+  std::vector<int> two_layer_gate_edge_types;
+  std::vector<double> two_layer_gate_edge_dx;
+  std::vector<double> two_layer_gate_edge_dy;
+  std::vector<double> two_layer_gate_edge_dz;
+  std::vector<double> two_layer_gate_edge_dist;
+  std::vector<double> two_layer_gate_edge_deriv_x;
+  std::vector<double> two_layer_gate_edge_deriv_y;
+  std::vector<double> two_layer_gate_edge_deriv_z;
   int alpha_moment_count, alpha_index_basic_count, alpha_index_times_count, alpha_scalar_count,
       max_alpha_index_basic;    // Counts of various alpha indicies
   int **alpha_index_basic;      // Indicies how to construct elementary moments from coords and dist
@@ -149,7 +175,7 @@ class PairSUS2MTP : public Pair {
   int *alpha_basic_a1;          // Cached y exponent for each basic alpha
   int *alpha_basic_a2;          // Cached z exponent for each basic alpha
   int *alpha_basic_norm_rank;   // Cached a0+a1+a2 for each basic alpha
-  int *alpha_basic_sh_index;    // Cached flattened real-SH component for each basic alpha
+  int *alpha_basic_sh_index;    // Cached real-SH flat index for SUS2-SH basic alpha
   int *alpha_times_a0;          // Cached lhs moment index for each alpha-times entry
   int *alpha_times_a1;          // Cached rhs moment index for each alpha-times entry
   int *alpha_times_multiplier;  // Cached multiplier for each alpha-times entry
@@ -172,6 +198,7 @@ class PairSUS2MTP : public Pair {
   double *radial_vals;      // Buffer used for radial basis function values for each mu
   double *radial_ders;      // Buffer used for radial basis function derivatives for each mu
   double *two_layer_raw_basic_vals = nullptr;
+  double *two_layer_gate_residual_radial_vals = nullptr;
   double *two_layer_gate_values = nullptr;
   double *two_layer_gate_adjoints = nullptr;
   double *two_layer_radial_cache_vals = nullptr;
@@ -187,6 +214,7 @@ class PairSUS2MTP : public Pair {
   double *weighted_basic_moment_ders;     // Basic-moment derivatives with species coeff prefactor applied
   double *env_rho_dr = nullptr;           // Reused env-gate density derivative per neighbor
   double *env_activation_basic_vals = nullptr;  // Reused env-gate chain accumulator per basic moment
+  double *zbl_force_prefactors = nullptr; // Reused 0.5*dE/dr/r for full-neighbor ZBL
   int env_activation_basic_size = 0;
 
   // Cache whether to calculate forces based on cutoff as calculated in alpha basics
@@ -194,9 +222,12 @@ class PairSUS2MTP : public Pair {
 
   bool has_nonzero_two_layer_gate_weights() const;
   bool requires_two_layer_gate_sh() const;
+  void prepare_two_layer_gate_additive_ratios();
   void compute_two_layer_gate_sh(int, int);
-  void calc_pair_radial_values(int, int, double, bool);
-  void accumulate_sh_basic_edge(int, const double *, double, double, bool, int);
+  int two_layer_gate_additive_coeff_index(int, int) const;
+  double two_layer_gate_additive_coeff(int, int) const;
+  void calc_pair_radial_values(int, int, double, bool, double = 0.0, bool = false);
+  void accumulate_sh_basic_edge(int, const double *, double, double, bool, int, bool = false);
   void forward_sh_products();
   void backprop_sh_products();
   void ensure_two_layer_atom_buffers();
