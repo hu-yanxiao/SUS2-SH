@@ -1048,7 +1048,7 @@ void PairSUS2MTP::compute(int eflag, int vflag)
     if (itype >= species_count)
       error->one(FLERR,
                  "Too few species count in the MTP potential!");
-    
+
     int jnum = numneigh[i];                                         // Set number of neighbours
     double nbh_energy = 0;
     const double xi[3] = {x[i][0], x[i][1],
@@ -1173,7 +1173,7 @@ void PairSUS2MTP::compute(int eflag, int vflag)
                             &env_activation, &env_activation_der);
         pair_gate = 1.0 - env_screen_strength * env_activation;
       }
-      
+
       // SUS2-MLIP: Precompute radial basis function values for all k_ values
       // Use local temporary array as in reference implementation
       // This prevents issues with array indexing and memory overlap
@@ -1628,13 +1628,13 @@ double PairSUS2MTP::init_one(int i, int j)
 }
 
 /* ----------------------------------------------------------------------
-   SUS2-MTP file parsing helper function. 
+   SUS2-MTP file parsing helper function.
    Based on SUS2-MLIP-1.1/dev_src/mtpr.cpp Load() function.
    Supports L parameter, scaling_map, shift_coeffs, scal_coeffs, and multiple radial basis types.
 ------------------------------------------------------------------------- */
 void PairSUS2MTP::read_file(FILE *mtp_file, const char *)
 {
-  /*NOTE: TextFileReader is used in lieu of PotentialFileReader to ensure compatability 
+  /*NOTE: TextFileReader is used in lieu of PotentialFileReader to ensure compatability
 with the MLIP-3 package. The alpha indicies in this format are all in one line, requiring
 access to the buffer size that is not provided in PFR.
 */
@@ -1843,7 +1843,7 @@ access to the buffer size that is not provided in PFR.
                  radial_basis_type);
 
     radial_basis_size = radial_basis->size;
-    
+
     utils::logmesg(lmp, "Radial basis type: {}, size: {}, index: {} \n", radial_basis_type, radial_basis_size,radial_basis_type_index);
 
     // Read the basis function count
@@ -1873,12 +1873,12 @@ access to the buffer size that is not provided in PFR.
     // Allocate mu_to_K and mu_to_sigma arrays
     memory->create(mu_to_K, radial_func_count, "mu_to_K");
     memory->create(mu_to_sigma, radial_func_count, "mu_to_sigma");
-    
+
     // Initialize mu_to_sigma (always n/L)
     for (int n = 0; n < radial_func_count; n++) {
       mu_to_sigma[n] = n / L_max;
     }
-    
+
     // Initialize mu_to_K based on scaling_map
     if (scaling_map == "K") {
       for (int n = 0; n < radial_func_count; n++) {
@@ -1899,14 +1899,14 @@ access to the buffer size that is not provided in PFR.
     int pairs_count_temp = species_count * species_count;
     int scal_coeffs_count_temp = 2 * pairs_count_temp * K_scaling;
     int scal_coeffs_buffer_size = scal_coeffs_count_temp * 30 + 500;
-    
+
     // Set large buffer size BEFORE reading to ensure scal_coeffs line is not truncated
     tfr.set_bufsize(scal_coeffs_buffer_size);
-    
+
     // Save the raw line content before parsing for potential re-parsing with different separators
     std::string current_raw_line = std::string(tfr.next_line());
     utils::logmesg(lmp, "Raw line content: '{}'\n", current_raw_line);
-    
+
     line_tokens = ValueTokenizer(current_raw_line, separators);
     keyword = line_tokens.next_string();
     utils::logmesg(lmp, "Next keyword after radial_funcs_count: '{}'\n", keyword);
@@ -1940,12 +1940,12 @@ access to the buffer size that is not provided in PFR.
     env_gate_lambda_raw_offset = env_gate_coeffs_offset;
     env_gate_log_density_coeffs_offset = env_gate_coeffs_offset + species_count;
     regression_coeffs_count = env_gate_coeffs_offset + env_gate_coeff_count_local;
-    
+
     memory->create(regression_coeffs, regression_coeffs_count, "regression_coeffs");
 
     // Set offset pointers
     radial_coeffs_offset = scal_coeffs_offset + scal_coeffs_count_local;
-    
+
     shift_coeffs = &regression_coeffs[shift_coeffs_offset];
     scal_coeffs = &regression_coeffs[scal_coeffs_offset];
     radial_basis_coeffs = &regression_coeffs[radial_coeffs_offset];
@@ -1955,23 +1955,23 @@ access to the buffer size that is not provided in PFR.
     // CRITICAL FIX: Use custom separators that don't split scientific notation (e.g., e+00)
     if (keyword == "shift_coeffs") {
       utils::logmesg(lmp, "Found shift_coeffs keyword, reading coefficients...\n");
-      
+
       // Re-parse the line with custom separators that preserve scientific notation
       // Don't include +, -, * as separators since they appear in scientific notation
       // Use the previously saved raw line content
       std::string shift_separators = " ={},\t\r\n";
       ValueTokenizer shift_tokens(current_raw_line, shift_separators);
-      
+
       // Skip "shift_coeffs" keyword
       shift_tokens.next_string();
-      
+
       // The equal sign is skipped automatically by tokenizer
       // Now parse the values inside braces
       for (int i = 0; i < species_count; i++) {
         try {
           // Get the next token - should be the full scientific notation number
           std::string token = shift_tokens.next_string();
-          
+
           // Remove possible braces and trim whitespace
           while (!token.empty() && (token.front() == '{' || token.front() == ' ' || token.front() == '\t')) {
             token.erase(0, 1);
@@ -1979,7 +1979,7 @@ access to the buffer size that is not provided in PFR.
           while (!token.empty() && (token.back() == '}' || token.back() == ',' || token.back() == ' ' || token.back() == '\t')) {
             token.pop_back();
           }
-          
+
           // Now parse the clean token
           shift_coeffs[i] = std::stod(token);
         } catch (const std::exception& e) {
@@ -2008,27 +2008,27 @@ access to the buffer size that is not provided in PFR.
     // CRITICAL FIX: Use custom separators that don't split scientific notation (e.g., e+00)
     if (keyword == "scal_coeffs") {
       utils::logmesg(lmp, "Found scal_coeffs keyword, reading coefficients...\n");
-      
+
       // CRITICAL FIX: The scal_coeffs values are on the SAME line as the keyword, not on the next line!
       // Use the previously saved current_raw_line which contains the full scal_coeffs line
       std::string scal_raw_line = current_raw_line;
-      
+
       try {
       // Re-parse the line with custom separators that preserve scientific notation
       // Don't include +, -, * as separators since they appear in scientific notation
       // CRITICAL FIX: Don't include "=" as a separator to avoid skipping the first value
       std::string scal_separators = " {},\t\r\n";
       ValueTokenizer scal_tokens(scal_raw_line, scal_separators);
-      
+
       // Skip "scal_coeffs" keyword (the "=" will be handled by next_string automatically)
       scal_tokens.next_string();  // Skip "scal_coeffs"
       scal_tokens.next_string();  // This will skip the "=" token
-        
+
         // Read all scal_coeffs directly into the existing unified regression_coeffs array
         // with error handling for each coefficient
         for (int i = 0; i < scal_coeffs_count_local; i++) {
           std::string token = scal_tokens.next_string();
-          
+
           // Remove possible braces and trim whitespace
           while (!token.empty() && (token.front() == '{' || token.front() == ' ' || token.front() == '\t')) {
             token.erase(0, 1);
@@ -2036,43 +2036,43 @@ access to the buffer size that is not provided in PFR.
           while (!token.empty() && (token.back() == '}' || token.back() == ',' || token.back() == ' ' || token.back() == '\t')) {
             token.pop_back();
           }
-          
+
           // Parse the clean token
           scal_coeffs[i] = std::stod(token);
           if (i < 5) {  // Log first few coefficients for debugging
             utils::logmesg(lmp, "scal_coeffs[{}] = {}\n", i, scal_coeffs[i]);
           }
         }
-        
+
         utils::logmesg(lmp, "scal_coeffs read successfully, count = {}\n", scal_coeffs_count_local);
       } catch (const std::exception& e) {
         error->one(FLERR, "MTP error: Exception while reading scal_coeffs: {}", e.what());
       } catch (...) {
         error->one(FLERR, "MTP error: Unknown exception while reading scal_coeffs");
       }
-      
+
       // Move to next line after successful read
       line_tokens = ValueTokenizer(tfr.next_line(), separators);
       keyword = line_tokens.next_string();
     } else {
       // Default values if scal_coeffs not present - use existing unified array
       utils::logmesg(lmp, "WARNING: scal_coeffs keyword not found (current keyword: '{}'), using defaults\n", keyword);
-      
+
       // CRITICAL: Validate radial_basis before accessing its members
       if (!radial_basis) {
         error->one(FLERR, "MTP error: radial_basis is null when calculating default scaling coefficients");
       }
-      
+
       double cutoff_range = radial_basis->max_cutoff - radial_basis->min_cutoff;
       if (cutoff_range <= 0.0) {
         error->one(FLERR, "MTP error: Invalid cutoff range (max={}, min={}) for scaling coefficients",
                    radial_basis->max_cutoff, radial_basis->min_cutoff);
       }
-      
+
       double s1_default = 3.3 * 2 / cutoff_range;
       double s2_default = radial_basis->min_cutoff;
       utils::logmesg(lmp, "Default values: s1 = {}, s2 = {}, K_scaling = {}\n", s1_default, s2_default, K_scaling);
-      
+
       // Use existing unified array structure - no additional memory allocation needed
       for (int j = 0; j < K_scaling; j++) {
         for (int i = 0; i < pairs_count; i++) {
@@ -2087,12 +2087,12 @@ access to the buffer size that is not provided in PFR.
     // CRITICAL: Only read 0-0 pair coefficients (all pairs share these coefficients)
     if (keyword == "radial_coeffs") {
       utils::logmesg(lmp, "Found radial_coeffs keyword, reading coefficients...\n");
-      
+
       bool found_zero_zero = false;
       bool reached_next_section = false;
       while (!reached_next_section) {
         std::string line = std::string(tfr.next_line());
-        
+
         // Check if we've reached the next section (alpha_moments_count)
         if (line.find("alpha_moments_count") != std::string::npos ||
             line.find("env_gate_type") != std::string::npos) {
@@ -2101,15 +2101,15 @@ access to the buffer size that is not provided in PFR.
           reached_next_section = true;
           break;
         }
-        
+
         // Skip empty lines
         size_t pos = line.find_first_not_of(" \t\r\n");
         if (pos == std::string::npos) continue;
-        
+
         // Check if this is a pair header (starts with digit or sign)
         char c = line[pos];
         if (!((c >= '0' && c <= '9') || c == '+' || c == '-')) continue;
-        
+
         // Parse pair type
         line_tokens = ValueTokenizer(line, separators + "-");
         int type1, type2;
@@ -2117,23 +2117,23 @@ access to the buffer size that is not provided in PFR.
           type1 = line_tokens.next_int();
           type2 = line_tokens.next_int();
         } catch (...) { continue; }
-        
+
         utils::logmesg(lmp, "Found pair header: {}-{}\n", type1, type2);
-        
+
         // Only process 0-0 pair (all pairs share these coefficients)
         if (type1 == 0 && type2 == 0) {
           found_zero_zero = true;
-          
+
           for (int mu = 0; mu < radial_func_count; mu++) {
             std::string coeff_line = std::string(tfr.next_line());
             line_tokens = ValueTokenizer(coeff_line, separators + "{,}");
             for (int ri = 0; ri < radial_basis_size + species_count; ri++) {
               std::string token = line_tokens.next_string();
-              
+
               // Remove possible braces
               if (!token.empty() && token.front() == '{') token.erase(0, 1);
               if (!token.empty() && token.back() == '}') token.pop_back();
-              
+
               try {
                 radial_basis_coeffs[mu * (radial_basis_size + species_count) + ri] = std::stod(token);
                 if (mu < 2 && ri < 3) {  // Log first few coefficients for debugging
@@ -2154,17 +2154,17 @@ access to the buffer size that is not provided in PFR.
           }
         }
       }
-      
+
       if (!found_zero_zero) {
         error->one(FLERR, "MTP error: No 0-0 radial coefficients found in file");
       }
-      
+
       // Update keyword for next section
       if (reached_next_section && saved_line_valid) {
         line_tokens = ValueTokenizer(saved_line, separators);
         keyword = line_tokens.next_string();
       }
-      
+
       utils::logmesg(lmp, "radial_coeffs read successfully (0-0 pair only)\n");
     } else {
       // Initialize default values if not present - use existing unified array
@@ -2285,26 +2285,26 @@ access to the buffer size that is not provided in PFR.
     bool found_alpha_moments = false;
     int max_attempts = 1000;  // Prevent infinite loops
     int attempt_count = 0;
-    
+
     utils::logmesg(lmp, "Searching for alpha_moments_count in MTP file...\n");
     if (saved_line_valid && saved_line.find("alpha_moments_count") != std::string::npos) {
       found_alpha_moments = true;
       utils::logmesg(lmp, "Using saved alpha_moments_count line: '{}'\n", saved_line);
     }
-    
+
     // First, try to find alpha_moments_count using saved_line approach
     // This handles cases where we might have already read past the line
     while (!found_alpha_moments && attempt_count < max_attempts) {
       attempt_count++;
       try {
         std::string next_line = std::string(tfr.next_line());
-        
+
         // Check for empty lines
         if (next_line.empty()) {
           utils::logmesg(lmp, "WARNING: Empty line encountered while searching for alpha_moments_count (attempt {})\n", attempt_count);
           continue;
         }
-        
+
         // Check if this line contains alpha_moments_count
         if (next_line.find("alpha_moments_count") != std::string::npos) {
           saved_line = next_line;
@@ -2313,7 +2313,7 @@ access to the buffer size that is not provided in PFR.
           utils::logmesg(lmp, "Found alpha_moments_count in line (attempt {}): '{}'\n", attempt_count, saved_line);
           break;
         }
-        
+
         // Trim leading whitespace and check if line starts with a digit (might be pair header)
         size_t pos = next_line.find_first_not_of(" \t\r\n");
         if (pos != std::string::npos) {
@@ -2324,7 +2324,7 @@ access to the buffer size that is not provided in PFR.
             continue;
           }
         }
-        
+
       } catch (const std::exception& e) {
         error->one(FLERR, std::string("MTP error: Exception while searching for alpha_moments_count: ") + e.what());
         break;
@@ -2333,7 +2333,7 @@ access to the buffer size that is not provided in PFR.
         break;
       }
     }
-    
+
     // Check if we found alpha_moments_count
     if (!found_alpha_moments) {
       if (attempt_count >= max_attempts) {
@@ -2342,35 +2342,35 @@ access to the buffer size that is not provided in PFR.
         error->one(FLERR, "Error reading MTP file. Alpha moment count not found.");
       }
     }
-    
+
     // Parse alpha_moments_count from saved_line with validation
     if (saved_line_valid) {
       std::istringstream iss(saved_line);
       std::string keyword_str, equals_str;
       int value;
       iss >> keyword_str >> equals_str >> value;
-      
+
       // Validate parsed values
       if (keyword_str != "alpha_moments_count" || equals_str != "=") {
         error->one(FLERR, "MTP error: Invalid alpha_moments_count format. Expected 'alpha_moments_count = value', got: '{}'", saved_line);
       }
-      
+
       // CRITICAL: Validate the value - alpha_moment_count must be positive
       if (value <= 0) {
         error->one(FLERR, "MTP error: Invalid alpha_moments_count value: {}. Must be positive integer.", value);
       }
-      
+
       // Check for unreasonably large values
       if (value > 1000000) {
         utils::logmesg(lmp, "WARNING: alpha_moments_count is unusually large: {}. File may have issues.\n", value);
       }
-      
+
       alpha_moment_count = value;
       utils::logmesg(lmp, "Successfully parsed alpha_moments_count = {}\n", alpha_moment_count);
     } else {
       error->one(FLERR, "MTP error: alpha_moments_count found but could not be parsed from: '{}'", saved_line);
     }
-    
+
     memory->create(moment_tensor_vals, alpha_moment_count, "moment_tensor_vals");
     memory->create(nbh_energy_ders_wrt_moments, alpha_moment_count, "nbh_energy_ders_wrt_moments");
 
@@ -2763,7 +2763,7 @@ access to the buffer size that is not provided in PFR.
   }
   memory->create(alpha_times_out, alpha_index_times_count, "alpha_times_out");
   memory->create(weighted_basic_moment_ders, alpha_index_basic_count, "weighted_basic_moment_ders");
-  
+
   // Allocate radial_vals/ders for final storage only (one value per mu)
   // Temporary arrays are now created locally in compute() function
   memory->create(radial_vals, radial_func_count, "radial_vals");
@@ -2843,7 +2843,7 @@ access to the buffer size that is not provided in PFR.
 
     //Coefficients - allocate unified array
     memory->create(regression_coeffs, regression_coeffs_count, "regression_coeffs");
-    
+
     // Set offset pointers
     shift_coeffs_offset = 0;
     scal_coeffs_offset = species_count;
@@ -2854,18 +2854,18 @@ access to the buffer size that is not provided in PFR.
     env_gate_coeffs_offset = radial_coeffs_offset + radial_coeff_count_local;
     env_gate_lambda_raw_offset = env_gate_coeffs_offset;
     env_gate_log_density_coeffs_offset = env_gate_coeffs_offset + species_count;
-    
+
     shift_coeffs = &regression_coeffs[shift_coeffs_offset];
     scal_coeffs = &regression_coeffs[scal_coeffs_offset];
     radial_basis_coeffs = &regression_coeffs[radial_coeffs_offset];
-    
+
     memory->create(linear_coeffs, alpha_scalar_count, "linear_coeffs");
     memory->create(species_coeffs, species_count, "species_coeffs");
-    
+
     // SUS2-MLIP mapping arrays
     memory->create(mu_to_K, radial_func_count, "mu_to_K");
     memory->create(mu_to_sigma, radial_func_count, "mu_to_sigma");
-    
+
   }
 
   //We can then populate the cutoffs
@@ -2917,7 +2917,7 @@ access to the buffer size that is not provided in PFR.
   MPI_Bcast(regression_coeffs, regression_coeffs_count, MPI_DOUBLE, 0, world);
   MPI_Bcast(linear_coeffs, alpha_scalar_count, MPI_DOUBLE, 0, world);
   MPI_Bcast(species_coeffs, species_count, MPI_DOUBLE, 0, world);
-  
+
   // SUS2-MLIP mapping arrays
   MPI_Bcast(mu_to_K, radial_func_count, MPI_INT, 0, world);
   MPI_Bcast(mu_to_sigma, radial_func_count, MPI_INT, 0, world);
