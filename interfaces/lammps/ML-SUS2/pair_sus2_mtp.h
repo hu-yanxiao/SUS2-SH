@@ -120,6 +120,7 @@ class PairSUS2MTP : public Pair {
   double *zbl_pair_inner_cutoffs = nullptr;
   double *zbl_pair_outer_cutoffs = nullptr;
   double *zbl_pair_outer_sq = nullptr;
+  SUS2MTPZBLPairConstants *zbl_pair_constants = nullptr;
   
   double *shift_coeffs;  // Shift coefficients for each species (species_count elements)
   double *scal_coeffs;   // Scaling coefficients for coordinate transformation (scal_coeffs_count elements)
@@ -214,7 +215,6 @@ class PairSUS2MTP : public Pair {
   double *weighted_basic_moment_ders;     // Basic-moment derivatives with species coeff prefactor applied
   double *env_rho_dr = nullptr;           // Reused env-gate density derivative per neighbor
   double *env_activation_basic_vals = nullptr;  // Reused env-gate chain accumulator per basic moment
-  double *zbl_force_prefactors = nullptr; // Reused 0.5*dE/dr/r for full-neighbor ZBL
   int env_activation_basic_size = 0;
 
   // Cache whether to calculate forces based on cutoff as calculated in alpha basics

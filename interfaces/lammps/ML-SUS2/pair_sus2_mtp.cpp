@@ -200,16 +200,19 @@ void reset_zbl_storage(LAMMPS_NS::Memory *memory,
                        int *&atomic_numbers,
                        double *&pair_inner_cutoffs,
                        double *&pair_outer_cutoffs,
-                       double *&pair_outer_sq)
+                       double *&pair_outer_sq,
+                       SUS2MTPZBLPairConstants *&pair_constants)
 {
   memory->destroy(atomic_numbers);
   memory->destroy(pair_inner_cutoffs);
   memory->destroy(pair_outer_cutoffs);
   memory->destroy(pair_outer_sq);
+  memory->destroy(pair_constants);
   atomic_numbers = nullptr;
   pair_inner_cutoffs = nullptr;
   pair_outer_cutoffs = nullptr;
   pair_outer_sq = nullptr;
+  pair_constants = nullptr;
 }
 
 void interpolate_table(double ***table,
@@ -395,6 +398,7 @@ PairSUS2MTP::~PairSUS2MTP()
 	    memory->destroy(zbl_pair_inner_cutoffs);
 	    memory->destroy(zbl_pair_outer_cutoffs);
 	    memory->destroy(zbl_pair_outer_sq);
+	    memory->destroy(zbl_pair_constants);
 	    memory->destroy(moment_tensor_vals);
     memory->destroy(regression_coeffs);
     memory->destroy(linear_coeffs);
@@ -433,7 +437,6 @@ PairSUS2MTP::~PairSUS2MTP()
     memory->destroy(weighted_basic_moment_ders);
 	    memory->destroy(env_rho_dr);
 	    memory->destroy(env_activation_basic_vals);
-	    memory->destroy(zbl_force_prefactors);
 	    memory->destroy(mu_to_K);
     memory->destroy(mu_to_sigma);
 
@@ -1040,7 +1043,6 @@ void PairSUS2MTP::compute_zbl(int eflag, int vflag)
     const int itype = type[i] - 1;
     if (itype < 0 || itype >= C)
       error->one(FLERR, "ZBL atom type is outside the SUS2 model species map.");
-    const int Zi = zbl_atomic_numbers[itype];
     const double xi[3] = {x[i][0], x[i][1], x[i][2]};
     const int jnum = numneigh[i];
     for (int jj = 0; jj < jnum; jj++) {
@@ -1054,11 +1056,11 @@ void PairSUS2MTP::compute_zbl(int eflag, int vflag)
       const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
       if (rsq <= 0.0 || rsq >= zbl_pair_outer_sq[pair_index]) continue;
       const double dist = std::sqrt(rsq);
-      const int Zj = zbl_atomic_numbers[jtype];
       const SUS2MTPZBLPairValue pair =
-          sus2_mtp_zbl::ComputePairHost(Zi, Zj, dist,
-                                        zbl_pair_inner_cutoffs[pair_index],
-                                        zbl_pair_outer_cutoffs[pair_index]);
+          sus2_mtp_zbl::ComputePairHostCached(
+              zbl_pair_constants[pair_index], dist,
+              zbl_pair_inner_cutoffs[pair_index],
+              zbl_pair_outer_cutoffs[pair_index]);
       if (pair.energy == 0.0 && pair.dEdr == 0.0) continue;
 
       const double pref = 0.5 * pair.dEdr / dist;
@@ -1758,7 +1760,8 @@ access to the buffer size that is not provided in PFR.
   interaction_cutoff = 0.0;
   interaction_cutoff_sq = 0.0;
   reset_zbl_storage(memory, zbl_atomic_numbers, zbl_pair_inner_cutoffs,
-                    zbl_pair_outer_cutoffs, zbl_pair_outer_sq);
+                    zbl_pair_outer_cutoffs, zbl_pair_outer_sq,
+                    zbl_pair_constants);
 
   //Open the MTP file on proc 0
   if (comm->me == 0) {
@@ -2873,6 +2876,7 @@ access to the buffer size that is not provided in PFR.
     memory->create(zbl_pair_inner_cutoffs, zbl_pair_count, "zbl_pair_inner_cutoffs");
     memory->create(zbl_pair_outer_cutoffs, zbl_pair_count, "zbl_pair_outer_cutoffs");
     memory->create(zbl_pair_outer_sq, zbl_pair_count, "zbl_pair_outer_sq");
+    memory->create(zbl_pair_constants, zbl_pair_count, "zbl_pair_constants");
     sus2_mtp_zbl::FillPairCutoffTables(species_count, zbl_atomic_numbers,
                                        zbl_inner, zbl_outer,
                                        zbl_typewise_cutoff_enabled,
@@ -2880,6 +2884,8 @@ access to the buffer size that is not provided in PFR.
                                        zbl_pair_inner_cutoffs,
                                        zbl_pair_outer_cutoffs,
                                        zbl_pair_outer_sq);
+    sus2_mtp_zbl::FillPairConstants(species_count, zbl_atomic_numbers,
+                                    zbl_pair_constants);
   }
   int two_layer_gate_enabled_int = two_layer_gate_enabled ? 1 : 0;
   int two_layer_gate_shared_radial_int = two_layer_gate_shared_radial ? 1 : 0;

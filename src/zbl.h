@@ -14,6 +14,11 @@ struct ZBLPairValue {
 	double dEdr;
 };
 
+struct ZBLPairConstants {
+	double screening_inv;
+	double prefactor;
+};
+
 struct ZBLEFS {
 	double energy;
 	std::vector<Vector3> forces;
@@ -47,6 +52,11 @@ ZBLPairValue ComputeZBLPair(int atomic_number_i,
                             double distance,
                             double inner_cutoff,
                             double outer_cutoff);
+ZBLPairConstants MakeZBLPairConstants(int atomic_number_i, int atomic_number_j);
+ZBLPairValue ComputeZBLPairCached(const ZBLPairConstants& constants,
+                                  double distance,
+                                  double inner_cutoff,
+                                  double outer_cutoff);
 ZBLPairValue ComputeZBLPair(int atomic_number_i,
                             int atomic_number_j,
                             double distance,
@@ -65,6 +75,7 @@ private:
 	std::vector<double> pair_inner_cutoffs_;
 	std::vector<double> pair_outer_cutoffs_;
 	std::vector<double> pair_outer_sq_;
+	std::vector<ZBLPairConstants> pair_constants_;
 
 public:
 	ZBLPotential();

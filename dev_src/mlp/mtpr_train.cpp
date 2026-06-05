@@ -417,6 +417,31 @@ bool ShouldCacheNeighborhoods(const std::vector<Configuration>& configs, double 
 	return bytes <= kNeighborhoodCacheBudgetBytesPerRank;
 }
 
+void ApplyZBLResidualToDataset(std::vector<Configuration>& configs,
+                               const ZBLPotential& zbl,
+                               bool subtract,
+                               const std::vector<Neighborhoods>* neighborhoods)
+{
+	if (neighborhoods != nullptr && neighborhoods->size() != configs.size())
+		ERROR("ZBL residualization neighborhood cache size mismatch");
+	const double sign = subtract ? -1.0 : 1.0;
+	for (std::size_t cfg_index = 0; cfg_index < configs.size(); ++cfg_index) {
+		Configuration& cfg = configs[cfg_index];
+		const ZBLEFS zbl_efs = neighborhoods == nullptr ?
+			zbl.Compute(cfg) :
+			zbl.Compute(cfg, (*neighborhoods)[cfg_index]);
+		if (cfg.has_energy())
+			cfg.energy += sign * zbl_efs.energy;
+		if (cfg.has_forces())
+			for (int i = 0; i < cfg.size(); ++i)
+				cfg.force(i) += sign * zbl_efs.forces[i];
+		if (cfg.has_stresses())
+			for (int a = 0; a < 3; ++a)
+				for (int b = 0; b < 3; ++b)
+					cfg.stresses[a][b] += sign * zbl_efs.stresses[a][b];
+	}
+}
+
 bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& opts)
 {
 	const char* names[] = {
@@ -1314,6 +1339,21 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		          << std::endl;
 	}
 
+	bool zbl_training_residualized = false;
+	if (maxits > 0 && mtpr.HasZBL() && mtpr.ZBLEvaluationEnabled()) {
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] Precomputing training-set ZBL residuals"
+			          << " mode=" << (linear_training_neighborhoods_ptr == nullptr ? "zbl-neighborhoods" : "cached-main-neighborhoods")
+			          << std::endl;
+		ApplyZBLResidualToDataset(training_set, mtpr.ZBL(), true,
+		                          linear_training_neighborhoods_ptr);
+		mtpr.SetZBLEvaluationEnabled(false);
+		zbl_training_residualized = true;
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] Training-set ZBL residuals ready; "
+			          << "live ZBL evaluation disabled inside optimizer" << std::endl;
+	}
+
 	int radial_first_coeff_repairs = 0;
 	if (maxits > 0 && mtpr.has_radial_coeffs) {
 		if (prank == 0)
@@ -1565,9 +1605,21 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
      //           if (prank==0){ mtpr.Save_2("unfixed2.mtp");
       //                 }
 	}
+	if (zbl_training_residualized) {
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] Restoring training-set ZBL references"
+			          << std::endl;
+		ApplyZBLResidualToDataset(training_set, mtpr.ZBL(), false,
+		                          linear_training_neighborhoods_ptr);
+		mtpr.SetZBLEvaluationEnabled(true);
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] Training references restored; "
+			          << "live ZBL evaluation enabled for final reporting" << std::endl;
+	}
 	ErrorMonitor errmon, bufferrmon;
 	std::cout.precision(15);
-	bool have_train_summary = trainer.HasLastTrainErrorSummary();
+	bool have_train_summary = trainer.HasLastTrainErrorSummary() &&
+	                          !zbl_training_residualized;
 	MTPR_trainer::TrainErrorSummary train_summary;
 	if (have_train_summary)
 		train_summary = trainer.LastTrainErrorSummary();

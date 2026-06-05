@@ -184,6 +184,69 @@ ZBLPairValue ComputeZBLPair(int atomic_number_i,
 	                      inner_cutoff, outer_cutoff, 0.0);
 }
 
+ZBLPairConstants MakeZBLPairConstants(int atomic_number_i, int atomic_number_j)
+{
+	if (atomic_number_i <= 0 || atomic_number_j <= 0)
+		ERROR("ZBL atomic numbers should be positive.");
+	const double ev_angstrom_per_e2 = 14.3996454784255;
+	const double screening_inv =
+		2.134563 * (std::pow(static_cast<double>(atomic_number_i), 0.23) +
+		            std::pow(static_cast<double>(atomic_number_j), 0.23));
+	const double prefactor = ev_angstrom_per_e2 *
+		static_cast<double>(atomic_number_i) *
+		static_cast<double>(atomic_number_j);
+	return ZBLPairConstants{screening_inv, prefactor};
+}
+
+ZBLPairValue ComputeZBLPairCached(const ZBLPairConstants& constants,
+                                  double distance,
+                                  double inner_cutoff,
+                                  double outer_cutoff)
+{
+	if (inner_cutoff < 0.0)
+		ERROR("ZBL inner cutoff should be non-negative.");
+	if (outer_cutoff <= 0.0)
+		ERROR("ZBL outer cutoff should be positive.");
+	if (distance <= 0.0)
+		ERROR("ZBL pair distance should be positive.");
+	if (outer_cutoff <= inner_cutoff)
+		ERROR("ZBL cutoffs should satisfy 0 <= inner < outer.");
+
+	if (distance >= outer_cutoff)
+		return ZBLPairValue{0.0, 0.0};
+
+	const double coefficients[4] = {0.18175, 0.50986, 0.28022, 0.02817};
+	const double exponents[4] = {3.1998, 0.94229, 0.4029, 0.20162};
+	const double x = constants.screening_inv * distance;
+
+	double phi = 0.0;
+	double dphi_dr = 0.0;
+	for (int i = 0; i < 4; ++i) {
+		const double exp_value = std::exp(-exponents[i] * x);
+		phi += coefficients[i] * exp_value;
+		dphi_dr -= coefficients[i] * exponents[i] *
+			constants.screening_inv * exp_value;
+	}
+
+	const double base_energy = constants.prefactor * phi / distance;
+	const double base_dEdr = constants.prefactor *
+		(dphi_dr / distance - phi / (distance * distance));
+
+	double switch_value = 1.0;
+	double switch_derivative = 0.0;
+	if (distance > inner_cutoff) {
+		const double pi_factor = std::acos(-1.0) / (outer_cutoff - inner_cutoff);
+		switch_value = 0.5 * std::cos(pi_factor * (distance - inner_cutoff)) + 0.5;
+		switch_derivative = -0.5 * pi_factor *
+			std::sin(pi_factor * (distance - inner_cutoff));
+	}
+
+	ZBLPairValue value;
+	value.energy = switch_value * base_energy;
+	value.dEdr = switch_value * base_dEdr + switch_derivative * base_energy;
+	return value;
+}
+
 ZBLPairValue ComputeZBLPair(int atomic_number_i,
                             int atomic_number_j,
                             double distance,
@@ -211,40 +274,6 @@ ZBLPairValue ComputeZBLPair(int atomic_number_i,
 	if (distance >= outer_cutoff)
 		return ZBLPairValue{0.0, 0.0};
 
-	const double coefficients[4] = {0.18175, 0.50986, 0.28022, 0.02817};
-	const double exponents[4] = {3.1998, 0.94229, 0.4029, 0.20162};
-	const double ev_angstrom_per_e2 = 14.3996454784255;
-	const double screening_inv =
-		2.134563 * (std::pow(static_cast<double>(atomic_number_i), 0.23) +
-		            std::pow(static_cast<double>(atomic_number_j), 0.23));
-	const double x = screening_inv * distance;
-
-	double phi = 0.0;
-	double dphi_dr = 0.0;
-	for (int i = 0; i < 4; ++i) {
-		const double exp_value = std::exp(-exponents[i] * x);
-		phi += coefficients[i] * exp_value;
-		dphi_dr -= coefficients[i] * exponents[i] * screening_inv * exp_value;
-	}
-
-	const double prefactor = ev_angstrom_per_e2 *
-		static_cast<double>(atomic_number_i) *
-		static_cast<double>(atomic_number_j);
-	const double base_energy = prefactor * phi / distance;
-	const double base_dEdr = prefactor *
-		(dphi_dr / distance - phi / (distance * distance));
-
-	double switch_value = 1.0;
-	double switch_derivative = 0.0;
-	if (distance > inner_cutoff) {
-		const double pi_factor = std::acos(-1.0) / (outer_cutoff - inner_cutoff);
-		switch_value = 0.5 * std::cos(pi_factor * (distance - inner_cutoff)) + 0.5;
-		switch_derivative = -0.5 * pi_factor *
-			std::sin(pi_factor * (distance - inner_cutoff));
-	}
-
-	ZBLPairValue value;
-	value.energy = switch_value * base_energy;
-	value.dEdr = switch_value * base_dEdr + switch_derivative * base_energy;
-	return value;
+	return ComputeZBLPairCached(MakeZBLPairConstants(atomic_number_i, atomic_number_j),
+	                            distance, inner_cutoff, outer_cutoff);
 }

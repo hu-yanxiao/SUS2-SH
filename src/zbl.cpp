@@ -84,6 +84,7 @@ void ZBLPotential::Clear()
 	pair_inner_cutoffs_.clear();
 	pair_outer_cutoffs_.clear();
 	pair_outer_sq_.clear();
+	pair_constants_.clear();
 }
 
 void ZBLPotential::Configure(const std::vector<int>& atomic_numbers,
@@ -120,6 +121,12 @@ void ZBLPotential::Configure(const std::vector<int>& atomic_numbers,
 	                        typewise_cutoff_enabled_,
 	                        typewise_cutoff_enabled_ ? typewise_cutoff_factor_ : 0.0,
 	                        pair_inner_cutoffs_, pair_outer_cutoffs_, pair_outer_sq_);
+	pair_constants_.resize(static_cast<size_t>(atomic_numbers_.size()) *
+	                       atomic_numbers_.size());
+	for (int i = 0; i < static_cast<int>(atomic_numbers_.size()); ++i)
+		for (int j = 0; j < static_cast<int>(atomic_numbers_.size()); ++j)
+			pair_constants_[static_cast<size_t>(i) * atomic_numbers_.size() + j] =
+				MakeZBLPairConstants(atomic_numbers_[i], atomic_numbers_[j]);
 	enabled_ = true;
 }
 
@@ -139,14 +146,14 @@ ZBLEFS ZBLPotential::Compute(const Configuration& cfg, const Neighborhoods& neig
 		ERROR("ZBL atomic number map is empty.");
 	const int species_count = static_cast<int>(atomic_numbers_.size());
 	if (static_cast<int>(pair_outer_cutoffs_.size()) != species_count * species_count ||
-	    static_cast<int>(pair_inner_cutoffs_.size()) != species_count * species_count)
+	    static_cast<int>(pair_inner_cutoffs_.size()) != species_count * species_count ||
+	    static_cast<int>(pair_constants_.size()) != species_count * species_count)
 		ERROR("ZBL pair cutoff table is not initialized.");
 
 	for (int ind = 0; ind < cfg.size(); ++ind) {
 		const int type_i = cfg.type(ind);
 		if (type_i < 0 || type_i >= species_count)
 			ERROR("ZBL atom type is outside the atomic number map.");
-		const int Zi = atomic_numbers_[type_i];
 		const Neighborhood& nbh = neighborhoods[ind];
 
 		for (int j = 0; j < nbh.count; ++j) {
@@ -157,11 +164,11 @@ ZBLEFS ZBLPotential::Compute(const Configuration& cfg, const Neighborhoods& neig
 			const int pair_index = type_i * species_count + type_j;
 			if (nbh.dists[j] >= pair_outer_cutoffs_[pair_index])
 				continue;
-			const int Zj = atomic_numbers_[type_j];
 			const ZBLPairValue pair =
-				ComputeZBLPair(Zi, Zj, nbh.dists[j],
-				               pair_inner_cutoffs_[pair_index],
-				               pair_outer_cutoffs_[pair_index]);
+				ComputeZBLPairCached(pair_constants_[pair_index],
+				                     nbh.dists[j],
+				                     pair_inner_cutoffs_[pair_index],
+				                     pair_outer_cutoffs_[pair_index]);
 			if (pair.energy == 0.0 && pair.dEdr == 0.0)
 				continue;
 
@@ -188,14 +195,51 @@ void ZBLPotential::AddTo(Configuration& cfg, const Neighborhoods& neighborhoods)
 {
 	if (!enabled_)
 		return;
-	const ZBLEFS zbl = Compute(cfg, neighborhoods);
-	if (cfg.has_energy())
-		cfg.energy += zbl.energy;
-	if (cfg.has_forces())
-		for (int i = 0; i < cfg.size(); ++i)
-			cfg.force(i) += zbl.forces[i];
-	if (cfg.has_stresses())
-		for (int a = 0; a < 3; ++a)
-			for (int b = 0; b < 3; ++b)
-				cfg.stresses[a][b] += zbl.stresses[a][b];
+	if (static_cast<int>(atomic_numbers_.size()) <= 0)
+		ERROR("ZBL atomic number map is empty.");
+	const int species_count = static_cast<int>(atomic_numbers_.size());
+	if (static_cast<int>(pair_outer_cutoffs_.size()) != species_count * species_count ||
+	    static_cast<int>(pair_inner_cutoffs_.size()) != species_count * species_count ||
+	    static_cast<int>(pair_constants_.size()) != species_count * species_count)
+		ERROR("ZBL pair cutoff table is not initialized.");
+
+	const bool add_energy = cfg.has_energy();
+	const bool add_forces = cfg.has_forces();
+	const bool add_stresses = cfg.has_stresses();
+	for (int ind = 0; ind < cfg.size(); ++ind) {
+		const int type_i = cfg.type(ind);
+		if (type_i < 0 || type_i >= species_count)
+			ERROR("ZBL atom type is outside the atomic number map.");
+		const Neighborhood& nbh = neighborhoods[ind];
+
+		for (int j = 0; j < nbh.count; ++j) {
+			const int neighbor = nbh.inds[j];
+			const int type_j = cfg.type(neighbor);
+			if (type_j < 0 || type_j >= species_count)
+				ERROR("ZBL neighbor atom type is outside the atomic number map.");
+			const int pair_index = type_i * species_count + type_j;
+			if (nbh.dists[j] >= pair_outer_cutoffs_[pair_index])
+				continue;
+			const ZBLPairValue pair =
+				ComputeZBLPairCached(pair_constants_[pair_index],
+				                     nbh.dists[j],
+				                     pair_inner_cutoffs_[pair_index],
+				                     pair_outer_cutoffs_[pair_index]);
+			if (pair.energy == 0.0 && pair.dEdr == 0.0)
+				continue;
+
+			const double inv_r = 1.0 / nbh.dists[j];
+			const Vector3 force = nbh.vecs[j] * (0.5 * pair.dEdr * inv_r);
+			if (add_energy)
+				cfg.energy += 0.5 * pair.energy;
+			if (add_forces) {
+				cfg.force(ind) += force;
+				cfg.force(neighbor) -= force;
+			}
+			if (add_stresses)
+				for (int a = 0; a < 3; ++a)
+					for (int b = 0; b < 3; ++b)
+						cfg.stresses[a][b] -= force[a] * nbh.vecs[j][b];
+		}
+	}
 }
