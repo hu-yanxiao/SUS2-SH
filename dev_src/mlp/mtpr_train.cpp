@@ -1378,12 +1378,16 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 
 	bool zbl_training_residualized = false;
 	if (maxits > 0 && mtpr.HasZBL() && mtpr.ZBLEvaluationEnabled()) {
+		const std::vector<Neighborhoods>* zbl_residual_neighborhoods_ptr =
+			(linear_training_neighborhoods_ptr != nullptr &&
+			 mtpr.CutOff() + 1.0e-12 >= mtpr.ZBL().MaxOuterCutoff()) ?
+			 linear_training_neighborhoods_ptr : nullptr;
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] Precomputing training-set ZBL residuals"
-			          << " mode=" << (linear_training_neighborhoods_ptr == nullptr ? "zbl-neighborhoods" : "cached-main-neighborhoods")
+			          << " mode=" << (zbl_residual_neighborhoods_ptr == nullptr ? "zbl-neighborhoods" : "cached-main-neighborhoods")
 			          << std::endl;
 		ApplyZBLResidualToDataset(training_set, mtpr.ZBL(), true,
-		                          linear_training_neighborhoods_ptr);
+		                          zbl_residual_neighborhoods_ptr);
 		mtpr.SetZBLEvaluationEnabled(false);
 		zbl_training_residualized = true;
 		if (prank == 0)
@@ -1647,11 +1651,15 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
       //                 }
 	}
 	if (zbl_training_residualized) {
+		const std::vector<Neighborhoods>* zbl_residual_neighborhoods_ptr =
+			(linear_training_neighborhoods_ptr != nullptr &&
+			 mtpr.CutOff() + 1.0e-12 >= mtpr.ZBL().MaxOuterCutoff()) ?
+			 linear_training_neighborhoods_ptr : nullptr;
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] Restoring training-set ZBL references"
 			          << std::endl;
 		ApplyZBLResidualToDataset(training_set, mtpr.ZBL(), false,
-		                          linear_training_neighborhoods_ptr);
+		                          zbl_residual_neighborhoods_ptr);
 		mtpr.SetZBLEvaluationEnabled(true);
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] Training references restored; "

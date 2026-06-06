@@ -16,9 +16,16 @@ zbl_pred="$tmp_dir/zbl_pred.cfg"
 continued_model="$tmp_dir/continued_zbl.mtp"
 current_model="$tmp_dir/current_zbl.mtp"
 train_log="$tmp_dir/train.log"
+low_cutoff_model="$tmp_dir/low_cutoff_base.mtp"
+low_cutoff_continued="$tmp_dir/low_cutoff_zbl.mtp"
+low_cutoff_current="$tmp_dir/low_cutoff_current.mtp"
+low_cutoff_cfg="$tmp_dir/low_cutoff_ho.cfg"
+low_cutoff_log="$tmp_dir/low_cutoff_train.log"
 
 rm -f "$base_model" "$zbl_init_model" "$train_cfg" "$short_cfg" \
-  "$base_pred" "$zbl_pred" "$continued_model" "$current_model" "$train_log"
+  "$base_pred" "$zbl_pred" "$continued_model" "$current_model" "$train_log" \
+  "$low_cutoff_model" "$low_cutoff_continued" "$low_cutoff_current" \
+  "$low_cutoff_cfg" "$low_cutoff_log"
 
 awk '{print} /^END_CFG/{exit}' dev_test/NaCl_small.cfgs > "$train_cfg"
 
@@ -112,3 +119,48 @@ grep -q "zbl_typewise_cutoff_enabled = true" "$continued_model"
 grep -q "zbl_atomic_numbers = {1, 8}" "$continued_model"
 
 "$bin" calc-efs "$continued_model" "$short_cfg" "$zbl_pred"
+
+"$bin" init-sh "$low_cutoff_model" \
+  --species-count=2 \
+  --l-max=1 \
+  --k-max=1 \
+  --body-order=2 \
+  --two-layer-gate \
+  --two-layer-gate-body-order=2 \
+  --two-layer-gate-shared-radial \
+  --radial-basis-size=3 \
+  --cutoff=0.6
+
+cat > "$low_cutoff_cfg" <<'CFG'
+BEGIN_CFG
+ Size
+    2
+ Supercell
+    10.0 0.0 0.0
+    0.0 10.0 0.0
+    0.0 0.0 10.0
+ AtomData:  id type       cartes_x      cartes_y      cartes_z           fx          fy          fz
+    1 0  0.0 0.0 0.0  0.0 0.0 0.0
+    2 1  0.7 0.0 0.0  0.0 0.0 0.0
+ Energy
+    0.0
+ PlusStress:  xx          yy          zz          yz          xz          xy
+    0.0 0.0 0.0 0.0 0.0 0.0
+END_CFG
+CFG
+
+"$bin" train "$low_cutoff_model" "$low_cutoff_cfg" \
+  --trained-pot-name="$low_cutoff_continued" \
+  --curr-pot-name="$low_cutoff_current" \
+  --max-iter=1 \
+  --skip-preinit \
+  --energy-weight=1 \
+  --force-weight=0 \
+  --stress-weight=0 \
+  --zbl-inner=0.4 \
+  --zbl-outer=0.8 \
+  --zbl-elements=H,O \
+  --zbl-typewise-cutoff-factor=0.7 > "$low_cutoff_log"
+
+grep -q "mode=zbl-neighborhoods" "$low_cutoff_log"
+grep -q "zbl_enabled = true" "$low_cutoff_continued"

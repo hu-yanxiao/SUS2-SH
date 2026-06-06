@@ -2713,7 +2713,7 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 			build_full_edge_cache && cfg.size() > 0
 			&& HasTwoLayerEdgePrimitiveCache(0, true, true);
 		if (HasZBL() && ZBLEvaluationEnabled()) {
-			if (neighborhoods.cutoff + 1.0e-12 >= ZBL().OuterCutoff())
+			if (neighborhoods.cutoff + 1.0e-12 >= ZBL().MaxOuterCutoff())
 				ZBL().AddTo(cfg, neighborhoods);
 			else
 				ZBL().AddTo(cfg);

@@ -69,6 +69,7 @@ private:
 	bool enabled_;
 	double inner_cutoff_;
 	double outer_cutoff_;
+	double max_outer_cutoff_;
 	bool typewise_cutoff_enabled_;
 	double typewise_cutoff_factor_;
 	std::vector<int> atomic_numbers_;
@@ -83,6 +84,7 @@ public:
 	bool Enabled() const;
 	double InnerCutoff() const;
 	double OuterCutoff() const;
+	double MaxOuterCutoff() const;
 	bool TypewiseCutoffEnabled() const;
 	double TypewiseCutoffFactor() const;
 	const std::vector<int>& AtomicNumbers() const;
