@@ -1,0 +1,53 @@
+#!/bin/bash
+#BSUB -J lmp_dense_cache_table_ipo6138
+#BSUB -q 33
+#BSUB -m b08u21a
+#BSUB -n 40
+#BSUB -R "span[ptile=40]"
+#BSUB -o %J.dense_cache_table_ipo6138.out
+#BSUB -e %J.dense_cache_table_ipo6138.err
+
+module purge
+module load gcc/11.2.0 compiler/2022.1.0 mpi/2021.6.0 mkl/2022.2.0
+
+cd "$LS_SUBCWD"
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+
+OLD_BIN=/work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
+NEW_BIN=/work/phy-weigw/apps/lammps-10Dec2025/src/lmp_ml_sus2_avx2
+
+NP=$(wc -l < "$LSB_DJOB_HOSTFILE")
+MPI="mpiexec.hydra -machinefile $LSB_DJOB_HOSTFILE -np $NP"
+
+{
+  echo "hostname=$(hostname)"
+  echo "hostfile_unique=$(sort -u "$LSB_DJOB_HOSTFILE" | tr '\n' ' ')"
+  lscpu | grep -E '^(Model name|CPU\\(s\\)|Thread\\(s\\) per core|Core\\(s\\) per socket|Socket\\(s\\))'
+} > node_info.txt
+
+sha256sum "$OLD_BIN" "$NEW_BIN" > binaries.sha256
+
+run_case() {
+  label=$1
+  bin=$2
+  disable_cache=$3
+  if [ "$disable_cache" = 1 ]; then
+    export SUS2_LAMMPS_DISABLE_TWO_LAYER_GATE_TANH_CACHE=1
+  else
+    unset SUS2_LAMMPS_DISABLE_TWO_LAYER_GATE_TANH_CACHE
+  fi
+  start=$(date +%s)
+  $MPI "$bin" -in in.forward_bench -log log.$label -screen screen.$label
+  rc=$?
+  end=$(date +%s)
+  echo "runtime_sec=$((end-start))" > $label.time
+  echo "exit_code=$rc" >> $label.time
+  if [ "$rc" != 0 ]; then exit $rc; fi
+}
+
+run_case old_default "$OLD_BIN" 0
+run_case new_ipo_nocache "$NEW_BIN" 1
+run_case new_ipo_default "$NEW_BIN" 0

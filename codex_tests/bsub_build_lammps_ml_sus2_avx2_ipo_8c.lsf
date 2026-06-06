@@ -1,0 +1,28 @@
+#!/bin/bash
+#BSUB -J build_lmp_ml_sus2_avx2
+#BSUB -q 33
+#BSUB -n 8
+#BSUB -R "span[ptile=8]"
+#BSUB -o build_lmp_ml_sus2_avx2.%J.out
+#BSUB -e build_lmp_ml_sus2_avx2.%J.err
+
+module purge
+module load gcc/11.2.0 compiler/2022.1.0 mpi/2021.6.0 mkl/2022.2.0
+
+cd /work/phy-weigw/apps/lammps-10Dec2025/src
+
+{
+  echo "hostname=$(hostname)"
+  lscpu | grep -E '^(Model name|CPU\\(s\\)|Thread\\(s\\) per core|Core\\(s\\) per socket|Socket\\(s\\))'
+  command -v mpiicpc
+  mpiicpc -v 2>&1 | head -n 5
+} > codex_build_lmp_ml_sus2_avx2_node_info.txt
+
+rm -f Obj_ml_sus2_avx2/pair_sus2_mtp.o \
+      Obj_ml_sus2_avx2/pair_sus2_mtp.d \
+      lmp_ml_sus2_avx2
+
+make -j8 ml_sus2_avx2
+
+sha256sum lmp_ml_sus2_avx2 > codex_build_lmp_ml_sus2_avx2.sha256
+size lmp_ml_sus2_avx2 > codex_build_lmp_ml_sus2_avx2.size
