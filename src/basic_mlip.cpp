@@ -235,7 +235,7 @@ void AnyLocalMLIP::CalcE(Configuration& cfg)
 		cfg.energy += SiteEnergy(nbh);
 
 	if (HasZBL() && ZBLEvaluationEnabled()) {
-		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().OuterCutoff())
+		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().MaxOuterCutoff())
 			cfg.energy += ZBL().Compute(cfg, neighborhoods).energy;
 		else
 			cfg.energy += ZBL().Compute(cfg).energy;
@@ -287,7 +287,7 @@ void AnyLocalMLIP::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhood
 					cfg.stresses[a][b] -= buff_site_energy_ders_[j][a] * nbh.vecs[j][b];
 	}
 	if (HasZBL() && ZBLEvaluationEnabled()) {
-		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().OuterCutoff())
+		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().MaxOuterCutoff())
 			ZBL().AddTo(cfg, neighborhoods);
 		else
 			ZBL().AddTo(cfg);

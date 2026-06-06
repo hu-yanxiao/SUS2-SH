@@ -238,13 +238,16 @@ void interpolate_table_at_bin(double ***table,
                               double *ders)
 {
   const int r_next = r_list + 1;
-  double *row = table[table_index][r_list];
-  double *next_row = table[table_index][r_next];
-  double *der_row = der_table ? der_table[table_index][r_list] : nullptr;
-  double *der_next_row = der_table ? der_table[table_index][r_next] : nullptr;
+  const double *__restrict row = table[table_index][r_list];
+  const double *__restrict next_row = table[table_index][r_next];
+  const double *__restrict der_row = der_table ? der_table[table_index][r_list] : nullptr;
+  const double *__restrict der_next_row = der_table ? der_table[table_index][r_next] : nullptr;
+  double *__restrict out_values = values;
+  double *__restrict out_ders = ders;
+  #pragma omp simd
   for (int m = 0; m < count; ++m) {
-    values[m] = row[m] + ddr * (next_row[m] - row[m]);
-    if (ders) ders[m] = der_row[m] + ddr * (der_next_row[m] - der_row[m]);
+    out_values[m] = row[m] + ddr * (next_row[m] - row[m]);
+    if (out_ders) out_ders[m] = der_row[m] + ddr * (der_next_row[m] - der_row[m]);
   }
 }
 
@@ -258,11 +261,12 @@ void interpolate_table(double ***table,
                        double *values,
                        double *ders)
 {
-  int r_list = static_cast<int>(std::floor(dist * inv_dr));
+  const double scaled_dist = dist * inv_dr;
+  int r_list = static_cast<int>(scaled_dist);
   const int last_interval = list_grid_size - 2;
   if (r_list < 0) r_list = 0;
   if (r_list > last_interval) r_list = last_interval;
-  double ddr = dist * inv_dr - r_list;
+  double ddr = scaled_dist - r_list;
   if (ddr < 0.0) ddr = 0.0;
   if (ddr > 1.0) ddr = 1.0;
   interpolate_table_at_bin(table, der_table, table_index, r_list, ddr, count,
@@ -585,13 +589,120 @@ bool PairSUS2MTP::get_radial_table_info(int itype,
   table_index = pair_to_table_index[shift];
   if (table_index < 0) return false;
 
-  r_list = static_cast<int>(std::floor(dist * inv_dr));
+  const double scaled_dist = dist * inv_dr;
+  r_list = static_cast<int>(scaled_dist);
   const int last_interval = list_grid_size - 2;
   if (r_list < 0) r_list = 0;
   if (r_list > last_interval) r_list = last_interval;
-  ddr = dist * inv_dr - r_list;
+  ddr = scaled_dist - r_list;
   if (ddr < 0.0) ddr = 0.0;
   if (ddr > 1.0) ddr = 1.0;
+  return true;
+}
+
+bool PairSUS2MTP::calc_gate_additive_table_radial_values(int jtype,
+                                                         double gate_residual,
+                                                         int gate_atom_index,
+                                                         int table_index,
+                                                         int r_list,
+                                                         double ddr)
+{
+  if (!do_list || table_index < 0) return false;
+  if (jtype < 0 ||
+      jtype >= static_cast<int>(two_layer_gate_additive_ratio_valid.size()) ||
+      !two_layer_gate_additive_ratio_valid[jtype])
+    return false;
+  if (static_cast<int>(two_layer_gate_additive_coeffs.size()) !=
+      species_count * radial_func_count)
+    error->one(FLERR, "SUS2-SH two-layer gate additive coefficient storage is inconsistent.");
+  if (static_cast<int>(two_layer_gate_additive_ratios.size()) !=
+      species_count * radial_func_count)
+    error->one(FLERR, "SUS2-SH two-layer gate additive ratio storage is inconsistent.");
+
+  const bool use_gate_mu_cache =
+      gate_atom_index >= 0 &&
+      !disable_two_layer_gate_tanh_cache() &&
+      two_layer_gate_multiplier_mu_cache != nullptr &&
+      two_layer_gate_deriv_mu_cache != nullptr &&
+      two_layer_gate_mu_cache_valid != nullptr;
+  double *__restrict gate_multiplier_cache = nullptr;
+  double *__restrict gate_deriv_cache = nullptr;
+  bool fill_gate_mu_cache = false;
+  if (use_gate_mu_cache) {
+    if (gate_atom_index >= atom->nmax)
+      error->one(FLERR, "SUS2-SH LAMMPS two-layer gate mu cache atom index is out of range.");
+    gate_multiplier_cache = two_layer_gate_multiplier_mu_cache +
+        static_cast<size_t>(gate_atom_index) * radial_func_count;
+    gate_deriv_cache = two_layer_gate_deriv_mu_cache +
+        static_cast<size_t>(gate_atom_index) * radial_func_count;
+    fill_gate_mu_cache = two_layer_gate_mu_cache_valid[gate_atom_index] == 0;
+  }
+
+  const int r_next = r_list + 1;
+  const double *__restrict base_row = radial_list[table_index][r_list];
+  const double *__restrict base_next_row = radial_list[table_index][r_next];
+  const double *__restrict base_der_row = radial_der_list[table_index][r_list];
+  const double *__restrict base_der_next_row = radial_der_list[table_index][r_next];
+  const size_t ratio_offset = static_cast<size_t>(jtype) * radial_func_count;
+  const double *__restrict ratios =
+      two_layer_gate_additive_ratios.data() + ratio_offset;
+
+  if (gate_multiplier_cache == nullptr) {
+    #pragma omp simd
+    for (int mu = 0; mu < radial_func_count; mu++) {
+      const double base_val =
+          base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
+      const double base_der =
+          base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
+      const double additive_coeff = ratios[mu];
+      const double arg = additive_coeff * gate_residual;
+      const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
+      const double sech2 = 1.0 - tanh_arg * tanh_arg;
+      const double gate_multiplier =
+          1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
+      const double gate_deriv =
+          two_layer_gate_tanh_amplitude * additive_coeff * sech2;
+      two_layer_gate_residual_radial_vals[mu] = base_val * gate_deriv;
+      radial_vals[mu] = base_val * gate_multiplier;
+      radial_ders[mu] = base_der * gate_multiplier;
+    }
+  } else if (fill_gate_mu_cache) {
+    #pragma omp simd
+    for (int mu = 0; mu < radial_func_count; mu++) {
+      const double base_val =
+          base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
+      const double base_der =
+          base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
+      const double additive_coeff = ratios[mu];
+      const double arg = additive_coeff * gate_residual;
+      const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
+      const double sech2 = 1.0 - tanh_arg * tanh_arg;
+      const double gate_multiplier =
+          1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
+      const double gate_deriv =
+          two_layer_gate_tanh_amplitude * additive_coeff * sech2;
+      gate_multiplier_cache[mu] = gate_multiplier;
+      gate_deriv_cache[mu] = gate_deriv;
+      two_layer_gate_residual_radial_vals[mu] = base_val * gate_deriv;
+      radial_vals[mu] = base_val * gate_multiplier;
+      radial_ders[mu] = base_der * gate_multiplier;
+    }
+    two_layer_gate_mu_cache_valid[gate_atom_index] = 1;
+  } else {
+    #pragma omp simd
+    for (int mu = 0; mu < radial_func_count; mu++) {
+      const double base_val =
+          base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
+      const double base_der =
+          base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
+      const double gate_multiplier = gate_multiplier_cache[mu];
+      const double gate_deriv = gate_deriv_cache[mu];
+      two_layer_gate_residual_radial_vals[mu] = base_val * gate_deriv;
+      radial_vals[mu] = base_val * gate_multiplier;
+      radial_ders[mu] = base_der * gate_multiplier;
+    }
+  }
+
   return true;
 }
 
@@ -956,6 +1067,8 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
         error->one(FLERR, "Too few species count in the MTP potential!");
       const double r[3] = {x[j][0] - xi[0], x[j][1] - xi[1], x[j][2] - xi[2]};
       const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+      if (zbl_enabled && rsq < zbl_max_outer_sq)
+        accumulate_zbl_pair(i, j, itype, jtype, r, rsq, eflag, vflag);
       if (rsq > max_cutoff_sq) continue;
       const double dist = std::sqrt(rsq);
       int table_index = -1;
@@ -1052,11 +1165,14 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
                            two_layer_gate_edge_dz[active_idx]};
       const double dist = two_layer_gate_edge_dist[active_idx];
       const double gate_residual = two_layer_gate_values[j] - default_gate;
-      calc_pair_radial_values(
-          itype, jtype, dist, false, gate_residual, true, j,
-          two_layer_gate_edge_table_indices[active_idx],
-          two_layer_gate_edge_table_bins[active_idx],
-          two_layer_gate_edge_table_fracs[active_idx]);
+      const int table_index = two_layer_gate_edge_table_indices[active_idx];
+      const int table_bin = two_layer_gate_edge_table_bins[active_idx];
+      const double table_frac = two_layer_gate_edge_table_fracs[active_idx];
+      if (!calc_gate_additive_table_radial_values(
+              jtype, gate_residual, j, table_index, table_bin, table_frac)) {
+        calc_pair_radial_values(itype, jtype, dist, false, gate_residual,
+                                true, j, table_index, table_bin, table_frac);
+      }
       const int raw_offset = active_local * alpha_index_basic_count;
       accumulate_sh_basic_edge(active_local, r, dist, 1.0, true, raw_offset, true);
     }
@@ -1069,7 +1185,7 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
         nbh_energy += linear_coeffs[k] *
                       moment_tensor_vals[alpha_moment_mapping[k]] *
                       species_coeffs[itype];
-      if (eflag_atom) eatom[i] = nbh_energy;
+      if (eflag_atom) eatom[i] += nbh_energy;
       if (eflag_global) eng_vdwl += nbh_energy;
     }
 
@@ -1181,75 +1297,90 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   }
 }
 
+void PairSUS2MTP::accumulate_zbl_pair(int i,
+                                      int j,
+                                      int itype,
+                                      int jtype,
+                                      const double *r,
+                                      double rsq,
+                                      int eflag,
+                                      int vflag)
+{
+  if (!zbl_enabled || rsq <= 0.0) return;
+  const int C = species_count;
+  if (itype < 0 || itype >= C)
+    error->one(FLERR, "ZBL atom type is outside the SUS2 model species map.");
+  if (jtype < 0 || jtype >= C)
+    error->one(FLERR, "ZBL neighbor type is outside the SUS2 model species map.");
+  const int pair_index = itype * C + jtype;
+  if (rsq >= zbl_pair_outer_sq[pair_index]) return;
+
+  const double dist = std::sqrt(rsq);
+  const SUS2MTPZBLPairValue pair =
+      sus2_mtp_zbl::ComputePairHostCached(
+          zbl_pair_constants[pair_index], dist,
+          zbl_pair_inner_cutoffs[pair_index],
+          zbl_pair_outer_cutoffs[pair_index]);
+  if (pair.energy == 0.0 && pair.dEdr == 0.0) return;
+
+  double **f = atom->f;
+  const double pref = 0.5 * pair.dEdr / dist;
+  const double fx = pref * r[0];
+  const double fy = pref * r[1];
+  const double fz = pref * r[2];
+  f[i][0] += fx;
+  f[i][1] += fy;
+  f[i][2] += fz;
+  f[j][0] -= fx;
+  f[j][1] -= fy;
+  f[j][2] -= fz;
+
+  if (eflag_global) eng_vdwl += 0.5 * pair.energy;
+  if (eflag_atom) eatom[i] += 0.5 * pair.energy;
+  if (vflag) {
+    virial[0] -= fx * r[0];
+    virial[1] -= fy * r[1];
+    virial[2] -= fz * r[2];
+    virial[3] -= fx * r[1];
+    virial[4] -= fx * r[2];
+    virial[5] -= fy * r[2];
+    if (cvflag_atom) {
+      cvatom[j][0] -= fx * r[0];
+      cvatom[j][1] -= fy * r[1];
+      cvatom[j][2] -= fz * r[2];
+      cvatom[j][3] -= fx * r[1];
+      cvatom[j][4] -= fx * r[2];
+      cvatom[j][5] -= fy * r[2];
+      cvatom[j][6] -= fy * r[0];
+      cvatom[j][7] -= fz * r[0];
+      cvatom[j][8] -= fz * r[1];
+    }
+  }
+}
+
 void PairSUS2MTP::compute_zbl(int eflag, int vflag)
 {
   if (!zbl_enabled) return;
   double **x = atom->x;
-  double **f = atom->f;
   int *type = atom->type;
   const int inum = list->inum;
   int *ilist = list->ilist;
   int *numneigh = list->numneigh;
   int **firstneigh = list->firstneigh;
-  const int C = species_count;
 
   for (int ii = 0; ii < inum; ii++) {
     const int i = ilist[ii];
     const int itype = type[i] - 1;
-    if (itype < 0 || itype >= C)
-      error->one(FLERR, "ZBL atom type is outside the SUS2 model species map.");
     const double xi[3] = {x[i][0], x[i][1], x[i][2]};
     const int jnum = numneigh[i];
     for (int jj = 0; jj < jnum; jj++) {
       int j = firstneigh[i][jj];
       j &= NEIGHMASK;
       const int jtype = type[j] - 1;
-      if (jtype < 0 || jtype >= C)
-        error->one(FLERR, "ZBL neighbor type is outside the SUS2 model species map.");
-      const int pair_index = itype * C + jtype;
       const double r[3] = {x[j][0] - xi[0], x[j][1] - xi[1], x[j][2] - xi[2]};
       const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
-      if (rsq <= 0.0 || rsq >= zbl_pair_outer_sq[pair_index]) continue;
-      const double dist = std::sqrt(rsq);
-      const SUS2MTPZBLPairValue pair =
-          sus2_mtp_zbl::ComputePairHostCached(
-              zbl_pair_constants[pair_index], dist,
-              zbl_pair_inner_cutoffs[pair_index],
-              zbl_pair_outer_cutoffs[pair_index]);
-      if (pair.energy == 0.0 && pair.dEdr == 0.0) continue;
-
-      const double pref = 0.5 * pair.dEdr / dist;
-      const double fx = pref * r[0];
-      const double fy = pref * r[1];
-      const double fz = pref * r[2];
-      f[i][0] += fx;
-      f[i][1] += fy;
-      f[i][2] += fz;
-      f[j][0] -= fx;
-      f[j][1] -= fy;
-      f[j][2] -= fz;
-
-      if (eflag_global) eng_vdwl += 0.5 * pair.energy;
-      if (eflag_atom) eatom[i] += 0.5 * pair.energy;
-	      if (vflag) {
-	        virial[0] -= fx * r[0];
-	        virial[1] -= fy * r[1];
-	        virial[2] -= fz * r[2];
-	        virial[3] -= fx * r[1];
-	        virial[4] -= fx * r[2];
-	        virial[5] -= fy * r[2];
-	        if (cvflag_atom) {
-	          cvatom[j][0] -= fx * r[0];
-	          cvatom[j][1] -= fy * r[1];
-	          cvatom[j][2] -= fz * r[2];
-	          cvatom[j][3] -= fx * r[1];
-	          cvatom[j][4] -= fx * r[2];
-	          cvatom[j][5] -= fy * r[2];
-	          cvatom[j][6] -= fy * r[0];
-	          cvatom[j][7] -= fz * r[0];
-	          cvatom[j][8] -= fz * r[1];
-	        }
-	      }
+      if (rsq < zbl_max_outer_sq)
+        accumulate_zbl_pair(i, j, itype, jtype, r, rsq, eflag, vflag);
     }
   }
 }
@@ -1273,7 +1404,6 @@ void PairSUS2MTP::compute(int eflag, int vflag)
 
   if (requires_two_layer_gate_sh()) {
     compute_two_layer_gate_sh(eflag, vflag);
-    compute_zbl(eflag, vflag);
     return;
   }
 
@@ -1357,12 +1487,13 @@ void PairSUS2MTP::compute(int eflag, int vflag)
         double local_rho = 0.0;
         double local_rho_dr = 0.0;
         if (do_list && env_gate_rho_list) {
-          int r_list = static_cast<int>(std::floor(dist * inv_dr));
+          const double scaled_dist = dist * inv_dr;
+          int r_list = static_cast<int>(scaled_dist);
           const int last_interval = list_grid_size - 2;
           if (r_list < 0) r_list = 0;
           if (r_list > last_interval) r_list = last_interval;
           const int r_next = r_list + 1;
-          double ddr = dist * inv_dr - r_list;
+          double ddr = scaled_dist - r_list;
           if (ddr < 0.0) ddr = 0.0;
           if (ddr > 1.0) ddr = 1.0;
           const double v1 = env_gate_rho_list[itype][r_list];
@@ -1409,6 +1540,8 @@ void PairSUS2MTP::compute(int eflag, int vflag)
 
       const double r[3] = {x[j][0] - xi[0], x[j][1] - xi[1], x[j][2] - xi[2]};
       const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+      if (zbl_enabled && rsq < zbl_max_outer_sq)
+        accumulate_zbl_pair(i, j, itype, jtype, r, rsq, eflag, vflag);
 
       if (rsq > max_cutoff_sq) {
         within_cutoff[jj] = false;
@@ -1436,27 +1569,29 @@ void PairSUS2MTP::compute(int eflag, int vflag)
         const int shift = C * itype + jtype;
         const int table_index = pair_to_table_index[shift];
         if (table_index >= 0) {
-          int r_list = static_cast<int>(std::floor(dist * inv_dr));
+          const double scaled_dist = dist * inv_dr;
+          int r_list = static_cast<int>(scaled_dist);
           const int last_interval = list_grid_size - 2;
           if (r_list < 0) r_list = 0;
           if (r_list > last_interval) r_list = last_interval;
           int r_next = r_list + 1;
-          double ddr = dist * inv_dr - r_list;
+          double ddr = scaled_dist - r_list;
           if (ddr < 0.0) ddr = 0.0;
           if (ddr > 1.0) ddr = 1.0;
-          double v1, v2, d1, d2;
-          double *radial_row = radial_list[table_index][r_list];
-          double *radial_next_row = radial_list[table_index][r_next];
-          double *deriv_row = radial_der_list[table_index][r_list];
-          double *deriv_next_row = radial_der_list[table_index][r_next];
-
+          const double *__restrict radial_row = radial_list[table_index][r_list];
+          const double *__restrict radial_next_row = radial_list[table_index][r_next];
+          const double *__restrict deriv_row = radial_der_list[table_index][r_list];
+          const double *__restrict deriv_next_row = radial_der_list[table_index][r_next];
+          double *__restrict vals = radial_vals;
+          double *__restrict ders = radial_ders;
+          #pragma omp simd
           for (int m = 0; m < radial_func_count; m++) {
-            v1 = radial_row[m];
-            v2 = radial_next_row[m];
-            d1 = deriv_row[m];
-            d2 = deriv_next_row[m];
-            radial_vals[m] = v1 + ddr * (v2 - v1);
-            radial_ders[m] = d1 + ddr * (d2 - d1);
+            const double v1 = radial_row[m];
+            const double v2 = radial_next_row[m];
+            const double d1 = deriv_row[m];
+            const double d2 = deriv_next_row[m];
+            vals[m] = v1 + ddr * (v2 - v1);
+            ders[m] = d1 + ddr * (d2 - d1);
           }
           used_precomputed_table = true;
         }
@@ -1676,7 +1811,7 @@ void PairSUS2MTP::compute(int eflag, int vflag)
         nbh_energy += linear_coeffs[k] * moment_tensor_vals[alpha_moment_mapping[k]] * species_coeffs[itype];
 
       // Tally energies per flags
-      if (eflag_atom) eatom[i] = nbh_energy;
+      if (eflag_atom) eatom[i] += nbh_energy;
       if (eflag_global) eng_vdwl += nbh_energy;
     }
 
@@ -1804,7 +1939,6 @@ void PairSUS2MTP::compute(int eflag, int vflag)
       }
 	    }
 	  }
-  compute_zbl(eflag, vflag);
 }
 /* ----------------------------------------------------------------------
    global settings
@@ -1910,7 +2044,8 @@ access to the buffer size that is not provided in PFR.
   zbl_enabled = false;
   zbl_inner = sus2_mtp_zbl::DefaultInnerCutoff();
   zbl_outer = sus2_mtp_zbl::DefaultOuterCutoff();
-  zbl_outer_sq = zbl_outer * zbl_outer;
+  zbl_max_outer = zbl_outer;
+  zbl_max_outer_sq = zbl_max_outer * zbl_max_outer;
   zbl_typewise_cutoff_enabled = false;
   zbl_typewise_cutoff_factor = sus2_mtp_zbl::DefaultTypewiseCutoffFactor();
   interaction_cutoff = 0.0;
@@ -2053,6 +2188,12 @@ access to the buffer size that is not provided in PFR.
             error->one(FLERR, "SUS2 ZBL atomic number should be in [1, 94].");
           zbl_atomic_numbers[i] = zbl_numbers[i];
         }
+        zbl_max_outer =
+            sus2_mtp_zbl::MaxPairOuterCutoff(species_count, zbl_atomic_numbers,
+                                             zbl_outer,
+                                             zbl_typewise_cutoff_enabled,
+                                             zbl_typewise_cutoff_factor);
+        zbl_max_outer_sq = zbl_max_outer * zbl_max_outer;
       }
       do {
         header_line = std::string(tfr.next_line());
@@ -2597,7 +2738,7 @@ access to the buffer size that is not provided in PFR.
 
     // Setup cutoff values
     interaction_cutoff = radial_basis->max_cutoff;
-    if (zbl_enabled) interaction_cutoff = std::max(interaction_cutoff, zbl_outer);
+    if (zbl_enabled) interaction_cutoff = std::max(interaction_cutoff, zbl_max_outer);
     interaction_cutoff_sq = interaction_cutoff * interaction_cutoff;
     double rcutmaxsq = interaction_cutoff_sq;
     for (int i = 0; i < species_count; i++) {
@@ -3032,7 +3173,8 @@ access to the buffer size that is not provided in PFR.
   MPI_Bcast(&zbl_typewise_cutoff_factor, 1, MPI_DOUBLE, 0, world);
   zbl_enabled = (zbl_enabled_int != 0);
   zbl_typewise_cutoff_enabled = (zbl_typewise_cutoff_enabled_int != 0);
-  zbl_outer_sq = zbl_outer * zbl_outer;
+  zbl_max_outer = zbl_outer;
+  zbl_max_outer_sq = zbl_max_outer * zbl_max_outer;
   if (zbl_enabled) {
     if (comm->me != 0)
       memory->create(zbl_atomic_numbers, species_count, "zbl_atomic_numbers");
@@ -3049,6 +3191,12 @@ access to the buffer size that is not provided in PFR.
                                        zbl_pair_inner_cutoffs,
                                        zbl_pair_outer_cutoffs,
                                        zbl_pair_outer_sq);
+    zbl_max_outer =
+        sus2_mtp_zbl::MaxPairOuterCutoff(species_count, zbl_atomic_numbers,
+                                         zbl_outer,
+                                         zbl_typewise_cutoff_enabled,
+                                         zbl_typewise_cutoff_factor);
+    zbl_max_outer_sq = zbl_max_outer * zbl_max_outer;
     sus2_mtp_zbl::FillPairConstants(species_count, zbl_atomic_numbers,
                                     zbl_pair_constants);
   }
@@ -3241,7 +3389,7 @@ access to the buffer size that is not provided in PFR.
   max_cutoff = radial_basis->max_cutoff;
   max_cutoff_sq = max_cutoff * max_cutoff;
   interaction_cutoff = max_cutoff;
-  if (zbl_enabled) interaction_cutoff = std::max(interaction_cutoff, zbl_outer);
+  if (zbl_enabled) interaction_cutoff = std::max(interaction_cutoff, zbl_max_outer);
   interaction_cutoff_sq = interaction_cutoff * interaction_cutoff;
 
   //Now we B Cast into arrays
