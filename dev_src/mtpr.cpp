@@ -417,6 +417,18 @@ bool MLMTPR::TwoLayerGateUsesDirectScale() const
 	return two_layer_gate_scale_mode_ == "direct";
 }
 
+double MLMTPR::TwoLayerGateTanhAmplitude() const
+{
+	return two_layer_gate_tanh_amplitude_;
+}
+
+void MLMTPR::SetTwoLayerGateTanhAmplitude(double amplitude)
+{
+	if (!std::isfinite(amplitude) || amplitude < 0.0 || amplitude > 1.0)
+		ERROR("--two-layer-gate-tanh-amplitude should be finite and in [0, 1]");
+	two_layer_gate_tanh_amplitude_ = amplitude;
+}
+
 void MLMTPR::EnsureSHScalarInfoForGateUpgrade()
 {
 	if (has_sh_scalar_info_)
@@ -489,6 +501,7 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 	two_layer_residual_enabled_ = false;
 	two_layer_gate_scale_mode_ = "legacy";
 	two_layer_gate_bias_ = 1.0;
+	two_layer_gate_tanh_amplitude_ = 0.8;
 	InitializeTwoLayerGateAdditiveCoeffs();
 	two_layer_gate_weights_.assign(two_layer_gate_scalar_indices_.size(), 0.0);
 	two_layer_residual_e0_coeffs_.clear();
@@ -1127,10 +1140,11 @@ void MLMTPR::Load(const string& filename)
 	ifs.ignore(2);
 	ifs >> species_count;
 
-	ifs >> tmpstr;
-	potential_tag = "";
-	is_sh_potential_ = false;
-	sh_products_.clear();
+		ifs >> tmpstr;
+		potential_tag = "";
+		is_sh_potential_ = false;
+		ClearZBL();
+		sh_products_.clear();
 	sh_product_rows_.clear();
 	sh_product_row_terms_.clear();
 	sh_scalar_index_by_moment_.clear();
@@ -1146,6 +1160,7 @@ void MLMTPR::Load(const string& filename)
 	two_layer_residual_enabled_ = false;
 	two_layer_gate_scale_mode_ = "legacy";
 		two_layer_gate_bias_ = 1.0;
+		two_layer_gate_tanh_amplitude_ = 0.8;
 		two_layer_gate_scalar_indices_.clear();
 		two_layer_gate_radial_coeffs_.clear();
 		two_layer_gate_additive_coeffs_.clear();
@@ -1174,15 +1189,66 @@ void MLMTPR::Load(const string& filename)
 	active_two_layer_gate_adjoints_ = nullptr;
 	ClearTwoLayerEdgePrimitiveCache();
 	sh_body_l_max_.assign(7, 0);
-	if (tmpstr == "potential_tag")
-	{
-		getline(ifs, tmpstr);
-		potential_tag = ReadAssignmentTail(tmpstr);
-		is_sh_potential_ = (potential_tag == "SUS2-SH");
-		ifs >> tmpstr;
-	}
-	if (is_sh_potential_)
-	{
+		if (tmpstr == "potential_tag")
+		{
+			getline(ifs, tmpstr);
+			potential_tag = ReadAssignmentTail(tmpstr);
+			is_sh_potential_ = (potential_tag == "SUS2-SH");
+			ifs >> tmpstr;
+		}
+		if (tmpstr == "zbl_enabled")
+		{
+			std::string bool_token;
+			ifs.ignore(2);
+			ifs >> bool_token;
+			const bool zbl_enabled = ReadBoolToken(bool_token);
+			ifs >> tmpstr;
+			if (zbl_enabled) {
+				double zbl_inner = DefaultZBLInnerCutoff();
+				double zbl_outer = DefaultZBLOuterCutoff();
+				bool zbl_typewise = false;
+				double zbl_typewise_factor = DefaultZBLTypewiseCutoffFactor();
+				std::vector<int> zbl_atomic_numbers;
+
+				if (tmpstr != "zbl_inner")
+					ERROR("ZBL section is missing zbl_inner");
+				ifs.ignore(2);
+				ifs >> zbl_inner;
+				ifs >> tmpstr;
+				if (tmpstr != "zbl_outer")
+					ERROR("ZBL section is missing zbl_outer");
+				ifs.ignore(2);
+				ifs >> zbl_outer;
+				ifs >> tmpstr;
+				if (tmpstr != "zbl_typewise_cutoff_enabled")
+					ERROR("ZBL section is missing zbl_typewise_cutoff_enabled");
+				ifs.ignore(2);
+				ifs >> bool_token;
+				zbl_typewise = ReadBoolToken(bool_token);
+				ifs >> tmpstr;
+				if (tmpstr != "zbl_typewise_cutoff_factor")
+					ERROR("ZBL section is missing zbl_typewise_cutoff_factor");
+				ifs.ignore(2);
+				ifs >> zbl_typewise_factor;
+				ifs >> tmpstr;
+				if (tmpstr != "zbl_atomic_numbers")
+					ERROR("ZBL section is missing zbl_atomic_numbers");
+				ReadIntList(ifs, zbl_atomic_numbers, species_count);
+				ifs.ignore(1000, '\n');
+				ConfigureZBL(zbl_atomic_numbers, zbl_inner, zbl_outer,
+				             zbl_typewise, zbl_typewise_factor);
+				ifs >> tmpstr;
+			}
+		}
+		if (tmpstr == "potential_tag")
+		{
+			getline(ifs, tmpstr);
+			potential_tag = ReadAssignmentTail(tmpstr);
+			is_sh_potential_ = (potential_tag == "SUS2-SH");
+			ifs >> tmpstr;
+		}
+		if (is_sh_potential_)
+		{
 		if (tmpstr != "sh_l_max")
 			ERROR("SUS2-SH model is missing sh_l_max");
 		ifs.ignore(2);
@@ -1689,6 +1755,15 @@ void MLMTPR::Load(const string& filename)
 				ERROR("SUS2-SH two_layer_gate_bias should be finite");
 			ifs >> tmpstr;
 		}
+		if (tmpstr == "two_layer_gate_tanh_amplitude") {
+			ifs.ignore(2);
+			ifs >> two_layer_gate_tanh_amplitude_;
+			if (!std::isfinite(two_layer_gate_tanh_amplitude_)
+			    || two_layer_gate_tanh_amplitude_ < 0.0
+			    || two_layer_gate_tanh_amplitude_ > 1.0)
+				ERROR("SUS2-SH two_layer_gate_tanh_amplitude should be finite and in [0, 1]");
+			ifs >> tmpstr;
+		}
 		if (tmpstr == "two_layer_gate_radial_mode") {
 			std::string radial_mode;
 			ifs.ignore(2);
@@ -1994,6 +2069,24 @@ void MLMTPR::Save(const string& filename)
 	ofs << "L = " << L-1 << endl;
 	ofs << "scaling_map = " << scaling_map << endl;
 	ofs << "species_count = " << species_count << endl;
+	if (HasZBL()) {
+		const ZBLPotential& zbl = ZBL();
+		ofs << "zbl_enabled = true\n";
+		ofs << "zbl_inner = " << zbl.InnerCutoff() << '\n';
+		ofs << "zbl_outer = " << zbl.OuterCutoff() << '\n';
+		ofs << "zbl_typewise_cutoff_enabled = "
+		    << (zbl.TypewiseCutoffEnabled() ? "true" : "false") << '\n';
+		ofs << "zbl_typewise_cutoff_factor = "
+		    << zbl.TypewiseCutoffFactor() << '\n';
+		ofs << "zbl_atomic_numbers = {";
+		const std::vector<int>& atomic_numbers = zbl.AtomicNumbers();
+		for (size_t i = 0; i < atomic_numbers.size(); ++i) {
+			if (i != 0)
+				ofs << ", ";
+			ofs << atomic_numbers[i];
+		}
+		ofs << "}\n";
+	}
 	if (is_sh_potential_)
 	{
 		ofs << "potential_tag = SUS2-SH" << endl;
@@ -2148,6 +2241,8 @@ void MLMTPR::Save(const string& filename)
 					    << two_layer_gate_scale_mode_ << '\n';
 					ofs << "two_layer_gate_bias = " << two_layer_gate_bias_ << '\n';
 				}
+				ofs << "two_layer_gate_tanh_amplitude = "
+				    << two_layer_gate_tanh_amplitude_ << '\n';
 				if (TwoLayerGateUsesSharedRadial()) {
 				const int gate_radial_count = TwoLayerGateRadialCoeffCount();
 				if (gate_radial_count <= 0)
@@ -2610,10 +2705,16 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 			profile_after_main - profile_after_prepare,
 			profile_end - profile_after_main);
 	}
-	two_layer_reuse_full_edge_cache_once_ =
-		build_full_edge_cache && cfg.size() > 0
-		&& HasTwoLayerEdgePrimitiveCache(0, true, true);
-}
+		two_layer_reuse_full_edge_cache_once_ =
+			build_full_edge_cache && cfg.size() > 0
+			&& HasTwoLayerEdgePrimitiveCache(0, true, true);
+		if (HasZBL() && ZBLEvaluationEnabled()) {
+			if (neighborhoods.cutoff + 1.0e-12 >= ZBL().OuterCutoff())
+				ZBL().AddTo(cfg, neighborhoods);
+			else
+				ZBL().AddTo(cfg);
+		}
+	}
 
 void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
                                           std::vector<double>& ene_weight,

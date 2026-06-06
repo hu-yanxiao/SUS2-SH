@@ -152,8 +152,14 @@ protected:
 		std::vector<double> grad_neighbor_sh_ders_cache_;
 		std::vector<double> grad_radial_coeff_value_accum_;
 		std::vector<double> grad_radial_coeff_coord_accum_;
-		std::vector<double> two_layer_gate_additive_mu_buffer_;
-		std::vector<double> two_layer_gate_type_scale_mu_buffer_;
+			std::vector<double> two_layer_gate_additive_mu_buffer_;
+			std::vector<double> two_layer_gate_type_scale_mu_buffer_;
+			std::vector<double> two_layer_gate_multiplier_mu_buffer_;
+			std::vector<double> two_layer_gate_outer_mu_buffer_;
+			std::vector<double> two_layer_gate_additive_param_mu_buffer_;
+			std::vector<double> two_layer_gate_gate_residual_mu_buffer_;
+			std::vector<double> two_layer_gate_gate_outer_param_mu_buffer_;
+			std::vector<double> two_layer_gate_gate_additive_param_mu_buffer_;
 		std::vector<double> two_layer_gate_scaled_mu_vals_buffer_;
 		std::vector<double> two_layer_gate_scaled_mu_ders_buffer_;
 		std::vector<double> sh_gate_moment_ders_;
@@ -296,9 +302,10 @@ public:
 		int two_layer_gate_body_order_max_ = 0;
 		bool two_layer_gate_include_one_body_ = false;
 		bool two_layer_gate_shared_radial_ = false;
-		bool two_layer_residual_enabled_ = false;
-		std::string two_layer_gate_scale_mode_ = "legacy";
-		double two_layer_gate_bias_ = 1.0;
+			bool two_layer_residual_enabled_ = false;
+			std::string two_layer_gate_scale_mode_ = "legacy";
+			double two_layer_gate_bias_ = 1.0;
+			double two_layer_gate_tanh_amplitude_ = 0.8;
 		// Training-only residual stage hint: 0=full, 1=E0-only, 2=E1-only.
 		int two_layer_residual_eval_stage_ = 0;
 		bool two_layer_residual_skip_outer_param_grad_ = false;
@@ -419,10 +426,12 @@ public:
 		int RadialCoeffOffset() const;
 		int RadialCoeffBlockSize() const;
 		int BaseNonlinearCoeffCount() const;
-			bool TwoLayerGateUsesSharedRadial() const;
-			bool TwoLayerResidualEnabled() const;
-			bool TwoLayerGateUsesDirectScale() const;
-			bool IsSHPotential() const { return is_sh_potential_; }
+				bool TwoLayerGateUsesSharedRadial() const;
+				bool TwoLayerResidualEnabled() const;
+				bool TwoLayerGateUsesDirectScale() const;
+				double TwoLayerGateTanhAmplitude() const;
+				void SetTwoLayerGateTanhAmplitude(double amplitude);
+				bool IsSHPotential() const { return is_sh_potential_; }
 			bool TwoLayerGateEnabled() const { return two_layer_gate_enabled_; }
 			void UpgradePlainSHToTwoLayerGate(int gate_body_order,
 			                                  bool independent_gate_radial_coeffs);

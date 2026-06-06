@@ -19,6 +19,7 @@
 
 #include "mtpr_train.h"
 #include "../sh_model_init.h"
+#include "../../src/zbl.h"
 
 using namespace std;
 
@@ -145,6 +146,75 @@ std::vector<double> ParseDoubleListOption(const std::string& value, const std::s
 	if (values.empty())
 		ERROR(opt_name + " should be a comma-separated list of finite doubles");
 	return values;
+}
+
+double ParseStrictDoubleOption(const std::string& value, const std::string& opt_name)
+{
+	std::size_t parsed = 0;
+	double result = 0.0;
+	try {
+		result = std::stod(value, &parsed);
+	} catch (const std::exception&) {
+		ERROR(opt_name + " should be a finite double.");
+	}
+	if (parsed != value.size() || !std::isfinite(result))
+		ERROR(opt_name + " should be a finite double.");
+	return result;
+}
+
+struct ZBLTrainOptions {
+	bool enabled = false;
+	double inner = DefaultZBLInnerCutoff();
+	double outer = DefaultZBLOuterCutoff();
+	bool typewise = false;
+	double typewise_factor = DefaultZBLTypewiseCutoffFactor();
+	std::vector<int> atomic_numbers;
+};
+
+bool HasOption(const std::map<std::string, std::string>& opts, const std::string& name)
+{
+	std::map<std::string, std::string>::const_iterator it = opts.find(name);
+	return it != opts.end() && !it->second.empty();
+}
+
+bool HasAnyZBLOption(const std::map<std::string, std::string>& opts)
+{
+	return HasOption(opts, "zbl-elements")
+	    || HasOption(opts, "zbl-inner")
+	    || HasOption(opts, "zbl-outer")
+	    || HasOption(opts, "zbl-typewise-cutoff-factor");
+}
+
+ZBLTrainOptions ParseZBLTrainOptions(const std::map<std::string, std::string>& opts)
+{
+	ZBLTrainOptions zbl;
+	if (!HasAnyZBLOption(opts))
+		return zbl;
+	if (!HasOption(opts, "zbl-elements"))
+		ERROR("ZBL requires --zbl-elements=<comma-separated symbols or atomic numbers>.");
+	zbl.enabled = true;
+	zbl.atomic_numbers = ParseZBLAtomicNumbers(opts.find("zbl-elements")->second);
+	if (HasOption(opts, "zbl-inner"))
+		zbl.inner = ParseStrictDoubleOption(opts.find("zbl-inner")->second,
+		                                    "--zbl-inner");
+	if (HasOption(opts, "zbl-outer"))
+		zbl.outer = ParseStrictDoubleOption(opts.find("zbl-outer")->second,
+		                                    "--zbl-outer");
+	if (!std::isfinite(zbl.inner) || zbl.inner < 0.0)
+		ERROR("--zbl-inner should be finite and non-negative.");
+	if (!std::isfinite(zbl.outer) || zbl.outer <= 0.0)
+		ERROR("--zbl-outer should be finite and positive.");
+	zbl.typewise = HasOption(opts, "zbl-typewise-cutoff-factor");
+	if (zbl.typewise) {
+		zbl.typewise_factor =
+			ParseStrictDoubleOption(opts.find("zbl-typewise-cutoff-factor")->second,
+			                        "--zbl-typewise-cutoff-factor");
+		if (!std::isfinite(zbl.typewise_factor) || zbl.typewise_factor < 0.5)
+			ERROR("--zbl-typewise-cutoff-factor should be finite and >= 0.5.");
+	} else if (zbl.outer <= zbl.inner) {
+		ERROR("--zbl-inner and --zbl-outer should satisfy 0 <= inner < outer.");
+	}
+	return zbl;
 }
 
 MomentCoeffStats ComputeMomentCoeffStats(const MLMTPR& mtpr)
@@ -347,6 +417,31 @@ bool ShouldCacheNeighborhoods(const std::vector<Configuration>& configs, double 
 	return bytes <= kNeighborhoodCacheBudgetBytesPerRank;
 }
 
+void ApplyZBLResidualToDataset(std::vector<Configuration>& configs,
+                               const ZBLPotential& zbl,
+                               bool subtract,
+                               const std::vector<Neighborhoods>* neighborhoods)
+{
+	if (neighborhoods != nullptr && neighborhoods->size() != configs.size())
+		ERROR("ZBL residualization neighborhood cache size mismatch");
+	const double sign = subtract ? -1.0 : 1.0;
+	for (std::size_t cfg_index = 0; cfg_index < configs.size(); ++cfg_index) {
+		Configuration& cfg = configs[cfg_index];
+		const ZBLEFS zbl_efs = neighborhoods == nullptr ?
+			zbl.Compute(cfg) :
+			zbl.Compute(cfg, (*neighborhoods)[cfg_index]);
+		if (cfg.has_energy())
+			cfg.energy += sign * zbl_efs.energy;
+		if (cfg.has_forces())
+			for (int i = 0; i < cfg.size(); ++i)
+				cfg.force(i) += sign * zbl_efs.forces[i];
+		if (cfg.has_stresses())
+			for (int a = 0; a < 3; ++a)
+				for (int b = 0; b < 3; ++b)
+					cfg.stresses[a][b] += sign * zbl_efs.stresses[a][b];
+	}
+}
+
 bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& opts)
 {
 	const char* names[] = {
@@ -366,13 +461,18 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"min-dist",
 		"radial-basis-size",
 		"radial-basis-type",
-		"scaling",
+			"zbl-elements",
+			"zbl-inner",
+			"zbl-outer",
+			"zbl-typewise-cutoff-factor",
+			"scaling",
 		"potential-name",
-			"inline-sh-model",
-			"two-layer-gate",
-			"two-layer-gate-body-order",
-			"two-layer-gate-shared-radial",
-			"two-layer-residual"
+				"inline-sh-model",
+				"two-layer-gate",
+				"two-layer-gate-body-order",
+				"two-layer-gate-tanh-amplitude",
+				"two-layer-gate-shared-radial",
+				"two-layer-residual"
 		};
 	for (const char* name : names) {
 		std::map<std::string, std::string>::const_iterator it = opts.find(name);
@@ -965,6 +1065,21 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (opts["weighting"] != "")
 		weighting = opts["weighting"];
 
+	ForceLossKind force_loss_kind = ForceLossKind::L2;
+	if (opts["force-loss"] != "") {
+		try {
+			force_loss_kind = ParseForceLossKind(opts["force-loss"]);
+		}
+		catch (const std::invalid_argument&) {
+			ERROR("--force-loss should be 'l2' or 'log-cosh'");
+		}
+	}
+	double force_log_cosh_scale = 2.0;
+	if (opts["force-log-cosh-scale"] != "")
+		force_log_cosh_scale = stod(opts["force-log-cosh-scale"]);
+	if (!std::isfinite(force_log_cosh_scale) || force_log_cosh_scale <= 0.0)
+		ERROR("--force-log-cosh-scale should be a finite positive value");
+
 	bool custom_scal_range = false;
 	std::pair<double, double> scal_range;
 	if (opts["scal-range"] != "") {
@@ -991,6 +1106,17 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (radial_smooth_grid <= 0)
 		ERROR("--radial-smooth-grid should be > 0");
 
+	bool custom_two_layer_gate_tanh_amplitude = false;
+	double two_layer_gate_tanh_amplitude = 0.8;
+	if (opts["two-layer-gate-tanh-amplitude"] != "") {
+		two_layer_gate_tanh_amplitude = stod(opts["two-layer-gate-tanh-amplitude"]);
+		custom_two_layer_gate_tanh_amplitude = true;
+	}
+	if (!std::isfinite(two_layer_gate_tanh_amplitude)
+	    || two_layer_gate_tanh_amplitude < 0.0
+	    || two_layer_gate_tanh_amplitude > 1.0)
+		ERROR("--two-layer-gate-tanh-amplitude should be finite and in [0, 1]");
+
 	std::vector<double> fixed_atomic_energies;
 	if (opts["atomic-energies"] != "")
 		fixed_atomic_energies = ParseDoubleListOption(opts["atomic-energies"], "--atomic-energies");
@@ -1009,6 +1135,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	bool mindist_update = false;
 	if (opts["update-mindist"] != "")
 		mindist_update = true;
+	const ZBLTrainOptions zbl_options = ParseZBLTrainOptions(opts);
 
 	SetTagLogStream("dev", &std::cout);
 	int end = 1;
@@ -1026,6 +1153,15 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << exp.What() << std::endl;
 			end = 10;
 		}
+	}
+	if (zbl_options.enabled) {
+		if (static_cast<int>(zbl_options.atomic_numbers.size()) != mtpr.species_count)
+			ERROR("--zbl-elements count should match species_count");
+		mtpr.ConfigureZBL(zbl_options.atomic_numbers,
+		                  zbl_options.inner,
+		                  zbl_options.outer,
+		                  zbl_options.typewise,
+		                  zbl_options.typewise_factor);
 	}
 	const bool requested_two_layer_gate = opts["two-layer-gate"] != "";
 	const bool requested_two_layer_gate_shared_radial =
@@ -1051,11 +1187,16 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		plain_to_gate_upgrade = true;
 		plain_to_gate_disabled_controls = do_lin || do_lin_rescale || fine_tune;
 		do_lin = false;
-		do_lin_rescale = false;
-		fine_tune = false;
-	}
-	if (fine_tune && !mtpr.HasCompleteParameters())
-		ERROR("--fine-tune requires a complete trained model with shift/scal/radial/linear coefficients.");
+			do_lin_rescale = false;
+			fine_tune = false;
+		}
+		if (custom_two_layer_gate_tanh_amplitude) {
+			if (!mtpr.TwoLayerGateEnabled())
+				ERROR("--two-layer-gate-tanh-amplitude requires a two-layer gate model or --two-layer-gate");
+			mtpr.SetTwoLayerGateTanhAmplitude(two_layer_gate_tanh_amplitude);
+		}
+		if (fine_tune && !mtpr.HasCompleteParameters())
+			ERROR("--fine-tune requires a complete trained model with shift/scal/radial/linear coefficients.");
 	if (!fixed_atomic_energies.empty() &&
 	    static_cast<int>(fixed_atomic_energies.size()) != mtpr.species_count)
 		ERROR("--atomic-energies count should match species_count");
@@ -1087,6 +1228,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.radial_smooth_grid = radial_smooth_grid;
 	trainer.fixed_atomic_energies = fixed_atomic_energies;
 	trainer.fixed_atomic_energy_weight = fixed_atomic_energy_weight;
+	trainer.force_loss_kind = force_loss_kind;
+	trainer.force_log_cosh_scale = force_log_cosh_scale;
 
 	if (prank == 0)
 		std::cout << "SUS2-MLIP developer version (2026-04-17)"
@@ -1098,8 +1241,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		std::cout << "scal-range override: " << scal_range.first << ", " << scal_range.second << std::endl;
 	if (prank == 0 && custom_s_range)
 		std::cout << "s-range override: " << s_range.first << ", " << s_range.second << std::endl;
-	if (prank == 0 && plain_to_gate_upgrade) {
-		std::cout << "SUS2-SH plain-to-gate upgrade enabled: "
+		if (prank == 0 && plain_to_gate_upgrade) {
+			std::cout << "SUS2-SH plain-to-gate upgrade enabled: "
 		          << "gate_body_order=" << plain_to_gate_body_order
 		          << " independent_gate_radial_coeffs="
 		          << (plain_to_gate_independent_radial ? "true" : "false")
@@ -1108,10 +1251,13 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		          << std::endl;
 		if (plain_to_gate_disabled_controls)
 			std::cout << "plain-to-gate upgrade disabled do-lin/do-lin-rescale/fine-tune"
-			          << std::endl;
-	}
-	if (prank == 0)
-		std::cout << "radial smoothness penalty: " << radial_smooth
+				          << std::endl;
+		}
+		if (prank == 0 && mtpr.TwoLayerGateEnabled())
+			std::cout << "two-layer gate tanh amplitude: "
+			          << mtpr.TwoLayerGateTanhAmplitude() << std::endl;
+		if (prank == 0)
+			std::cout << "radial smoothness penalty: " << radial_smooth
 		          << " grid=" << radial_smooth_grid << std::endl;
 	if (prank == 0 && !fixed_atomic_energies.empty()) {
 		std::cout << "fixed atomic energies enabled:";
@@ -1228,6 +1374,21 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		          << " estimated_bytes=" << estimated_cache_bytes
 		          << " budget_bytes=" << kNeighborhoodCacheBudgetBytesPerRank
 		          << std::endl;
+	}
+
+	bool zbl_training_residualized = false;
+	if (maxits > 0 && mtpr.HasZBL() && mtpr.ZBLEvaluationEnabled()) {
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] Precomputing training-set ZBL residuals"
+			          << " mode=" << (linear_training_neighborhoods_ptr == nullptr ? "zbl-neighborhoods" : "cached-main-neighborhoods")
+			          << std::endl;
+		ApplyZBLResidualToDataset(training_set, mtpr.ZBL(), true,
+		                          linear_training_neighborhoods_ptr);
+		mtpr.SetZBLEvaluationEnabled(false);
+		zbl_training_residualized = true;
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] Training-set ZBL residuals ready; "
+			          << "live ZBL evaluation disabled inside optimizer" << std::endl;
 	}
 
 	int radial_first_coeff_repairs = 0;
@@ -1392,8 +1553,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			if ((weight_energy != 0) || (weight_force != 0) || (weight_stress != 0)) {
 				std::cout << "Energy weight: " << weight_energy << std::endl;
 				std::cout << "Force weight: " << weight_force << std::endl;
+				std::cout << "Force loss: " << ForceLossKindName(trainer.force_loss_kind);
+				if (trainer.force_loss_kind == ForceLossKind::LogCosh)
+					std::cout << " scale=" << trainer.force_log_cosh_scale;
+				std::cout << std::endl;
 				std::cout << "Stress weight: " << weight_stress << std::endl;
-                                std::cout << "std weight: " << trainer.std_scaling << std::endl;
+				std::cout << "std weight: " << trainer.std_scaling << std::endl;
                                 std::cout << "center_std weight: " << trainer.stdd_scaling << std::endl;
 			}
 		}
@@ -1481,9 +1646,21 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
      //           if (prank==0){ mtpr.Save_2("unfixed2.mtp");
       //                 }
 	}
+	if (zbl_training_residualized) {
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] Restoring training-set ZBL references"
+			          << std::endl;
+		ApplyZBLResidualToDataset(training_set, mtpr.ZBL(), false,
+		                          linear_training_neighborhoods_ptr);
+		mtpr.SetZBLEvaluationEnabled(true);
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] Training references restored; "
+			          << "live ZBL evaluation enabled for final reporting" << std::endl;
+	}
 	ErrorMonitor errmon, bufferrmon;
 	std::cout.precision(15);
-	bool have_train_summary = trainer.HasLastTrainErrorSummary();
+	bool have_train_summary = trainer.HasLastTrainErrorSummary() &&
+	                          !zbl_training_residualized;
 	MTPR_trainer::TrainErrorSummary train_summary;
 	if (have_train_summary)
 		train_summary = trainer.LastTrainErrorSummary();

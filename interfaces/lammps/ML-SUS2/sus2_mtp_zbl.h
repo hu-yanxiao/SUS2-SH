@@ -12,6 +12,11 @@ struct SUS2MTPZBLPairValue {
   double dEdr;
 };
 
+struct SUS2MTPZBLPairConstants {
+  double screening_inv;
+  double prefactor;
+};
+
 namespace sus2_mtp_zbl {
 
 inline double DefaultInnerCutoff() { return 0.7; }
@@ -70,6 +75,32 @@ inline void FillPairCutoffTables(int species_count, const int *atomic_numbers,
   }
 }
 
+inline SUS2MTPZBLPairConstants MakePairConstants(int atomic_number_i,
+                                                 int atomic_number_j)
+{
+  const double ev_angstrom_per_e2 = 14.3996454784255;
+  const double screening_inv =
+      2.134563 * (std::pow(static_cast<double>(atomic_number_i), 0.23) +
+                  std::pow(static_cast<double>(atomic_number_j), 0.23));
+  const double prefactor = ev_angstrom_per_e2 *
+      static_cast<double>(atomic_number_i) *
+      static_cast<double>(atomic_number_j);
+  return SUS2MTPZBLPairConstants{screening_inv, prefactor};
+}
+
+inline void FillPairConstants(int species_count, const int *atomic_numbers,
+                              SUS2MTPZBLPairConstants *pair_constants)
+{
+  for (int i = 0; i < species_count; ++i)
+    for (int j = 0; j < species_count; ++j)
+      pair_constants[i * species_count + j] =
+          MakePairConstants(atomic_numbers[i], atomic_numbers[j]);
+}
+
+inline SUS2MTPZBLPairValue ComputePairHostCached(
+    const SUS2MTPZBLPairConstants& constants, double distance,
+    double inner_cutoff, double outer_cutoff);
+
 inline SUS2MTPZBLPairValue ComputePairHost(int atomic_number_i, int atomic_number_j,
                                            double distance, double inner_cutoff,
                                            double outer_cutoff,
@@ -93,30 +124,32 @@ inline SUS2MTPZBLPairValue ComputePairHost(int atomic_number_i, int atomic_numbe
     outer_cutoff = PairOuterCutoff(atomic_number_i, atomic_number_j,
                                    outer_cutoff, typewise_cutoff_factor);
   }
+  return ComputePairHostCached(MakePairConstants(atomic_number_i, atomic_number_j),
+                               distance, inner_cutoff, outer_cutoff);
+}
+
+inline SUS2MTPZBLPairValue ComputePairHostCached(
+    const SUS2MTPZBLPairConstants& constants, double distance,
+    double inner_cutoff, double outer_cutoff)
+{
   if (distance >= outer_cutoff) return SUS2MTPZBLPairValue{0.0, 0.0};
 
   const double coefficients[4] = {0.18175, 0.50986, 0.28022, 0.02817};
   const double exponents[4] = {3.1998, 0.94229, 0.4029, 0.20162};
-  const double ev_angstrom_per_e2 = 14.3996454784255;
-  const double screening_inv =
-      2.134563 * (std::pow(static_cast<double>(atomic_number_i), 0.23) +
-                  std::pow(static_cast<double>(atomic_number_j), 0.23));
-  const double x = screening_inv * distance;
+  const double x = constants.screening_inv * distance;
 
   double phi = 0.0;
   double dphi_dr = 0.0;
   for (int i = 0; i < 4; ++i) {
     const double exp_value = std::exp(-exponents[i] * x);
     phi += coefficients[i] * exp_value;
-    dphi_dr -= coefficients[i] * exponents[i] * screening_inv * exp_value;
+    dphi_dr -= coefficients[i] * exponents[i] *
+        constants.screening_inv * exp_value;
   }
 
-  const double prefactor = ev_angstrom_per_e2 *
-      static_cast<double>(atomic_number_i) *
-      static_cast<double>(atomic_number_j);
-  const double base_energy = prefactor * phi / distance;
+  const double base_energy = constants.prefactor * phi / distance;
   const double base_dEdr =
-      prefactor * (dphi_dr / distance - phi / (distance * distance));
+      constants.prefactor * (dphi_dr / distance - phi / (distance * distance));
 
   double switch_value = 1.0;
   double switch_derivative = 0.0;

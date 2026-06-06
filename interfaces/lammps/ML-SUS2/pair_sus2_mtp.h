@@ -120,6 +120,7 @@ class PairSUS2MTP : public Pair {
   double *zbl_pair_inner_cutoffs = nullptr;
   double *zbl_pair_outer_cutoffs = nullptr;
   double *zbl_pair_outer_sq = nullptr;
+  SUS2MTPZBLPairConstants *zbl_pair_constants = nullptr;
   
   double *shift_coeffs;  // Shift coefficients for each species (species_count elements)
   double *scal_coeffs;   // Scaling coefficients for coordinate transformation (scal_coeffs_count elements)
@@ -146,6 +147,7 @@ class PairSUS2MTP : public Pair {
   bool two_layer_residual_enabled = false;
   bool two_layer_gate_direct_scale = false;
   double two_layer_gate_bias = 1.0;
+  double two_layer_gate_tanh_amplitude = 0.8;
   int two_layer_gate_body_order_max = 0;
   int two_layer_gate_weight_count = 0;
   std::vector<int> sh_scalar_body_order;
@@ -214,17 +216,17 @@ class PairSUS2MTP : public Pair {
   double *weighted_basic_moment_ders;     // Basic-moment derivatives with species coeff prefactor applied
   double *env_rho_dr = nullptr;           // Reused env-gate density derivative per neighbor
   double *env_activation_basic_vals = nullptr;  // Reused env-gate chain accumulator per basic moment
-  double *zbl_force_prefactors = nullptr; // Reused 0.5*dE/dr/r for full-neighbor ZBL
   int env_activation_basic_size = 0;
 
   // Cache whether to calculate forces based on cutoff as calculated in alpha basics
   bool *within_cutoff = nullptr;    // First created during compute using grow
 
   bool has_nonzero_two_layer_gate_weights() const;
-  bool requires_two_layer_gate_sh() const;
-  void prepare_two_layer_gate_additive_ratios();
-  void compute_two_layer_gate_sh(int, int);
-  int two_layer_gate_additive_coeff_index(int, int) const;
+	  bool requires_two_layer_gate_sh() const;
+	  void prepare_two_layer_gate_additive_ratios();
+	  void compute_two_layer_gate_sh(int, int);
+	  void compute_zbl(int, int);
+	  int two_layer_gate_additive_coeff_index(int, int) const;
   double two_layer_gate_additive_coeff(int, int) const;
   void calc_pair_radial_values(int, int, double, bool, double = 0.0, bool = false);
   void accumulate_sh_basic_edge(int, const double *, double, double, bool, int, bool = false);

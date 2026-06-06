@@ -199,7 +199,13 @@ void NonLinearRegression::AddLoss(const Configuration & orig, const Neighborhood
 			if (weighting == "structures")
 				wgt /= cfg.size();
 
-			loss_ += wgt * (orig.force(i) - cfg.force(i)).NormSq() * d/ (d + fn*avef);
+			const Vector3 delta = cfg.force(i) - orig.force(i);
+			double force_loss = 0.0;
+			for (int a = 0; a < 3; ++a)
+				force_loss += ForceResidualLoss(delta[a],
+				                                force_loss_kind,
+				                                force_log_cosh_scale);
+			loss_ += wgt * force_loss * d / (d + fn*avef);
 		}
 
 	double wgt_energy = wgt_eqtn_energy;
@@ -339,8 +345,19 @@ void NonLinearRegression::AddLossGrad(const Configuration & orig, const Neighbor
 			if (weighting == "structures")
 				wgt /= cfg.size();
 
-			loss_ += wgt * (cfg.force(i) - orig.force(i)).NormSq() * d / (d + fn*avef);
-			dLdF[i] = 2.0 * wgt * (cfg.force(i) - orig.force(i)) * d / (d + fn*avef);
+			const Vector3 delta = cfg.force(i) - orig.force(i);
+			double force_loss = 0.0;
+			for (int a = 0; a < 3; ++a)
+				force_loss += ForceResidualLoss(delta[a],
+				                                force_loss_kind,
+				                                force_log_cosh_scale);
+			const double force_scale = wgt * d / (d + fn*avef);
+			loss_ += force_scale * force_loss;
+			for (int a = 0; a < 3; ++a)
+				dLdF[i][a] = force_scale *
+					ForceResidualGrad(delta[a],
+					                  force_loss_kind,
+					                  force_log_cosh_scale);
 		}
 	else
 		FillWithZero(dLdF);

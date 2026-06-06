@@ -1072,9 +1072,12 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			"writes an untrained SUS2-SH model",
 			"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 			"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
-			"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
-			"         --two-layer-gate, --two-layer-gate-body-order=<int> (default=3),\n"
-			"         --two-layer-gate-shared-radial, --two-layer-residual\n"
+				"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
+				"         --two-layer-gate, --two-layer-gate-body-order=<int> (default=3),\n"
+				"         --two-layer-gate-tanh-amplitude=<double> (default=0.8),\n"
+				"         --two-layer-gate-shared-radial, --two-layer-residual,\n"
+			"         --zbl-elements=<...>, --zbl-inner=<r>, --zbl-outer=<r>,\n"
+			"         --zbl-typewise-cutoff-factor=<factor>\n"
 		) {
 		if (args.size() != 1) {
 			std::cout << "mlp-sus2 init-sh: 1 output .mtp argument is required\n";
