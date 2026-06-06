@@ -160,9 +160,13 @@ protected:
 			std::vector<double> two_layer_gate_gate_residual_mu_buffer_;
 			std::vector<double> two_layer_gate_gate_outer_param_mu_buffer_;
 			std::vector<double> two_layer_gate_gate_additive_param_mu_buffer_;
-		std::vector<double> two_layer_gate_scaled_mu_vals_buffer_;
-		std::vector<double> two_layer_gate_scaled_mu_ders_buffer_;
-		std::vector<double> sh_gate_moment_ders_;
+			std::vector<double> two_layer_gate_scaled_mu_vals_buffer_;
+			std::vector<double> two_layer_gate_scaled_mu_ders_buffer_;
+			std::vector<double> two_layer_gate_tanh_mu_cache_;
+			std::vector<char> two_layer_gate_tanh_mu_cache_valid_;
+			int two_layer_gate_tanh_mu_cache_atom_count_ = 0;
+			int two_layer_gate_tanh_mu_cache_radial_func_count_ = 0;
+			std::vector<double> sh_gate_moment_ders_;
 	std::vector<double> sh_gate_basis_ders_;
 	std::vector<double> sh_gate_scalar_values_;
 	std::vector<double> sh_gate_linear_adjoints_;
@@ -384,13 +388,27 @@ public:
 	bool RequiresTwoLayerGateEvaluation() const;
 	void PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods);
 	void AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighborhoods& neighborhoods);
-		void AddTwoLayerGateAdjoint(const Neighborhood& nbh, int neighbor_index, double adjoint);
-		double TwoLayerGateNeighborScale(const Neighborhood& nbh, int neighbor_index) const;
-		double TwoLayerGateNeighborResidual(const Neighborhood& nbh, int neighbor_index) const;
-		void PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
-		                                          double center_type_coeff,
-		                                          double outer_type_coeff,
-		                                          double gate_residual);
+	void AddTwoLayerGateAdjoint(const Neighborhood& nbh, int neighbor_index, double adjoint);
+	double TwoLayerGateNeighborScale(const Neighborhood& nbh, int neighbor_index) const;
+	double TwoLayerGateNeighborResidual(const Neighborhood& nbh, int neighbor_index) const;
+	void InvalidateTwoLayerGateTanhMuCache();
+	enum TwoLayerGateMuBufferMask {
+		kGateMuBufferAdditive = 1 << 0,
+		kGateMuBufferTypeScale = 1 << 1,
+		kGateMuBufferMultiplier = 1 << 2,
+		kGateMuBufferOuter = 1 << 3,
+		kGateMuBufferAdditiveParam = 1 << 4,
+		kGateMuBufferGateResidualParam = 1 << 5,
+		kGateMuBufferGateOuterParam = 1 << 6,
+		kGateMuBufferGateAdditiveParam = 1 << 7,
+		kGateMuBufferAll = (1 << 8) - 1
+	};
+	void PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
+	                                          double center_type_coeff,
+	                                          double outer_type_coeff,
+	                                          double gate_residual,
+	                                          int neighbor_atom_index = -1,
+	                                          int buffer_mask = kGateMuBufferAll);
 //	void CalcEFS(Configuration& cfg) override
 //	{
 //		AnyLocalMLIP::CalcEFS(cfg);

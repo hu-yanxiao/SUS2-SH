@@ -2478,6 +2478,7 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 		two_layer_gate_scalar_values_cache_.clear();
 		two_layer_gate_moment_values_cache_.clear();
 		two_layer_gate_values_from_edge_cache_ready_ = false;
+		InvalidateTwoLayerGateTanhMuCache();
 		return;
 	}
 	if (two_layer_gate_required_moments_.empty()
@@ -2492,9 +2493,12 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 	if (two_layer_gate_values_from_edge_cache_ready_
 	    && static_cast<int>(two_layer_gate_values_.size()) == cfg.size()
 	    && two_layer_gate_scalar_values_cache_.size() == expected_scalar_size
-	    && two_layer_gate_moment_values_cache_.size() == expected_moment_size)
+	    && two_layer_gate_moment_values_cache_.size() == expected_moment_size) {
+		InvalidateTwoLayerGateTanhMuCache();
 		return;
+	}
 	two_layer_gate_values_from_edge_cache_ready_ = false;
+	InvalidateTwoLayerGateTanhMuCache();
 	two_layer_gate_values_.resize(cfg.size());
 	two_layer_gate_scalar_values_cache_.resize(expected_scalar_size);
 	two_layer_gate_moment_values_cache_.resize(expected_moment_size);
