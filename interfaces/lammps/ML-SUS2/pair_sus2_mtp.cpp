@@ -45,6 +45,20 @@ constexpr int kEnvGateChannels = 6;
 constexpr double kEnvGateMaxLogDensityCoeff = 6.0;
 constexpr double kEnvGateDefaultActivationOnRatio = 0.5;
 
+bool env_flag_enabled(const char *name)
+{
+  const char *value = std::getenv(name);
+  return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+bool disable_two_layer_gate_tanh_cache()
+{
+  static const bool disabled =
+      env_flag_enabled("SUS2_LAMMPS_DISABLE_TWO_LAYER_GATE_TANH_CACHE") ||
+      env_flag_enabled("SUS2_SH_DISABLE_TWO_LAYER_GATE_TANH_CACHE");
+  return disabled;
+}
+
 double stable_sigmoid(double value)
 {
   if (value >= 0.0) {
@@ -431,6 +445,8 @@ PairSUS2MTP::~PairSUS2MTP()
     memory->destroy(two_layer_gate_residual_radial_vals);
     memory->destroy(two_layer_gate_values);
     memory->destroy(two_layer_gate_adjoints);
+    memory->destroy(two_layer_gate_tanh_mu_cache);
+    memory->destroy(two_layer_gate_tanh_mu_cache_valid);
     memory->destroy(two_layer_radial_cache_vals);
     memory->destroy(two_layer_radial_cache_ders);
     memory->destroy(weighted_basic_moment_ders);
@@ -504,6 +520,19 @@ void PairSUS2MTP::ensure_two_layer_atom_buffers()
     memory->grow(two_layer_gate_adjoints, nmax, "two_layer_gate_adjoints");
     two_layer_atom_buffer_size = nmax;
   }
+  if (!disable_two_layer_gate_tanh_cache() && radial_func_count > 0) {
+    const int tanh_size = nmax * radial_func_count;
+    if (two_layer_tanh_cache_atom_size < nmax) {
+      memory->grow(two_layer_gate_tanh_mu_cache_valid, nmax,
+                   "two_layer_gate_tanh_mu_cache_valid");
+      two_layer_tanh_cache_atom_size = nmax;
+    }
+    if (two_layer_tanh_cache_size < tanh_size) {
+      memory->grow(two_layer_gate_tanh_mu_cache, tanh_size,
+                   "two_layer_gate_tanh_mu_cache");
+      two_layer_tanh_cache_size = tanh_size;
+    }
+  }
 }
 
 void PairSUS2MTP::ensure_two_layer_edge_buffer(int jnum)
@@ -531,8 +560,26 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
                                           double dist,
                                           bool use_gate_radial,
                                           double gate_residual,
-                                          bool use_gate_additive)
+                                          bool use_gate_additive,
+                                          int gate_atom_index)
 {
+  const bool use_tanh_cache =
+      use_gate_additive &&
+      gate_atom_index >= 0 &&
+      gate_residual != 0.0 &&
+      !disable_two_layer_gate_tanh_cache() &&
+      two_layer_gate_tanh_mu_cache != nullptr &&
+      two_layer_gate_tanh_mu_cache_valid != nullptr;
+  double *tanh_cache = nullptr;
+  bool fill_tanh_cache = false;
+  if (use_tanh_cache) {
+    if (gate_atom_index >= atom->nmax)
+      error->one(FLERR, "SUS2-SH LAMMPS two-layer gate tanh cache atom index is out of range.");
+    tanh_cache = two_layer_gate_tanh_mu_cache +
+        static_cast<size_t>(gate_atom_index) * radial_func_count;
+    fill_tanh_cache = two_layer_gate_tanh_mu_cache_valid[gate_atom_index] == 0;
+  }
+
   bool used_precomputed_table = false;
   if (do_list) {
     const int shift = species_count * itype + jtype;
@@ -568,7 +615,11 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
                 base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
             const double additive_coeff = two_layer_gate_additive_ratios[ratio_offset + mu];
             const double arg = additive_coeff * gate_residual;
-            const double tanh_arg = std::tanh(arg);
+            const double tanh_arg = tanh_cache == nullptr
+                ? (arg == 0.0 ? 0.0 : std::tanh(arg))
+                : (fill_tanh_cache
+                    ? (tanh_cache[mu] = std::tanh(arg))
+                    : tanh_cache[mu]);
             const double sech2 = 1.0 - tanh_arg * tanh_arg;
             const double gate_multiplier =
                 1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
@@ -578,6 +629,8 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
             radial_vals[mu] = base_val * gate_multiplier;
             radial_ders[mu] = base_der * gate_multiplier;
           }
+          if (fill_tanh_cache)
+            two_layer_gate_tanh_mu_cache_valid[gate_atom_index] = 1;
           used_precomputed_table = true;
         }
         // two_layer_gate_additive_table_fallback: if the exact main-table
@@ -654,7 +707,11 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
     if (use_gate_additive) {
       const double additive_coeff = two_layer_gate_additive_coeff(jtype, mu);
       const double arg = additive_coeff * gate_residual;
-      const double tanh_arg = std::tanh(arg);
+      const double tanh_arg = tanh_cache == nullptr
+          ? (arg == 0.0 ? 0.0 : std::tanh(arg))
+          : (fill_tanh_cache
+              ? (tanh_cache[mu] = std::tanh(arg))
+              : tanh_cache[mu]);
       const double sech2 = 1.0 - tanh_arg * tanh_arg;
       const double gate_multiplier =
           1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
@@ -687,6 +744,8 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
     radial_vals[mu] = val;
     radial_ders[mu] = der;
   }
+  if (fill_tanh_cache)
+    two_layer_gate_tanh_mu_cache_valid[gate_atom_index] = 1;
 }
 
 void PairSUS2MTP::accumulate_sh_basic_edge(int jj,
@@ -886,6 +945,10 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   }
 
   comm->forward_comm(this);
+  if (!disable_two_layer_gate_tanh_cache() &&
+      two_layer_gate_tanh_mu_cache_valid != nullptr)
+    std::fill(two_layer_gate_tanh_mu_cache_valid,
+              two_layer_gate_tanh_mu_cache_valid + atom->nmax, 0);
 
   for (int ii = 0; ii < inum; ii++) {
     const int i = ilist[ii];
@@ -909,7 +972,7 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
                            two_layer_gate_edge_dz[active_idx]};
       const double dist = two_layer_gate_edge_dist[active_idx];
       const double gate_residual = two_layer_gate_values[j] - default_gate;
-      calc_pair_radial_values(itype, jtype, dist, false, gate_residual, true);
+      calc_pair_radial_values(itype, jtype, dist, false, gate_residual, true, j);
       const int raw_offset = active_local * alpha_index_basic_count;
       accumulate_sh_basic_edge(active_local, r, dist, 1.0, true, raw_offset, true);
     }

@@ -203,10 +203,14 @@ class PairSUS2MTP : public Pair {
   double *two_layer_gate_residual_radial_vals = nullptr;
   double *two_layer_gate_values = nullptr;
   double *two_layer_gate_adjoints = nullptr;
+  double *two_layer_gate_tanh_mu_cache = nullptr;
+  unsigned char *two_layer_gate_tanh_mu_cache_valid = nullptr;
   double *two_layer_radial_cache_vals = nullptr;
   double *two_layer_radial_cache_ders = nullptr;
   int two_layer_raw_jac_size = 0;
   int two_layer_atom_buffer_size = 0;
+  int two_layer_tanh_cache_atom_size = 0;
+  int two_layer_tanh_cache_size = 0;
   int two_layer_radial_cache_size = 0;
   double *moment_jacobian_x = nullptr;    // SoA layout for x-component
   double *moment_jacobian_y = nullptr;    // SoA layout for y-component
@@ -228,7 +232,8 @@ class PairSUS2MTP : public Pair {
 	  void compute_zbl(int, int);
 	  int two_layer_gate_additive_coeff_index(int, int) const;
   double two_layer_gate_additive_coeff(int, int) const;
-  void calc_pair_radial_values(int, int, double, bool, double = 0.0, bool = false);
+  void calc_pair_radial_values(int, int, double, bool, double = 0.0,
+                               bool = false, int = -1);
   void accumulate_sh_basic_edge(int, const double *, double, double, bool, int, bool = false);
   void forward_sh_products();
   void backprop_sh_products();
