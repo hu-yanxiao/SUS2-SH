@@ -1064,6 +1064,21 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (opts["weighting"] != "")
 		weighting = opts["weighting"];
 
+	ForceLossKind force_loss_kind = ForceLossKind::L2;
+	if (opts["force-loss"] != "") {
+		try {
+			force_loss_kind = ParseForceLossKind(opts["force-loss"]);
+		}
+		catch (const std::invalid_argument&) {
+			ERROR("--force-loss should be 'l2' or 'log-cosh'");
+		}
+	}
+	double force_log_cosh_scale = 2.0;
+	if (opts["force-log-cosh-scale"] != "")
+		force_log_cosh_scale = stod(opts["force-log-cosh-scale"]);
+	if (!std::isfinite(force_log_cosh_scale) || force_log_cosh_scale <= 0.0)
+		ERROR("--force-log-cosh-scale should be a finite positive value");
+
 	bool custom_scal_range = false;
 	std::pair<double, double> scal_range;
 	if (opts["scal-range"] != "") {
@@ -1196,6 +1211,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.radial_smooth_grid = radial_smooth_grid;
 	trainer.fixed_atomic_energies = fixed_atomic_energies;
 	trainer.fixed_atomic_energy_weight = fixed_atomic_energy_weight;
+	trainer.force_loss_kind = force_loss_kind;
+	trainer.force_log_cosh_scale = force_log_cosh_scale;
 
 	if (prank == 0)
 		std::cout << "SUS2-MLIP developer version (2026-04-17)"
@@ -1516,8 +1533,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			if ((weight_energy != 0) || (weight_force != 0) || (weight_stress != 0)) {
 				std::cout << "Energy weight: " << weight_energy << std::endl;
 				std::cout << "Force weight: " << weight_force << std::endl;
+				std::cout << "Force loss: " << ForceLossKindName(trainer.force_loss_kind);
+				if (trainer.force_loss_kind == ForceLossKind::LogCosh)
+					std::cout << " scale=" << trainer.force_log_cosh_scale;
+				std::cout << std::endl;
 				std::cout << "Stress weight: " << weight_stress << std::endl;
-                                std::cout << "std weight: " << trainer.std_scaling << std::endl;
+				std::cout << "std weight: " << trainer.std_scaling << std::endl;
                                 std::cout << "center_std weight: " << trainer.stdd_scaling << std::endl;
 			}
 		}

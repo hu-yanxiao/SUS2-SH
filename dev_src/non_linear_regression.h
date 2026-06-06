@@ -9,6 +9,7 @@
 
 #include "../src/basic_mlip.h"
 #include "../src/basic_trainer.h"
+#include "force_loss.h"
 
 
 class NonLinearRegression : public AnyTrainer//, protected LogWriting 
@@ -55,6 +56,8 @@ public:
 	int radial_smooth_grid = 128;
 	std::vector<double> fixed_atomic_energies;
 	double fixed_atomic_energy_weight = 1.0e8;
+	ForceLossKind force_loss_kind = ForceLossKind::L2;
+	double force_log_cosh_scale = 2.0;
 
 	NonLinearRegression(AnyLocalMLIP* _p_mlip,				// Constructor requires MTP basis
 						double _wgt_energy = 1.0,			// Optional parameters are the weights coeficients of energy, forces and stresses equations in minimization problem

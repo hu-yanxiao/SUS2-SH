@@ -543,6 +543,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 		"  Options include:\n"
 		"    --energy-weight=<double>: weight of energies in the fitting. Default=1\n"
 		"    --force-weight=<double>: weight of forces in the fitting. Default=0.01\n"
+		"    --force-loss=<l2|log-cosh>: force loss used by nonlinear BFGS. Default=l2\n"
+		"    --force-log-cosh-scale=<double>: log-cosh force scale in eV/A. Default=2\n"
 		"    --stress-weight=<double>: weight of stresses in the fitting. Default=0.001\n"
 		"    --scale-by-force=<double>: Default=0. If >0 then configurations near equilibrium\n"
 		"                               (with roughtly force < <double>) get more weight. \n"
