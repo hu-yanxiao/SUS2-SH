@@ -1,5 +1,6 @@
 #include "zbl.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "common/utils.h"
@@ -38,6 +39,7 @@ ZBLPotential::ZBLPotential()
 	: enabled_(false),
 	  inner_cutoff_(DefaultZBLInnerCutoff()),
 	  outer_cutoff_(DefaultZBLOuterCutoff()),
+	  max_outer_cutoff_(DefaultZBLOuterCutoff()),
 	  typewise_cutoff_enabled_(false),
 	  typewise_cutoff_factor_(DefaultZBLTypewiseCutoffFactor())
 {
@@ -56,6 +58,11 @@ double ZBLPotential::InnerCutoff() const
 double ZBLPotential::OuterCutoff() const
 {
 	return outer_cutoff_;
+}
+
+double ZBLPotential::MaxOuterCutoff() const
+{
+	return max_outer_cutoff_;
 }
 
 bool ZBLPotential::TypewiseCutoffEnabled() const
@@ -79,6 +86,7 @@ void ZBLPotential::Clear()
 	atomic_numbers_.clear();
 	inner_cutoff_ = DefaultZBLInnerCutoff();
 	outer_cutoff_ = DefaultZBLOuterCutoff();
+	max_outer_cutoff_ = DefaultZBLOuterCutoff();
 	typewise_cutoff_enabled_ = false;
 	typewise_cutoff_factor_ = DefaultZBLTypewiseCutoffFactor();
 	pair_inner_cutoffs_.clear();
@@ -121,6 +129,11 @@ void ZBLPotential::Configure(const std::vector<int>& atomic_numbers,
 	                        typewise_cutoff_enabled_,
 	                        typewise_cutoff_enabled_ ? typewise_cutoff_factor_ : 0.0,
 	                        pair_inner_cutoffs_, pair_outer_cutoffs_, pair_outer_sq_);
+	max_outer_cutoff_ = 0.0;
+	for (double pair_outer : pair_outer_cutoffs_)
+		max_outer_cutoff_ = std::max(max_outer_cutoff_, pair_outer);
+	if (max_outer_cutoff_ <= 0.0)
+		ERROR("ZBL max pair outer cutoff should be positive.");
 	pair_constants_.resize(static_cast<size_t>(atomic_numbers_.size()) *
 	                       atomic_numbers_.size());
 	for (int i = 0; i < static_cast<int>(atomic_numbers_.size()); ++i)
@@ -132,7 +145,7 @@ void ZBLPotential::Configure(const std::vector<int>& atomic_numbers,
 
 ZBLEFS ZBLPotential::Compute(const Configuration& cfg) const
 {
-	Neighborhoods neighborhoods(cfg, outer_cutoff_);
+	Neighborhoods neighborhoods(cfg, max_outer_cutoff_);
 	return Compute(cfg, neighborhoods);
 }
 
@@ -149,6 +162,8 @@ ZBLEFS ZBLPotential::Compute(const Configuration& cfg, const Neighborhoods& neig
 	    static_cast<int>(pair_inner_cutoffs_.size()) != species_count * species_count ||
 	    static_cast<int>(pair_constants_.size()) != species_count * species_count)
 		ERROR("ZBL pair cutoff table is not initialized.");
+	if (neighborhoods.cutoff + 1.0e-12 < max_outer_cutoff_)
+		ERROR("ZBL neighborhood cutoff is smaller than the maximum pair outer cutoff.");
 
 	for (int ind = 0; ind < cfg.size(); ++ind) {
 		const int type_i = cfg.type(ind);
@@ -185,9 +200,55 @@ ZBLEFS ZBLPotential::Compute(const Configuration& cfg, const Neighborhoods& neig
 	return zbl;
 }
 
+double ZBLPotential::ComputeEnergy(const Configuration& cfg) const
+{
+	Neighborhoods neighborhoods(cfg, max_outer_cutoff_);
+	return ComputeEnergy(cfg, neighborhoods);
+}
+
+double ZBLPotential::ComputeEnergy(const Configuration& cfg,
+                                   const Neighborhoods& neighborhoods) const
+{
+	if (!enabled_)
+		return 0.0;
+	if (static_cast<int>(atomic_numbers_.size()) <= 0)
+		ERROR("ZBL atomic number map is empty.");
+	const int species_count = static_cast<int>(atomic_numbers_.size());
+	if (static_cast<int>(pair_outer_cutoffs_.size()) != species_count * species_count ||
+	    static_cast<int>(pair_inner_cutoffs_.size()) != species_count * species_count ||
+	    static_cast<int>(pair_constants_.size()) != species_count * species_count)
+		ERROR("ZBL pair cutoff table is not initialized.");
+	if (neighborhoods.cutoff + 1.0e-12 < max_outer_cutoff_)
+		ERROR("ZBL neighborhood cutoff is smaller than the maximum pair outer cutoff.");
+
+	double energy = 0.0;
+	for (int ind = 0; ind < cfg.size(); ++ind) {
+		const int type_i = cfg.type(ind);
+		if (type_i < 0 || type_i >= species_count)
+			ERROR("ZBL atom type is outside the atomic number map.");
+		const Neighborhood& nbh = neighborhoods[ind];
+
+		for (int j = 0; j < nbh.count; ++j) {
+			const int neighbor = nbh.inds[j];
+			const int type_j = cfg.type(neighbor);
+			if (type_j < 0 || type_j >= species_count)
+				ERROR("ZBL neighbor atom type is outside the atomic number map.");
+			const int pair_index = type_i * species_count + type_j;
+			if (nbh.dists[j] >= pair_outer_cutoffs_[pair_index])
+				continue;
+			energy += 0.5 * ComputeZBLPairEnergyCached(
+				pair_constants_[pair_index],
+				nbh.dists[j],
+				pair_inner_cutoffs_[pair_index],
+				pair_outer_cutoffs_[pair_index]);
+		}
+	}
+	return energy;
+}
+
 void ZBLPotential::AddTo(Configuration& cfg) const
 {
-	Neighborhoods neighborhoods(cfg, outer_cutoff_);
+	Neighborhoods neighborhoods(cfg, max_outer_cutoff_);
 	AddTo(cfg, neighborhoods);
 }
 
@@ -202,6 +263,8 @@ void ZBLPotential::AddTo(Configuration& cfg, const Neighborhoods& neighborhoods)
 	    static_cast<int>(pair_inner_cutoffs_.size()) != species_count * species_count ||
 	    static_cast<int>(pair_constants_.size()) != species_count * species_count)
 		ERROR("ZBL pair cutoff table is not initialized.");
+	if (neighborhoods.cutoff + 1.0e-12 < max_outer_cutoff_)
+		ERROR("ZBL neighborhood cutoff is smaller than the maximum pair outer cutoff.");
 
 	const bool add_energy = cfg.has_energy();
 	const bool add_forces = cfg.has_forces();

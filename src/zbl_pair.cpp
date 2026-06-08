@@ -247,6 +247,40 @@ ZBLPairValue ComputeZBLPairCached(const ZBLPairConstants& constants,
 	return value;
 }
 
+double ComputeZBLPairEnergyCached(const ZBLPairConstants& constants,
+                                  double distance,
+                                  double inner_cutoff,
+                                  double outer_cutoff)
+{
+	if (inner_cutoff < 0.0)
+		ERROR("ZBL inner cutoff should be non-negative.");
+	if (outer_cutoff <= 0.0)
+		ERROR("ZBL outer cutoff should be positive.");
+	if (distance <= 0.0)
+		ERROR("ZBL pair distance should be positive.");
+	if (outer_cutoff <= inner_cutoff)
+		ERROR("ZBL cutoffs should satisfy 0 <= inner < outer.");
+
+	if (distance >= outer_cutoff)
+		return 0.0;
+
+	const double coefficients[4] = {0.18175, 0.50986, 0.28022, 0.02817};
+	const double exponents[4] = {3.1998, 0.94229, 0.4029, 0.20162};
+	const double x = constants.screening_inv * distance;
+
+	double phi = 0.0;
+	for (int i = 0; i < 4; ++i)
+		phi += coefficients[i] * std::exp(-exponents[i] * x);
+
+	const double base_energy = constants.prefactor * phi / distance;
+	double switch_value = 1.0;
+	if (distance > inner_cutoff) {
+		const double pi_factor = std::acos(-1.0) / (outer_cutoff - inner_cutoff);
+		switch_value = 0.5 * std::cos(pi_factor * (distance - inner_cutoff)) + 0.5;
+	}
+	return switch_value * base_energy;
+}
+
 ZBLPairValue ComputeZBLPair(int atomic_number_i,
                             int atomic_number_j,
                             double distance,

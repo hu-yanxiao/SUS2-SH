@@ -91,10 +91,12 @@ public:
 								double& out_penalty_accumulator,
 								Array1D* out_penalty_grad_accumulator = nullptr);
 
-	// CalcEFS
-	virtual void CalcE(Configuration& cfg);
-	virtual void CalcEFS(Configuration &cfg);
-	virtual void CalcEFS(Configuration &cfg, const Neighborhoods& neighborhoods);
+		// CalcEFS
+		virtual void CalcE(Configuration& cfg);
+		virtual void CalcEnergyAndSiteEnergies(Configuration& cfg);
+		virtual void CalcEnergyAndSiteEnergies(Configuration& cfg, const Neighborhoods& neighborhoods);
+		virtual void CalcEFS(Configuration &cfg);
+		virtual void CalcEFS(Configuration &cfg, const Neighborhoods& neighborhoods);
 	bool HasZBL() const;
 	const ZBLPotential& ZBL() const;
 	ZBLPotential& ZBL();
@@ -128,13 +130,20 @@ public:
 										const std::vector<Vector3>& frc_weights,
 										const Matrix3& str_weights,
 										Array1D& out_grads_accumulator);
-	virtual void AccumulateEFSCombinationGrad(	Configuration &cfg,
-		                                std::vector<double>& ene_weight,
-										const std::vector<Vector3>& frc_weights,
-										const Matrix3& str_weights,
-										Array1D& out_grads_accumulator,
-										const Neighborhoods& neighborhoods);
-};
+		virtual void AccumulateEFSCombinationGrad(	Configuration &cfg,
+			                                std::vector<double>& ene_weight,
+											const std::vector<Vector3>& frc_weights,
+											const Matrix3& str_weights,
+											Array1D& out_grads_accumulator,
+											const Neighborhoods& neighborhoods);
+		virtual void AccumulateEnergyCombinationGrad(Configuration &cfg,
+			                                std::vector<double>& ene_weight,
+											Array1D& out_grads_accumulator);
+		virtual void AccumulateEnergyCombinationGrad(Configuration &cfg,
+			                                std::vector<double>& ene_weight,
+											Array1D& out_grads_accumulator,
+											const Neighborhoods& neighborhoods);
+	};
 
 
 

@@ -2713,16 +2713,160 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 			build_full_edge_cache && cfg.size() > 0
 			&& HasTwoLayerEdgePrimitiveCache(0, true, true);
 		if (HasZBL() && ZBLEvaluationEnabled()) {
-			if (neighborhoods.cutoff + 1.0e-12 >= ZBL().OuterCutoff())
+			if (neighborhoods.cutoff + 1.0e-12 >= ZBL().MaxOuterCutoff())
 				ZBL().AddTo(cfg, neighborhoods);
 			else
 				ZBL().AddTo(cfg);
+			}
 		}
+
+double MLMTPR::CalcSiteEnergyValue(const Neighborhood& nbh,
+                                   double* out_site_energy0)
+{
+	if (nbh.my_type >= species_count)
+		throw MlipException("Too few species count in the MTP potential!");
+
+	if (is_sh_potential_ && TwoLayerResidualEnabled()) {
+		if (static_cast<int>(two_layer_residual_e0_coeffs_.size()) != alpha_scalar_moments)
+			two_layer_residual_e0_coeffs_.assign(alpha_scalar_moments, 0.0);
+
+		const bool saved_residual = two_layer_residual_enabled_;
+		const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
+		std::vector<double>* saved_gate_adjoints = active_two_layer_gate_adjoints_;
+		const std::vector<double> saved_linear_coeffs = linear_coeffs;
+		std::vector<double> saved_e0_coeffs(alpha_scalar_moments, 0.0);
+		for (int i = 0; i < alpha_scalar_moments; ++i)
+			saved_e0_coeffs[i] = TwoLayerResidualE0Coeff(i);
+
+		two_layer_residual_enabled_ = false;
+		active_two_layer_gate_values_ = nullptr;
+		active_two_layer_gate_adjoints_ = nullptr;
+		for (int i = 0; i < alpha_scalar_moments; ++i)
+			linear_coeffs[species_count + i] = saved_e0_coeffs[i];
+		for (int i = 0; i < species_count; ++i)
+			linear_coeffs[i] = 1.0;
+		double e0_site_energy0 = 0.0;
+		const double e0_energy =
+			CalcSiteEnergyValue(nbh, &e0_site_energy0)
+			+ saved_linear_coeffs[nbh.my_type] - 1.0;
+
+		linear_coeffs = saved_linear_coeffs;
+		for (int i = 0; i < species_count; ++i)
+			linear_coeffs[i] = 1.0;
+		active_two_layer_gate_values_ = saved_gate_values;
+		active_two_layer_gate_adjoints_ = saved_gate_adjoints;
+		double e1_site_energy0 = 0.0;
+		const double e1_energy = CalcSiteEnergyValue(nbh, &e1_site_energy0);
+		const double e1_one_body = regression_coeffs[nbh.my_type] + 1.0;
+
+		two_layer_residual_enabled_ = saved_residual;
+		active_two_layer_gate_values_ = saved_gate_values;
+		active_two_layer_gate_adjoints_ = saved_gate_adjoints;
+		linear_coeffs = saved_linear_coeffs;
+
+		if (out_site_energy0 != nullptr)
+			*out_site_energy0 = e1_site_energy0 + e0_site_energy0;
+		return e1_energy + e0_energy - e1_one_body;
 	}
 
+	CalcBasisFuncs(nbh, basis_vals);
+	double site_energy0 = 0.0;
+	double site_energy = regression_coeffs[nbh.my_type] + linear_coeffs[nbh.my_type];
+	const double center_linear = linear_coeffs[nbh.my_type];
+	for (int i = 0; i < alpha_scalar_moments; ++i) {
+		const double scalar_value = basis_vals[1 + i];
+		const double term = linear_coeffs[species_count + i]
+		                  * linear_mults[i]
+		                  * scalar_value
+		                  * center_linear;
+		site_energy += term;
+		site_energy0 += term;
+		max_linear[i] = std::max(max_linear[i],
+		                         std::abs(linear_coeffs[species_count + i]
+		                                  * scalar_value));
+	}
+
+	if (!is_sh_potential_
+	    && p_RadialBasis->GetRBTypeString() == "RBChebyshev_repuls") {
+		const double multiplier = 10000.0;
+		for (int j = 0; j < nbh.count; ++j)
+			if (nbh.dists[j] < p_RadialBasis->min_dist)
+				site_energy += multiplier
+					* (exp(-10 * (nbh.dists[j] - 1))
+					   - exp(-10 * (p_RadialBasis->min_dist - 1)));
+	}
+
+	if (out_site_energy0 != nullptr)
+		*out_site_energy0 = site_energy0;
+	return site_energy;
+}
+
+void MLMTPR::CalcEnergyAndSiteEnergies(Configuration& cfg)
+{
+	Neighborhoods neighborhoods(cfg, CutOff());
+	CalcEnergyAndSiteEnergies(cfg, neighborhoods);
+}
+
+void MLMTPR::CalcEnergyAndSiteEnergies(Configuration& cfg,
+                                       const Neighborhoods& neighborhoods)
+{
+	cfg.energy = 0.0;
+	memset(&cfg.stresses[0][0], 0, sizeof(Matrix3));
+	cfg.has_energy(true);
+	cfg.has_forces(false);
+	cfg.has_stresses(false);
+	cfg.has_site_energies(true);
+	cfg.cal_se.resize(cfg.size());
+	cfg.cal_se0.resize(cfg.size());
+	cfg.type_mean.resize(cfg.unique_elems.size());
+	FillWithZero(cfg.type_mean);
+
+	PrepareEvalCaches();
+	const bool use_two_layer_gate = RequiresTwoLayerGateEvaluation();
+	if (!use_two_layer_gate) {
+		two_layer_full_edge_cache_for_next_calc_ = false;
+		two_layer_reuse_full_edge_cache_once_ = false;
+		two_layer_forward_final_moment_cache_ready_ = false;
+		active_two_layer_gate_values_ = nullptr;
+		active_two_layer_gate_adjoints_ = nullptr;
+		active_two_layer_edge_cache_atom_index_ = -1;
+	} else {
+		two_layer_full_edge_cache_for_next_calc_ = false;
+		two_layer_reuse_full_edge_cache_once_ = false;
+		two_layer_forward_final_moment_cache_ready_ = false;
+		BuildTwoLayerEdgePrimitiveCache(neighborhoods, false);
+		PrepareTwoLayerGateValues(cfg, neighborhoods);
+		active_two_layer_gate_values_ = &two_layer_gate_values_;
+		active_two_layer_gate_adjoints_ = nullptr;
+	}
+
+	for (int ind = 0; ind < cfg.size(); ++ind) {
+		if (use_two_layer_gate)
+			active_two_layer_edge_cache_atom_index_ = ind;
+		double site_energy0 = 0.0;
+		const double site_energy =
+			CalcSiteEnergyValue(neighborhoods[ind], &site_energy0);
+		cfg.cal_se[ind] = site_energy;
+		cfg.cal_se0[ind] = site_energy0;
+		cfg.energy += site_energy;
+	}
+
+	active_two_layer_edge_cache_atom_index_ = -1;
+	if (use_two_layer_gate)
+		active_two_layer_gate_values_ = nullptr;
+	active_two_layer_gate_adjoints_ = nullptr;
+
+	if (HasZBL() && ZBLEvaluationEnabled()) {
+		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().MaxOuterCutoff())
+			cfg.energy += ZBL().ComputeEnergy(cfg, neighborhoods);
+		else
+			cfg.energy += ZBL().ComputeEnergy(cfg);
+	}
+}
+
 void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
-                                          std::vector<double>& ene_weight,
-                                          const std::vector<Vector3>& frc_weights,
+	                                          std::vector<double>& ene_weight,
+	                                          const std::vector<Vector3>& frc_weights,
                                           const Matrix3& str_weights,
                                           Array1D& out_grads_accumulator)
 {
@@ -3061,7 +3205,94 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 			profile_tangent_grad_s,
 			profile_after_gate_weight - profile_gate_weight_start,
 			profile_after_scalar_param - profile_scalar_param_start);
+		}
 	}
+
+void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
+                                             std::vector<double>& ene_weight,
+                                             Array1D& out_grads_accumulator)
+{
+	Neighborhoods neighborhoods(cfg, CutOff());
+	AccumulateEnergyCombinationGrad(cfg, ene_weight, out_grads_accumulator,
+	                                neighborhoods);
+}
+
+void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
+                                             std::vector<double>& ene_weight,
+                                             Array1D& out_grads_accumulator,
+                                             const Neighborhoods& neighborhoods)
+{
+	if (!is_sh_potential_ || !two_layer_gate_enabled_ || !RequiresTwoLayerGateEvaluation()) {
+		AnyLocalMLIP::AccumulateEnergyCombinationGrad(cfg, ene_weight,
+		                                              out_grads_accumulator,
+		                                              neighborhoods);
+		return;
+	}
+
+	out_grads_accumulator.resize(CoeffCount());
+	PrepareEvalCaches();
+	two_layer_full_edge_cache_for_next_calc_ = false;
+	two_layer_reuse_full_edge_cache_once_ = false;
+	two_layer_forward_final_moment_cache_ready_ = false;
+	BuildTwoLayerEdgePrimitiveCache(neighborhoods, false);
+	PrepareTwoLayerGateValues(cfg, neighborhoods);
+	two_layer_gate_adjoints_.assign(cfg.size(), 0.0);
+
+	const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
+	std::vector<double>* saved_gate_adjoints = active_two_layer_gate_adjoints_;
+	active_two_layer_gate_values_ = &two_layer_gate_values_;
+	active_two_layer_gate_adjoints_ = &two_layer_gate_adjoints_;
+
+	for (int ind = 0; ind < cfg.size(); ++ind) {
+		active_two_layer_edge_cache_atom_index_ = ind;
+		AccumulateCombinationGrad(neighborhoods[ind],
+		                           out_grads_accumulator,
+		                           ene_weight[ind],
+		                           nullptr);
+	}
+	active_two_layer_edge_cache_atom_index_ = -1;
+
+	for (int ind = 0; ind < cfg.size(); ++ind) {
+		const double gate_adjoint = two_layer_gate_adjoints_[ind];
+		if (gate_adjoint == 0.0)
+			continue;
+		const int gate_count = TwoLayerGateWeightCount();
+		const double* cached_scalars = nullptr;
+		if (gate_count > 0 &&
+			two_layer_gate_scalar_values_cache_.size() ==
+				static_cast<size_t>(cfg.size()) * gate_count) {
+			cached_scalars = two_layer_gate_scalar_values_cache_.data()
+				+ static_cast<size_t>(ind) * gate_count;
+		}
+		if (cached_scalars == nullptr)
+			CalcTwoLayerGateScalarValuesOnly(neighborhoods[ind],
+			                                  sh_gate_scalar_values_,
+			                                  ind);
+		for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+			const double scalar_value =
+				(cached_scalars == nullptr) ? sh_gate_scalar_values_[q] : cached_scalars[q];
+			out_grads_accumulator[TwoLayerGateWeightOffset() + q] +=
+				gate_adjoint * scalar_value;
+		}
+	}
+
+	if (HasNonzeroTwoLayerGateWeights()) {
+		for (int ind = 0; ind < cfg.size(); ++ind) {
+			const double gate_adjoint = two_layer_gate_adjoints_[ind];
+			if (gate_adjoint == 0.0)
+				continue;
+			AccumulateTwoLayerGateScalarParamGrad(neighborhoods[ind],
+			                                      out_grads_accumulator,
+			                                      gate_adjoint,
+			                                      nullptr,
+			                                      ind,
+			                                      nullptr,
+			                                      0.0);
+		}
+	}
+
+	active_two_layer_gate_values_ = saved_gate_values;
+	active_two_layer_gate_adjoints_ = saved_gate_adjoints;
 }
 
 
@@ -3676,8 +3907,6 @@ void MLMTPR::CalcBasisFuncsDers(const Neighborhood& Neighborhood)
 			}
 		}
 	}
-
-
 
 	// Next: calculating non-elementary b_i
 	for (int i = 0; i < alpha_index_times_count; i++) {

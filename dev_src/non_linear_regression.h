@@ -36,6 +36,13 @@ protected:
 	void AddLoss(const Configuration &orig, const Neighborhoods* neighborhoods);
 	void AddLossGrad(const Configuration &orig);
 	void AddLossGrad(const Configuration &orig, const Neighborhoods* neighborhoods);
+	bool NeedForceTerms(const Configuration& orig) const;
+	bool NeedStressTerms(const Configuration& orig) const;
+	bool NeedPositionDerivativeTerms(const Configuration& orig) const;
+	void EvaluateTrainingConfiguration(const Configuration& orig,
+	                                   Configuration& cfg,
+	                                   const Neighborhoods* neighborhoods,
+	                                   bool request_full_edge_cache);
 	bool NeedStdTerms() const { return std_scaling != 0.0 || stdd_scaling != 0.0; }
 	void PrepareTypeScratch(const Configuration& cfg);
 	void ResetObjectiveAccumulators();

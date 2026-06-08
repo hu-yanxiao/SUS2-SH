@@ -57,6 +57,10 @@ ZBLPairValue ComputeZBLPairCached(const ZBLPairConstants& constants,
                                   double distance,
                                   double inner_cutoff,
                                   double outer_cutoff);
+double ComputeZBLPairEnergyCached(const ZBLPairConstants& constants,
+                                  double distance,
+                                  double inner_cutoff,
+                                  double outer_cutoff);
 ZBLPairValue ComputeZBLPair(int atomic_number_i,
                             int atomic_number_j,
                             double distance,
@@ -69,6 +73,7 @@ private:
 	bool enabled_;
 	double inner_cutoff_;
 	double outer_cutoff_;
+	double max_outer_cutoff_;
 	bool typewise_cutoff_enabled_;
 	double typewise_cutoff_factor_;
 	std::vector<int> atomic_numbers_;
@@ -83,6 +88,7 @@ public:
 	bool Enabled() const;
 	double InnerCutoff() const;
 	double OuterCutoff() const;
+	double MaxOuterCutoff() const;
 	bool TypewiseCutoffEnabled() const;
 	double TypewiseCutoffFactor() const;
 	const std::vector<int>& AtomicNumbers() const;
@@ -94,10 +100,12 @@ public:
 	               bool typewise_cutoff_enabled = false,
 	               double typewise_cutoff_factor = 0.7);
 
-	ZBLEFS Compute(const Configuration& cfg) const;
-	ZBLEFS Compute(const Configuration& cfg, const Neighborhoods& neighborhoods) const;
-	void AddTo(Configuration& cfg) const;
-	void AddTo(Configuration& cfg, const Neighborhoods& neighborhoods) const;
-};
+		ZBLEFS Compute(const Configuration& cfg) const;
+		ZBLEFS Compute(const Configuration& cfg, const Neighborhoods& neighborhoods) const;
+		double ComputeEnergy(const Configuration& cfg) const;
+		double ComputeEnergy(const Configuration& cfg, const Neighborhoods& neighborhoods) const;
+		void AddTo(Configuration& cfg) const;
+		void AddTo(Configuration& cfg, const Neighborhoods& neighborhoods) const;
+	};
 
 #endif // MLIP_ZBL_H

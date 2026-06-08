@@ -363,27 +363,37 @@ public:
 	Array3D forces_cmpnts;								// Force components for SLAE matrix
 	double(*stress_cmpnts)[3][3];						// Stress components for SLAE matrix
 
-	void CalcBasisFuncs(const Neighborhood& Neighborhood, double* bf_vals); //Linear basic functions calculation
-	void CalcBasisFuncsDers(const Neighborhood& Neighborhood);		//Linear basic functions and their derivatives calculation
+		void CalcBasisFuncs(const Neighborhood& Neighborhood, double* bf_vals); //Linear basic functions calculation
+		double CalcSiteEnergyValue(const Neighborhood& nbh, double* out_site_energy0);
+		void CalcBasisFuncsDers(const Neighborhood& Neighborhood);		//Linear basic functions and their derivatives calculation
 	void CalcEFSComponents(Configuration& cfg);						//Calculate the components for linear regression matrix
 	void CalcEFSComponents(Configuration& cfg, const Neighborhoods& neighborhoods);
 	void CalcEFSComponents(Configuration& cfg, bool need_forces, bool need_stress);
 	void CalcEFSComponents(Configuration& cfg, const Neighborhoods& neighborhoods, bool need_forces, bool need_stress);
 	void CalcEComponents(Configuration& cfg);			//Calculate the components for linear regression matrix
 	void CalcEComponents(Configuration& cfg, const Neighborhoods& neighborhoods);
-	void CalcEFS(Configuration& cfg) override;
-	void CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods) override;
-	void AccumulateEFSCombinationGrad(Configuration& cfg,
+		void CalcEFS(Configuration& cfg) override;
+		void CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods) override;
+		void CalcEnergyAndSiteEnergies(Configuration& cfg) override;
+		void CalcEnergyAndSiteEnergies(Configuration& cfg, const Neighborhoods& neighborhoods) override;
+		void AccumulateEFSCombinationGrad(Configuration& cfg,
 	                                  std::vector<double>& ene_weight,
 	                                  const std::vector<Vector3>& frc_weights,
 	                                  const Matrix3& str_weights,
 	                                  Array1D& out_grads_accumulator) override;
-	void AccumulateEFSCombinationGrad(Configuration& cfg,
-	                                  std::vector<double>& ene_weight,
-	                                  const std::vector<Vector3>& frc_weights,
-	                                  const Matrix3& str_weights,
-	                                  Array1D& out_grads_accumulator,
-	                                  const Neighborhoods& neighborhoods) override;
+		void AccumulateEFSCombinationGrad(Configuration& cfg,
+		                                  std::vector<double>& ene_weight,
+		                                  const std::vector<Vector3>& frc_weights,
+		                                  const Matrix3& str_weights,
+		                                  Array1D& out_grads_accumulator,
+		                                  const Neighborhoods& neighborhoods) override;
+		void AccumulateEnergyCombinationGrad(Configuration& cfg,
+		                                      std::vector<double>& ene_weight,
+		                                      Array1D& out_grads_accumulator) override;
+		void AccumulateEnergyCombinationGrad(Configuration& cfg,
+		                                      std::vector<double>& ene_weight,
+		                                      Array1D& out_grads_accumulator,
+		                                      const Neighborhoods& neighborhoods) override;
 	bool HasNonzeroTwoLayerGateWeights() const;
 	bool RequiresTwoLayerGateEvaluation() const;
 	void PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods);

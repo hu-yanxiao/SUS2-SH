@@ -235,13 +235,53 @@ void AnyLocalMLIP::CalcE(Configuration& cfg)
 		cfg.energy += SiteEnergy(nbh);
 
 	if (HasZBL() && ZBLEvaluationEnabled()) {
-		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().OuterCutoff())
+		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().MaxOuterCutoff())
 			cfg.energy += ZBL().Compute(cfg, neighborhoods).energy;
 		else
 			cfg.energy += ZBL().Compute(cfg).energy;
 	}
 
 	cfg.has_energy(true);
+}
+
+void AnyLocalMLIP::CalcEnergyAndSiteEnergies(Configuration& cfg)
+{
+	Neighborhoods neighborhoods(cfg, CutOff());
+	CalcEnergyAndSiteEnergies(cfg, neighborhoods);
+}
+
+void AnyLocalMLIP::CalcEnergyAndSiteEnergies(Configuration& cfg,
+                                             const Neighborhoods& neighborhoods)
+{
+	cfg.energy = 0.0;
+	memset(&cfg.stresses[0][0], 0, sizeof(Matrix3));
+	cfg.has_energy(true);
+	cfg.has_forces(false);
+	cfg.has_stresses(false);
+	cfg.has_site_energies(true);
+	cfg.cal_se.resize(cfg.size());
+	cfg.cal_se0.resize(cfg.size());
+	cfg.type_mean.resize(cfg.unique_elems.size());
+	FillWithZero(cfg.type_mean);
+
+	PrepareEvalCaches();
+	for (int ind = 0; ind < cfg.size(); ind++) {
+		const Neighborhood& nbh = neighborhoods[ind];
+		buff_site_energy_0 = 0.0;
+		buff_site_energy_ = 0.0;
+		buff_site_energy_ders_.resize(nbh.count);
+		CalcSiteEnergyDers(nbh);
+		cfg.cal_se[ind] = buff_site_energy_;
+		cfg.cal_se0[ind] = buff_site_energy_0;
+		cfg.energy += buff_site_energy_;
+	}
+
+	if (HasZBL() && ZBLEvaluationEnabled()) {
+		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().MaxOuterCutoff())
+			cfg.energy += ZBL().ComputeEnergy(cfg, neighborhoods);
+		else
+			cfg.energy += ZBL().ComputeEnergy(cfg);
+	}
 }
 
 void AnyLocalMLIP::CalcEFS(Configuration& cfg)
@@ -287,7 +327,7 @@ void AnyLocalMLIP::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhood
 					cfg.stresses[a][b] -= buff_site_energy_ders_[j][a] * nbh.vecs[j][b];
 	}
 	if (HasZBL() && ZBLEvaluationEnabled()) {
-		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().OuterCutoff())
+		if (neighborhoods.cutoff + 1.0e-12 >= ZBL().MaxOuterCutoff())
 			ZBL().AddTo(cfg, neighborhoods);
 		else
 			ZBL().AddTo(cfg);
@@ -416,6 +456,32 @@ void AnyLocalMLIP::AccumulateEFSCombinationGrad(Configuration &cfg,
 										&tmp_se_ders_weights_[0]);
 		}
 	}
+}
+
+void AnyLocalMLIP::AccumulateEnergyCombinationGrad(Configuration &cfg,
+												  std::vector<double>& ene_weight,
+												  std::vector<double>& out_grads_accumulator)
+{
+	out_grads_accumulator.resize(CoeffCount());
+
+	Neighborhoods neighborhoods(cfg, CutOff());
+	AccumulateEnergyCombinationGrad(cfg, ene_weight, out_grads_accumulator,
+	                                neighborhoods);
+}
+
+void AnyLocalMLIP::AccumulateEnergyCombinationGrad(Configuration &cfg,
+												  std::vector<double>& ene_weight,
+												  std::vector<double>& out_grads_accumulator,
+												  const Neighborhoods& neighborhoods)
+{
+	out_grads_accumulator.resize(CoeffCount());
+	PrepareEvalCaches();
+
+	for (int ind = 0; ind < cfg.size(); ind++)
+		AccumulateCombinationGrad(neighborhoods[ind],
+		                          out_grads_accumulator,
+		                          ene_weight[ind],
+		                          nullptr);
 }
 
 void AnyLocalMLIP::PrepareEvalCaches()

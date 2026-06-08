@@ -119,6 +119,46 @@ void NonLinearRegression::AddGlobalRegularization(double local_multiplier, Array
 	}
 }
 
+bool NonLinearRegression::NeedForceTerms(const Configuration& orig) const
+{
+	return wgt_eqtn_forces != 0.0 && orig.has_forces();
+}
+
+bool NonLinearRegression::NeedStressTerms(const Configuration& orig) const
+{
+	return wgt_eqtn_stress != 0.0 && orig.has_stresses();
+}
+
+bool NonLinearRegression::NeedPositionDerivativeTerms(const Configuration& orig) const
+{
+	return NeedForceTerms(orig) || NeedStressTerms(orig);
+}
+
+void NonLinearRegression::EvaluateTrainingConfiguration(
+	const Configuration& orig,
+	Configuration& cfg,
+	const Neighborhoods* neighborhoods,
+	bool request_full_edge_cache)
+{
+	const bool need_position_derivatives = NeedPositionDerivativeTerms(orig);
+	if (need_position_derivatives) {
+		if (request_full_edge_cache && neighborhoods != nullptr) {
+			if (MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip))
+				mtpr->RequestTwoLayerFullEdgeCacheForNextCalcEFS();
+		}
+		if (neighborhoods != nullptr)
+			p_mlip->CalcEFS(cfg, *neighborhoods);
+		else
+			p_mlip->CalcEFS(cfg);
+		return;
+	}
+
+	if (neighborhoods != nullptr)
+		p_mlip->CalcEnergyAndSiteEnergies(cfg, *neighborhoods);
+	else
+		p_mlip->CalcEnergyAndSiteEnergies(cfg);
+}
+
 void NonLinearRegression::AddLoss(const Configuration & orig)
 {
 	AddLoss(orig, nullptr);
@@ -131,10 +171,7 @@ void NonLinearRegression::AddLoss(const Configuration & orig, const Neighborhood
 
 	const bool need_std_terms = NeedStdTerms();
 	Configuration cfg = orig;
-	if (neighborhoods != nullptr)
-		p_mlip->CalcEFS(cfg, *neighborhoods);
-	else
-		p_mlip->CalcEFS(cfg);
+	EvaluateTrainingConfiguration(orig, cfg, neighborhoods, false);
 
 	if (collect_error_metrics_ && orig.has_energy() && cfg.has_energy()) {
 		const double energy_delta = orig.energy - cfg.energy;
@@ -250,14 +287,7 @@ void NonLinearRegression::AddLossGrad(const Configuration & orig, const Neighbor
 
 	const bool need_std_terms = NeedStdTerms();
 	Configuration cfg = orig;
-	if (neighborhoods != nullptr) {
-		if (MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip))
-			mtpr->RequestTwoLayerFullEdgeCacheForNextCalcEFS();
-	}
-	if (neighborhoods != nullptr)
-		p_mlip->CalcEFS(cfg, *neighborhoods);
-	else
-		p_mlip->CalcEFS(cfg);
+	EvaluateTrainingConfiguration(orig, cfg, neighborhoods, true);
 
 	if (collect_error_metrics_ && orig.has_energy() && cfg.has_energy()) {
 		const double energy_delta = orig.energy - cfg.energy;
@@ -407,10 +437,17 @@ void NonLinearRegression::AddLossGrad(const Configuration & orig, const Neighbor
 	p_mlip->AddPenaltyGrad(wgt_eqtn_constr, loss_, &loss_grad_);
 
 	// Now we compute gradients, this adds to loss_grad_
-	if (neighborhoods != nullptr)
-		p_mlip->AccumulateEFSCombinationGrad(cfg, dLdE_i_, dLdF, dLdS, loss_grad_, *neighborhoods);
-	else
-		p_mlip->AccumulateEFSCombinationGrad(cfg, dLdE_i_, dLdF, dLdS, loss_grad_);
+	if (NeedPositionDerivativeTerms(orig)) {
+		if (neighborhoods != nullptr)
+			p_mlip->AccumulateEFSCombinationGrad(cfg, dLdE_i_, dLdF, dLdS, loss_grad_, *neighborhoods);
+		else
+			p_mlip->AccumulateEFSCombinationGrad(cfg, dLdE_i_, dLdF, dLdS, loss_grad_);
+	} else {
+		if (neighborhoods != nullptr)
+			p_mlip->AccumulateEnergyCombinationGrad(cfg, dLdE_i_, loss_grad_, *neighborhoods);
+		else
+			p_mlip->AccumulateEnergyCombinationGrad(cfg, dLdE_i_, loss_grad_);
+	}
 }
 
 
