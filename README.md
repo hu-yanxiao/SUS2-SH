@@ -1,61 +1,50 @@
 # SUS2-SH
 
-SUS2-SH is the spherical-harmonic development branch of SUS2-MLIP. It keeps the
-original SUS2 C++ training flow, file conventions, BFGS optimizer, E/F/S
-equation assembly, and model save/load path, while replacing the angular moment
-tensor basis with real spherical harmonic channels:
+SUS2-SH is the spherical-harmonic line of SUS2. It keeps the original C++
+SUS2 training flow, BFGS optimizer, CFG/MTP file conventions, and model I/O,
+while replacing moment-tensor angular channels with real spherical harmonics.
+
+The basic SH channel is
 
 ```text
-B[k,l,m] = sum_j R_{k,l}(r_ij) Y_lm_real(rhat_ij)
+M_i,mu,m = sum_j R_ZiZj,mu(r_ij) Y_lm(rhat_ij)
 ```
 
-The model generator writes the complete tensor-product graph and real-basis
-Clebsch-Gordan contraction coefficients into the `.mtp` file. Training can still
-use the minimal scalar multiplication graph, while downstream engines such as
-GPUMD can use the stored product graph for matrix-oriented execution.
-
-This repository is currently a developer project derived from SUS2-MLIP v1.1.
-For implementation notes, scalar enumeration rules, validation status, and the
-current GPUMD export plan, see `docs/sus2-sh-development.md`.
+where `mu = (l,k)`. The saved `.mtp` file stores the SH basic moments, the
+real Clebsch-Gordan scalar product graph, and the radial/model parameters used
+by the CPU trainer, LAMMPS-SH, Kokkos-SH, and GPUMD-SUS2-SH backends.
 
 ## Repository Role
 
-`SUS2-SH` is the CPU/reference implementation for the spherical-harmonic line.
-Use it to define SH model topology, generate untrained SH `.mtp` files, train
-with the original SUS2 BFGS workflow, and validate the chain rule. Related
-repositories are split by runtime target:
-
 | Repository | Role |
 | --- | --- |
-| `SUS2-MLIP` | Original SUS2 v1.1 moment-tensor trainer and model core. |
-| `SUS2-SH` | This repository: real-SH model definition, CPU training, model I/O, and SH LAMMPS source. |
-| `SUS2-SH-GPU` | CUDA evaluator for SUS2-SH training, including GPU objective/gradient, GPU-built `do-lin` systems, and multi-GPU streaming. |
-| `GPUMD-SUS2-SH` | GPUMD inference backend for SUS2-SH models. |
+| `SUS2-SH` | CPU/reference SUS2-SH model generation, training, model I/O, and SH LAMMPS source. |
+| `SUS2-SH-GPU` | CUDA training/evaluation line for the same SUS2-SH model format. |
+| `GPUMD-SUS2-SH` | GPUMD runtime backend for trained SUS2-SH models. |
 | `PySUS2SH` | Python/ASE/phonon workflow package for SUS2-SH models. |
 
-The SH line currently uses real spherical harmonics, even parity scalar
-selection, sorted `(l,k)` coupling rules, and body-specific angular cutoffs via
-`--body-l-max`. Current optimized paths are designed for `l <= 4` and
-`k <= 6`; unsupported topologies should remain on the conservative CPU path
-until separately validated.
+Implementation notes are in `docs/sus2-sh-development.md`. The inherited
+SUS2-MLIP/MLIP documentation remains useful for CFG and MTP file formats.
 
-The inherited SUS2-MLIP documentation below remains relevant for CFG/MTP formats
-and ordinary `mlp-sus2` usage.
-![image](https://github.com/user-attachments/assets/0aaaa76f-b4f8-459e-b8ec-1ddc08849693)
+## Build
 
-# Installation
-You can build the training executable by running:
 ```bash
- ./configure
- make mlp  ## get bin/mlp-sus2
- make libinterface ## get lib/libinterface.a for external tool e.g. PySUS2 (in progress)
+./configure
+make mlp
+make libinterface
 ```
 
-Initialize a SUS2-SH model, for example:
+The training executable is `bin/mlp-sus2`.
+
+## Basic SH Training CLI
+
+There are two equivalent ways to start a normal single-layer SH training run.
+
+Create an untrained model first:
 
 ```bash
-bin/mlp-sus2 init-sh untrained_sus2sh_l3k3_b5_l3322.mtp \
-  --species-count=2 \
+bin/mlp-sus2 init-sh untrained.mtp \
+  --species-count=4 \
   --l-max=3 \
   --k-max=3 \
   --body-order=5 \
@@ -63,34 +52,11 @@ bin/mlp-sus2 init-sh untrained_sus2sh_l3k3_b5_l3322.mtp \
   --cutoff=7.5 \
   --radial-basis-size=10 \
   --radial-basis-type=RBChebyshev_sss
-```
 
-`RBChebyshev_sss_rational` is also supported. It keeps the same Chebyshev
-recurrence and scaling parameters as `RBChebyshev_sss`, but maps
-`x = scal * (r - s) / 2` by `x / sqrt(1 + x*x)` instead of `tanh(x)`.
-
-For 6body models, pass five body-specific l cutoffs. The current 6body
-generator uses the rank-diagonal standard-tree rule:
-
-```bash
-bin/mlp-sus2 init-sh untrained_sus2sh_l3k3_b6_l33222.mtp \
-  --species-count=2 \
-  --l-max=3 \
-  --k-max=3 \
-  --body-order=6 \
-  --body-l-max=3,3,2,2,2 \
-  --cutoff=7.5 \
-  --radial-basis-size=10 \
-  --radial-basis-type=RBChebyshev_sss
-```
-
-Then train through the normal SUS2 path:
-
-```bash
-bin/mlp-sus2 train untrained_sus2sh_l3k3_b5_l3322.mtp train.cfg \
+bin/mlp-sus2 train untrained.mtp train.cfg \
   --energy-weight=1 \
   --force-weight=0.01 \
-  --stress-weight=0 \
+  --stress-weight=0.001 \
   --do-samp \
   --do-lin \
   --do-lin-rescale \
@@ -98,16 +64,12 @@ bin/mlp-sus2 train untrained_sus2sh_l3k3_b5_l3322.mtp train.cfg \
   --trained-pot-name=p.mtp
 ```
 
-The same SH topology can also be created directly from the `train` command.
-This avoids a separate untrained model file while keeping the original SUS2
-training flow. With `--inline-sh-model=<path>`, an existing file is used as the
-starting model for continued training; a missing file is created from the
-`init-sh` options:
+Or create/continue the model directly from `train`:
 
 ```bash
 bin/mlp-sus2 train train.cfg --init-sh \
-  --inline-sh-model=untrained_sus2sh_l3k3_b5_l3322.mtp \
-  --species-count=2 \
+  --inline-sh-model=untrained.mtp \
+  --species-count=4 \
   --l-max=3 \
   --k-max=3 \
   --body-order=5 \
@@ -117,18 +79,207 @@ bin/mlp-sus2 train train.cfg --init-sh \
   --radial-basis-type=RBChebyshev_sss \
   --energy-weight=1 \
   --force-weight=0.01 \
-  --stress-weight=0 \
+  --stress-weight=0.001 \
   --do-samp \
   --do-lin \
   --do-lin-rescale \
   --curr-pot-name=current.mtp \
   --trained-pot-name=p.mtp
 ```
-# Format of Datasets
-Like the original MLIP package, SUS2-MLIP reads material structures and their properties from `cfg` files.
 
-Format of `cfg` file:
+Main SH topology options:
+
+| Option | Meaning |
+| --- | --- |
+| `--species-count=<int>` | Number of atomic species in CFG type order. |
+| `--l-max=<int>` | Maximum SH angular index `l`; generator supports `0..6`, optimized runtimes are mainly validated for `l <= 4`. |
+| `--k-max=<int>` | Number of radial channels per `l`; `k` is indexed from `0` to `k_max-1`. |
+| `--body-order=<int>` | Maximum scalar body order, supported range `2..6`. |
+| `--body-l-max=<list>` | Body-specific angular cutoffs. Use four values for body orders `2..5`, or five values for `2..6`; example `3,3,2,2`. |
+| `--cutoff=<double>` / `--max-dist=<double>` | Main SH radial cutoff. `--cutoff` is the preferred spelling. |
+| `--min-dist=<double>` | Initial radial scaling reference. It does not define a hard lower interaction cutoff. |
+| `--radial-basis-size=<int>` | Number of primitive radial basis functions used to form each `R_mu`. |
+| `--radial-basis-type=<name>` | Supported model-generation types: `RBChebyshev_sss`, `RBChebyshev_sss_rational`, `RBLaguerre_log1p`, `RBJacobi_sss`; LAMMPS table variants use the same model fields with `_lmp` names. |
+| `--sh-factor-pruning=legacy|q-total` | Scalar graph pruning rule. `legacy` is the default historical mode and sorts factor tuples by separate monotonic `l` and `k` scans with `l <= body_l_max`; `q-total` sorts/uniquifies by the combined `q=(l,k)` channel index instead, while still applying the body-specific `l` cutoff. |
+| `--write-sh-scalar-info` | Explicitly save scalar metadata; this is written automatically for gate models. |
+| `--potential-name=<string>` | Name written into the `.mtp` file. |
+| `--scaling=<double>` | Initial global scaling written to the model, default `0.01`. |
+
+Common training options:
+
+| Option | Meaning |
+| --- | --- |
+| `--energy-weight=<double>` | Energy contribution weight, default `1`. |
+| `--force-weight=<double>` | Force contribution weight, default `0.01`. |
+| `--stress-weight=<double>` | Stress contribution weight, default `0.001`. |
+| `--force-loss=l2|log-cosh` | Nonlinear force loss. Default is componentwise L2/MSE; `log-cosh` is more robust to large force outliers. |
+| `--force-log-cosh-scale=<double>` | Scale for `log-cosh` force loss in eV/A, default `2`. |
+| `--valid-cfgs=<path>` | Optional validation CFG file. |
+| `--max-iter=<int>` | Maximum BFGS iterations, default `1000`. |
+| `--curr-pot-name=<path>` | Save current model during training. |
+| `--trained-pot-name=<path>` | Final trained model path, default `Trained.mtp_`. |
+| `--bfgs-conv-tol=<double>` | Stop when improvement over 50 BFGS iterations is below this factor, default `1e-3`. |
+| `--bfgs-trace-file=<path>` | Optional CSV trace of accepted BFGS steps. |
+| `--radial-smooth=<double>` | H1 smoothness penalty on `dR/dr`, default `1e-6`; set `0` to disable. |
+| `--radial-smooth-grid=<int>` | Midpoint grid for `--radial-smooth`, default `128`. |
+| `--atomic-energies=<e0,e1,...>` | Enforce isolated element energy constraints `shift_t + species_t = e_t`. |
+| `--atomic-energy-weight=<double>` | Penalty weight for `--atomic-energies`, default `1e8`. |
+| `--weighting=<vibrations|molecules|structures>` | Configuration weighting mode, default `vibrations`. |
+| `--init-params=random|same` | Parameter initialization when a model is not already fitted. Default `random`. |
+| `--do-lin` | Enable linear pre-fitting/linear solves inside nonlinear training. |
+| `--do-lin-rescale` | Run the subset rescale pass before the full-data `TrainLinear` solve used by `--do-lin`. |
+| `--do-lin-steps=<int>` | Number of accepted BFGS steps for which `--do-lin` stays active, default `1000`. |
+| `--do-lin-freq=<int>` | Run `TrainLinear` every N accepted BFGS steps while `--do-lin` is active, default `50`. |
+| `--fine-tune` | Continue from a complete trained model, freeze scaling coefficients, and run one initial rescale plus linear solve before BFGS. |
+| `--do-samp` | Disable random sampling used in pre-training. |
+| `--skip-preinit` | Skip the 75 preliminary iterations used when parameters are not given. |
+| `--shift` | Disable the trainer's internal shift correction. |
+| `--update-mindist` | Update model `min_dist` from the training-set minimum distance. |
+
+## Gate Model Training CLI
+
+The current production gate form is the bounded tanh additive two-layer SH gate.
+The first layer computes a site residual from selected low-body SH scalars:
+
+```text
+f_i = sum_q w_q B_i^gate,q
+```
+
+The main-layer basic moment is then evaluated as
+
+```text
+M_i,mu,m^main =
+  sum_j R_ZiZj,mu^main(r_ij) Y_lm(rhat_ij)
+        [1 + A tanh(a_Zj,mu f_j)]
+```
+
+`A` is controlled by `--two-layer-gate-tanh-amplitude` and defaults to `0.8`.
+The additive coefficients `a_Z,mu` are initialized to `1.0`. With
+`--two-layer-gate-shared-radial`, the gate residual layer uses its own trained
+radial contraction coefficients for the first-layer `B_i^gate`.
+
+Initialize and train a gate model directly:
+
 ```bash
+bin/mlp-sus2 train train.cfg --init-sh \
+  --inline-sh-model=gate_untrained.mtp \
+  --species-count=4 \
+  --l-max=3 \
+  --k-max=3 \
+  --body-order=5 \
+  --body-l-max=3,3,2,2 \
+  --cutoff=7.5 \
+  --radial-basis-size=10 \
+  --radial-basis-type=RBLaguerre_log1p \
+  --two-layer-gate \
+  --two-layer-gate-body-order=3 \
+  --two-layer-gate-shared-radial \
+  --two-layer-gate-tanh-amplitude=0.8 \
+  --energy-weight=1 \
+  --force-weight=0.01 \
+  --stress-weight=0.001 \
+  --do-samp \
+  --do-lin \
+  --do-lin-rescale \
+  --curr-pot-name=current.mtp \
+  --trained-pot-name=p.mtp
+```
+
+Continue a trained or partially trained plain SH model as a gate model:
+
+```bash
+bin/mlp-sus2 train plain_sh.mtp train.cfg \
+  --two-layer-gate \
+  --two-layer-gate-body-order=3 \
+  --two-layer-gate-shared-radial \
+  --curr-pot-name=current_gate.mtp \
+  --trained-pot-name=gate.mtp
+```
+
+Gate-specific options:
+
+| Option | Meaning |
+| --- | --- |
+| `--two-layer-gate` | Add two-layer gate metadata to a new SH model, or upgrade a plain SH model before continuing training. |
+| `--two-layer-gate-body-order=<int>` | Maximum body order used by the first-layer gate residual scalars, default `3`; must be between `2` and the main SH body order. |
+| `--two-layer-gate-shared-radial` | Train an independent first-layer gate radial contraction table instead of reusing the main radial coefficients. |
+| `--two-layer-gate-tanh-amplitude=<double>` | Bounded additive amplitude `A` in `[1 + A tanh(a f)]`; default `0.8`, accepted range `[0,1]`. |
+| `--inline-sh-model=<path>` | In `train train.cfg --init-sh`, create this file if missing or continue from it if it already exists. |
+| `--two-layer-residual` | Experimental residual two-layer mode `E=E0+E1`; not the current production gate path. |
+| `--two-layer-residual-staged` | Stage residual training into A/B/C phases; requires a residual model and positive stage step counts. |
+| `--stage-a-steps=<int>` | BFGS steps for residual stage A. |
+| `--stage-b-steps=<int>` | BFGS steps for residual stage B. |
+| `--stage-c-steps=<int>` | BFGS steps for residual stage C. |
+
+For current production work, use `--two-layer-gate
+--two-layer-gate-shared-radial` with the tanh additive form above. Legacy direct
+gate modes are retained only for model compatibility and testing.
+
+## ZBL CLI
+
+ZBL is a fixed short-range repulsive term stored inside the `.mtp` file. Once a
+model contains `zbl_enabled = true`, SUS2-SH prediction/training, LAMMPS-SH,
+Kokkos-SH, and GPUMD-SUS2-SH read the model metadata and add the ZBL term
+automatically; no extra runtime flag is required in LAMMPS or GPUMD.
+
+Add ZBL when creating a model:
+
+```bash
+bin/mlp-sus2 init-sh untrained_zbl.mtp \
+  --species-count=4 \
+  --l-max=3 \
+  --k-max=3 \
+  --body-order=5 \
+  --body-l-max=3,3,2,2 \
+  --cutoff=7.5 \
+  --radial-basis-size=10 \
+  --zbl-elements=H,O,Cl,K \
+  --zbl-inner=0.7 \
+  --zbl-outer=1.4
+```
+
+Add ZBL to an existing trained SH or gate model and continue training:
+
+```bash
+bin/mlp-sus2 train trained_without_zbl.mtp train.cfg \
+  --zbl-elements=H,O,Cl,K \
+  --zbl-inner=0.7 \
+  --zbl-outer=1.4 \
+  --curr-pot-name=current_zbl.mtp \
+  --trained-pot-name=p_zbl.mtp
+```
+
+Use NEP-style typewise pair cutoffs:
+
+```bash
+bin/mlp-sus2 train trained_without_zbl.mtp train.cfg \
+  --zbl-elements=H,O,Cl,K \
+  --zbl-outer=1.4 \
+  --zbl-typewise-cutoff-factor=0.7 \
+  --curr-pot-name=current_zbl.mtp \
+  --trained-pot-name=p_zbl.mtp
+```
+
+ZBL options:
+
+| Option | Meaning |
+| --- | --- |
+| `--zbl-elements=<e0,e1,...>` | Enables ZBL and gives one element symbol or atomic number per model species, in CFG type order. Required for any ZBL use. |
+| `--zbl-inner=<double>` | Inner radius for fixed-cutoff ZBL. Default `0.7`. Inside this radius the unswitched ZBL is used. |
+| `--zbl-outer=<double>` | Global outer cutoff. Default `1.4`. Fixed-cutoff mode uses this value for every pair. |
+| `--zbl-typewise-cutoff-factor=<double>` | Enable typewise cutoffs. The inner cutoff becomes `0`; each pair uses `outer_ij = min(zbl_outer, factor*(Rcov_i + Rcov_j))`. The code uses the maximum pair `outer_ij` as the ZBL neighbor cutoff, so no pair term is missed. Default factor is `0.7` when this option is used. |
+
+During training, when ZBL is enabled, the trainer precomputes the ZBL residual
+on the training set, subtracts it from the target E/F/S during optimization,
+and restores the full reference for final reporting. This keeps the fitted SH
+part focused on the non-ZBL residual while the saved model still carries the
+complete SH+ZBL potential.
+
+## Dataset Format
+
+SUS2-SH uses the same CFG format as SUS2-MLIP/MLIP:
+
+```text
 BEGIN_CFG
  Size
      192
@@ -136,139 +287,45 @@ BEGIN_CFG
   16.7849720000    0.0000000000    0.0000040000
    0.0000000000   17.3600060000   -0.0000010000
    0.0000030000   -0.0000000000   12.4404560000
-AtomData:  id type       cartes_x      cartes_y      cartes_z     fx          fy          fz
+AtomData:  id type cartes_x cartes_y cartes_z fx fy fz
       1      0     2.498644     3.809912     3.110113    -0.009924    -0.001443     0.000004
-      2      0     2.498644    12.489910     3.110112    -0.009924    -0.001443     0.000004
-      3      0    10.891125     3.809912     3.110115    -0.009924    -0.001443     0.000004
-      4      0    10.891125    12.489910     3.110114    -0.009924    -0.001443     0.000004
-                                              ...
-    190      2     8.206723     9.099676     3.110114     0.016692     0.018104    -0.000001
-    191      2    16.599205     0.419678     3.110116     0.016692     0.018104    -0.000001
-    192      2    16.599205     9.099676     3.110116     0.016692     0.018104    -0.000001
 Energy
         -165049.45992
-PlusStress:  xx          yy          zz          yz          xz          xy
-        1.1012082011734257      -0.7401052299730059     0.2790165512621857      0.0012779654132595323   -0.0002538647260112984          -2.4887947553777763e-10
-
-```
-The scripts for converting formats between `cfg` and `ase readable files (e.g. extxyz)` can be found in `./python_tool/`
-# Untrained Models
-**:red_circle: PLEASE NOTE :red_circle:**: While the implementation of SUS2-MLIP is built upon the MLIP package, there are notable and fundamental differences between them. As a result, the  models in the `untrained_mtps/` folder cannot be used within our current framework.
-
-Format of `.mtp` files for SUS2-MLIP:
-```bash
-MTP
-version = 1.1.0
-potential_name = sus2mlip_l2k2
-scaling = 0.01
-L = 2
-scaling_map = LK
-species_count = 2
-potential_tag =
-        min_dist = 1.5
-        max_dist = 6.0
-        ...
-```
-There are two new hyperparameters `L` and `scaling_map`.
-`L` reffers to the max level of moment tensor.  (**DON'T CHANGE**)
-`scaling_map = L` or `K` or `LK` corresponds to 𝜂=(𝐿,𝐾), 𝜂=𝐿 and 𝜂=𝐾 respectively. η determines the dimensions on which the global scaling are applied:
- $$r_{Ij,{\color{red}\eta}}^{*}=\alpha_{Z_{I}Z_{j},{\color{red}\eta}}\left(r_{Ij}-r_{0}^{Z_{I}Z_{j},{\color{red}\eta}}\right)$$
-
-**Note**: `min_dist` in our model do not affect the mapping from pair distance *r* to *x∈[-1,1]* due to the nonlinearity-embedded universal radial fuction, but it determines the inintialization of scaling factor. Setting `min_dist = 0.0` is usually a good choice.
-
-
-
-At `untrained_sus2mlip/`, we prepared 6 sets of untrained basis corresponding to `L∈{2,3} & k∈{1,3}`. In both model, the interactions are considered up to the 5-body. Further details regarding the scalar basis in each model are provided in the table below.
-![QQ_1735905101839](https://github.com/user-attachments/assets/c2c17d17-81ab-4d2d-ab61-8eb3f0e9d882)
-
-More technical details about universal scaling and super-linear radial function can be found in our paper:
-> Super-Linear Machine Learning Interatomic Potentials with Physics-Informed Universal Scaling and Ultra-Small Parameterization [https://doi/10.1073/pnas.2503439122](https://www.pnas.org/doi/10.1073/pnas.2503439122)
-
-# Usage
-SUS2-MLIP models are trained and evaluated using `mlp-sus2` command, similar to `mlp` of MLIP. See the [user manual of MLIP](https://gitlab.com/ashapeev/mlip-2/-/blob/master/doc/manual/manual.pdf?ref_type=heads) for details. **The following are some frequently used commands:**
-* **Basic model training**
-To train a model, you should run `mlp-sus2 train` with prepared dataset `trainset.cfg`, untrained model `untrained_sus2mlip` and training options:
-```bash
-mlp-sus2 train untrained_sus2mlip trainset.cfg --curr-pot-name=current.mtp
-```
-Commonly used training tags:
-
-```bash
---energy-weight=<double>
---force-weight=<double>
---stress-weight=<double>
---distribution-weight=<double>
---std-weight=<double>
---stdd-weight=<double>
---valid-cfgs=<string>
---max-iter=<int>
---curr-pot-name=<string>
---trained-pot-name=<string>
---bfgs-conv-tol=<double>
---weighting=<string>
---init-params=<random|same>
---do-lin
---do-lin-rescale
---do-lin-steps=<int>
---do-lin-freq=<int>
---do-samp=<true|false>
---skip-preinit
---update-mindist
+PlusStress:  xx yy zz yz xz xy
+        1.1012082011734257 -0.7401052299730059 0.2790165512621857 0.0012779654132595323 -0.0002538647260112984 -2.4887947553777763e-10
+END_CFG
 ```
 
-Notes:
+Conversion scripts for CFG and ASE-readable formats are in `python_tool/`.
 
-- `--do-lin` enables the linear pre-fitting path inside nonlinear training.
-- `--do-lin-rescale` runs the existing subset-based rescale pass before each full-data `TrainLinear` call inserted by BFGS `do-lin`.
-- `--do-lin-steps` sets how many accepted BFGS steps keep the do-lin path active. Default is `1000`.
-- `--do-lin-freq` sets how often `TrainLinear` is inserted while do-lin is active. Default is `50`.
-- `--do-samp=false` disables random sampling during the pre-training stage.
-- `--std-weight` and `--stdd-weight` control the two std-based regularization terms.
-* **Evaluating trained models**
-To evaluate a trained model `trained_sus2mlip` on a specified dataset `target.cfg`, you run:
-```bash
-mlp-sus2 calc-errors trained_sus2mlip target.cfg
+## External Runtime Interfaces
+
+### LAMMPS-SH
+
+The maintained SH LAMMPS interface is in `interfaces/lammps/`. It uses the
+same package and pair-style names as the SUS2-MLIP interface:
+
+```text
+ML-SUS2
+pair_style sus2mtp
+pair_style sus2mtp/kk
 ```
-# External Tools
-## LAMMPS
-The maintained SH LAMMPS interface is provided in `interfaces/lammps/`. It uses
-the same package name and pair-style names as the SUS2-MLIP interface
-(`ML-SUS2`, `pair_style sus2mtp`, and `pair_style sus2mtp/kk`), but the reader
-and angular basis are SH-specific and expect a SUS2-SH model file.
 
-Quick install into a clean LAMMPS tree:
+Install into a clean LAMMPS tree:
 
 ```bash
 cd interfaces/lammps
 scripts/install_into_lammps.sh /path/to/lammps
 ```
 
-The interface package contains the CPU source layer, the Kokkos/GPU override
-layer, and the Intel CPU make targets used by the maintained server build. See
-`interfaces/lammps/README.md` for the full CPU/GPU build workflow.
-
-**Note**: Setting `radial_basis_type = RBChebyshev_sss_lmp`,
+Table radial types such as `RBChebyshev_sss_lmp`,
 `RBChebyshev_sss_rational_lmp`, `RBLaguerre_log1p_lmp`,
-`RBLaguerre_log1p_pos_lmp`, or `RBJacobi_sss_lmp`
-enables the list-based treatment of radial functions in the LAMMPS interface.
-The optional `tabstep` keyword controls the table spacing, with a default of
-`1.0e-4` Angstrom. The preinterpolation table is built only for species pairs
-that actually appear in the current simulation atom types.
-## GPUMD-SUS2
-The SH GPUMD interface is hosted separately at
-[GPUMD-SUS2-SH](https://github.com/hu-yanxiao/GPUMD-SUS2-SH). It loads
-SUS2-SH `.mtp` files, evaluates real SH basic channels, and executes the saved
-SH product graph in GPUMD. The older
-[GPUMD-SUS2](https://github.com/hu-yanxiao/GPUMD-SUS2) repository remains the
-moment-tensor GPUMD line.
-## PySUS2SH
-[PySUS2SH](https://github.com/hu-yanxiao/PySUS2SH) is the Python/ASE workflow
-package for SUS2-SH models. It supports CPU inference, structure relaxation,
-phonon dispersion, lattice thermal conductivity, elastic constants,
-equation-of-state workflows, and related post-processing. The older PySUS2
-package remains the moment-tensor Python interface.
-## CSO-AES
-[CSO-AES](https://github.com/hu-yanxiao/CSO-AES/tree/main) (Covering Set Optimization driven Atomic Environment Sampling) is a Python tool designed to facilitate active learning in SUS2-MLIP modeling. It also helps with the integration and optimization of the database, making it easier for researchers and developers to work with.
-(in progress)
+`RBLaguerre_log1p_pos_lmp`, and `RBJacobi_sss_lmp` enable list-based radial
+evaluation in LAMMPS. The `tabstep` keyword controls table spacing.
 
------------------------------------------------
+### GPUMD-SUS2-SH
+
+The GPUMD backend is hosted separately at
+<https://github.com/hu-yanxiao/GPUMD-SUS2-SH>. It loads trained SUS2-SH `.mtp`
+files, supports single-layer SH, ZBL, and the current tanh additive gate path,
+and exposes runtime options through the GPUMD `potential` line.
