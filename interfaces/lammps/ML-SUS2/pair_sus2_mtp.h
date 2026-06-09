@@ -29,6 +29,7 @@ PairStyle(sus2mtp,PairSUS2MTP);
 #include "sus2_mtp_zbl.h"
 #include <atomic>    // 原子操作支持
 #include <mutex>     // 互斥锁支持
+#include <string>
 #include <vector>
 
 namespace LAMMPS_NS {
@@ -108,10 +109,19 @@ class PairSUS2MTP : public Pair {
   double env_gate_cutoff_ratio = 0.5;
   double env_gate_activation_on_ratio = 0.5;
   int env_gate_channel_count = 6;
+  bool static_fixed_basic_cache_enabled = false;
+  std::string static_fixed_types_arg = "";
+  std::vector<unsigned char> static_fixed_type_mask;
+  double *static_fixed_basic_cache = nullptr;
+  unsigned char *static_fixed_basic_cache_valid = nullptr;
+  tagint *static_fixed_basic_cache_tags = nullptr;
+  int static_fixed_basic_cache_atom_size = 0;
+  int static_fixed_basic_cache_alpha_size = 0;
   bool zbl_enabled = false;
   double zbl_inner = 0.7;
   double zbl_outer = 1.4;
-  double zbl_outer_sq = 1.96;
+  double zbl_max_outer = 1.4;
+  double zbl_max_outer_sq = 1.96;
   bool zbl_typewise_cutoff_enabled = false;
   double zbl_typewise_cutoff_factor = 0.7;
   double interaction_cutoff = 0.0;
@@ -160,10 +170,13 @@ class PairSUS2MTP : public Pair {
   std::vector<size_t> two_layer_gate_edge_offsets;
   std::vector<int> two_layer_gate_edge_neighbors;
   std::vector<int> two_layer_gate_edge_types;
+  std::vector<int> two_layer_gate_edge_table_indices;
+  std::vector<int> two_layer_gate_edge_table_bins;
   std::vector<double> two_layer_gate_edge_dx;
   std::vector<double> two_layer_gate_edge_dy;
   std::vector<double> two_layer_gate_edge_dz;
   std::vector<double> two_layer_gate_edge_dist;
+  std::vector<double> two_layer_gate_edge_table_fracs;
   std::vector<double> two_layer_gate_edge_deriv_x;
   std::vector<double> two_layer_gate_edge_deriv_y;
   std::vector<double> two_layer_gate_edge_deriv_z;
@@ -178,6 +191,8 @@ class PairSUS2MTP : public Pair {
   int *alpha_basic_a2;          // Cached z exponent for each basic alpha
   int *alpha_basic_norm_rank;   // Cached a0+a1+a2 for each basic alpha
   int *alpha_basic_sh_index;    // Cached real-SH flat index for SUS2-SH basic alpha
+  std::vector<int> sh_basic_mu_offsets;  // Contiguous SUS2-SH basic groups by mu
+  bool sh_basic_mu_grouped = false;
   int *alpha_times_a0;          // Cached lhs moment index for each alpha-times entry
   int *alpha_times_a1;          // Cached rhs moment index for each alpha-times entry
   int *alpha_times_multiplier;  // Cached multiplier for each alpha-times entry
@@ -203,15 +218,32 @@ class PairSUS2MTP : public Pair {
   double *two_layer_gate_residual_radial_vals = nullptr;
   double *two_layer_gate_values = nullptr;
   double *two_layer_gate_adjoints = nullptr;
-  double *two_layer_gate_tanh_mu_cache = nullptr;
-  unsigned char *two_layer_gate_tanh_mu_cache_valid = nullptr;
+  double *two_layer_gate_multiplier_mu_cache = nullptr;
+  double *two_layer_gate_deriv_mu_cache = nullptr;
+  unsigned char *two_layer_gate_mu_cache_valid = nullptr;
   double *two_layer_radial_cache_vals = nullptr;
   double *two_layer_radial_cache_ders = nullptr;
+  double *static_fixed_gate_basic_cache = nullptr;
+  unsigned char *static_fixed_gate_basic_cache_valid = nullptr;
+  double *static_fixed_gate_value_cache = nullptr;
+  unsigned char *static_fixed_gate_value_cache_valid = nullptr;
+  tagint *static_fixed_gate_cache_tags = nullptr;
+  std::vector<unsigned char> static_fixed_gate_main_cache_valid;
+  std::vector<tagint> static_fixed_gate_main_cache_tags;
+  std::vector<size_t> static_fixed_gate_main_cache_offsets;
+  std::vector<int> static_fixed_gate_main_cache_counts;
+  std::vector<int> static_fixed_gate_main_neighbors;
+  std::vector<tagint> static_fixed_gate_main_neighbor_tags;
+  std::vector<double> static_fixed_gate_main_base_basic;
   int two_layer_raw_jac_size = 0;
   int two_layer_atom_buffer_size = 0;
-  int two_layer_tanh_cache_atom_size = 0;
-  int two_layer_tanh_cache_size = 0;
+  int two_layer_gate_mu_cache_atom_size = 0;
+  int two_layer_gate_mu_cache_size = 0;
   int two_layer_radial_cache_size = 0;
+  int static_fixed_gate_cache_atom_size = 0;
+  int static_fixed_gate_cache_alpha_size = 0;
+  int static_fixed_gate_main_cache_atom_size = 0;
+  int static_fixed_gate_main_cache_alpha_size = 0;
   double *moment_jacobian_x = nullptr;    // SoA layout for x-component
   double *moment_jacobian_y = nullptr;    // SoA layout for y-component
   double *moment_jacobian_z = nullptr;    // SoA layout for z-component
@@ -226,15 +258,37 @@ class PairSUS2MTP : public Pair {
   bool *within_cutoff = nullptr;    // First created during compute using grow
 
   bool has_nonzero_two_layer_gate_weights() const;
-	  bool requires_two_layer_gate_sh() const;
-	  void prepare_two_layer_gate_additive_ratios();
-	  void compute_two_layer_gate_sh(int, int);
-	  void compute_zbl(int, int);
-	  int two_layer_gate_additive_coeff_index(int, int) const;
+  bool requires_two_layer_gate_sh() const;
+  void prepare_two_layer_gate_additive_ratios();
+  void compute_two_layer_gate_sh(int, int);
+  void compute_zbl(int, int);
+  void accumulate_zbl_pair(int, int, int, int, const double *, double,
+                           int, int);
+  int two_layer_gate_additive_coeff_index(int, int) const;
   double two_layer_gate_additive_coeff(int, int) const;
+  bool get_radial_table_info(int, int, double, int &, int &, double &) const;
+  bool calc_gate_additive_table_radial_values(int, double, int, int, int,
+                                              double);
   void calc_pair_radial_values(int, int, double, bool, double = 0.0,
-                               bool = false, int = -1);
+                               bool = false, int = -1, int = -2, int = 0,
+                               double = 0.0);
   void accumulate_sh_basic_edge(int, const double *, double, double, bool, int, bool = false);
+  bool is_static_fixed_type(int) const;
+  bool static_fixed_cache_tag_matches(const tagint *, int) const;
+  void configure_static_fixed_types();
+  void ensure_static_fixed_basic_cache();
+  void invalidate_static_fixed_basic_cache();
+  void build_static_fixed_basic_cache_for_center(int, int, int, int *, const double *);
+  void ensure_static_fixed_gate_cache();
+  void invalidate_static_fixed_gate_cache();
+  void build_static_fixed_gate_basic_cache_for_center(int, int, int, int *, const double *);
+  void ensure_static_fixed_gate_main_cache();
+  void invalidate_static_fixed_gate_main_cache();
+  bool static_fixed_gate_main_cache_valid_for_center(int) const;
+  void build_static_fixed_gate_main_cache_for_center(int, int, int, int *, const double *);
+  void ensure_two_layer_gate_mu_cache_for_atom(int, int, double);
+  bool apply_static_fixed_gate_main_cache_moments(int, double);
+  void apply_static_fixed_gate_main_cache_adjoints(int);
   void forward_sh_products();
   void backprop_sh_products();
   void ensure_two_layer_atom_buffers();

@@ -75,6 +75,24 @@ inline void FillPairCutoffTables(int species_count, const int *atomic_numbers,
   }
 }
 
+inline double MaxPairOuterCutoff(int species_count, const int *atomic_numbers,
+                                 double global_outer_cutoff,
+                                 bool typewise_cutoff_enabled,
+                                 double typewise_cutoff_factor)
+{
+  if (!typewise_cutoff_enabled) return global_outer_cutoff;
+  double max_outer = 0.0;
+  for (int i = 0; i < species_count; ++i) {
+    for (int j = 0; j < species_count; ++j) {
+      const double pair_outer =
+          PairOuterCutoff(atomic_numbers[i], atomic_numbers[j],
+                          global_outer_cutoff, typewise_cutoff_factor);
+      if (pair_outer > max_outer) max_outer = pair_outer;
+    }
+  }
+  return max_outer;
+}
+
 inline SUS2MTPZBLPairConstants MakePairConstants(int atomic_number_i,
                                                  int atomic_number_j)
 {
