@@ -6,8 +6,14 @@ cd "$(dirname "$0")/.."
 MLP_BIN="${MLP_BIN:-./bin/mlp-sus2}"
 LAMMPS_BIN="${LAMMPS_BIN:-/work/phy-weigw/apps/lammps-10Dec2025/src/lmp_ml_sus2_avx2_noipo}"
 MPI_RUN="${MPI_RUN:-mpirun}"
+GATE_SITE_MODE="${GATE_SITE_MODE:-neighbor}"
 
-tmp_dir=".codex_tmp/lammps_two_layer_gate_additive_mlp_check"
+if [ "$GATE_SITE_MODE" != "neighbor" ] && [ "$GATE_SITE_MODE" != "double" ]; then
+  echo "GATE_SITE_MODE should be neighbor or double" >&2
+  exit 2
+fi
+
+tmp_dir=".codex_tmp/lammps_two_layer_gate_additive_mlp_check_${GATE_SITE_MODE}"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 
@@ -27,6 +33,7 @@ mlp_pred="$tmp_dir/mlp_pred.cfg"
   --cutoff=5.0 \
   --write-sh-scalar-info \
   --two-layer-gate \
+  --two-layer-gate-site-mode="$GATE_SITE_MODE" \
   --two-layer-gate-shared-radial >/dev/null
 
 python3 - "$base_model" "$direct_model" "$lmp_model" <<'PY'

@@ -417,6 +417,11 @@ bool MLMTPR::TwoLayerGateUsesDirectScale() const
 	return two_layer_gate_scale_mode_ == "direct";
 }
 
+bool MLMTPR::TwoLayerGateUsesCenterGate() const
+{
+	return two_layer_gate_enabled_ && two_layer_gate_site_mode_ == "double";
+}
+
 double MLMTPR::TwoLayerGateTanhAmplitude() const
 {
 	return two_layer_gate_tanh_amplitude_;
@@ -427,6 +432,13 @@ void MLMTPR::SetTwoLayerGateTanhAmplitude(double amplitude)
 	if (!std::isfinite(amplitude) || amplitude < 0.0 || amplitude > 1.0)
 		ERROR("--two-layer-gate-tanh-amplitude should be finite and in [0, 1]");
 	two_layer_gate_tanh_amplitude_ = amplitude;
+}
+
+void MLMTPR::SetTwoLayerGateSiteMode(const std::string& mode)
+{
+	if (mode != "neighbor" && mode != "double")
+		ERROR("--two-layer-gate-site-mode should be 'neighbor' or 'double'");
+	two_layer_gate_site_mode_ = mode;
 }
 
 void MLMTPR::EnsureSHScalarInfoForGateUpgrade()
@@ -472,7 +484,8 @@ void MLMTPR::EnsureSHScalarInfoForGateUpgrade()
 }
 
 void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
-                                          bool independent_gate_radial_coeffs)
+	                                          bool independent_gate_radial_coeffs,
+	                                          const std::string& gate_site_mode)
 {
 	if (!is_sh_potential_)
 		ERROR("--two-layer-gate can only upgrade a SUS2-SH model");
@@ -504,6 +517,7 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 
 	two_layer_gate_enabled_ = true;
 	two_layer_gate_mode_ = "mu-body-order";
+	SetTwoLayerGateSiteMode(gate_site_mode);
 	two_layer_gate_body_order_max_ = required_gate_body_order;
 	two_layer_gate_include_one_body_ = false;
 	two_layer_gate_shared_radial_ = independent_gate_radial_coeffs;
@@ -1242,10 +1256,11 @@ void MLMTPR::Load(const string& filename)
 	sh_scalar_info_.clear();
 	two_layer_gate_enabled_ = false;
 	two_layer_gate_body_order_max_ = 0;
-	two_layer_gate_include_one_body_ = false;
-	two_layer_gate_shared_radial_ = false;
-	two_layer_gate_mode_ = "mu-body-order";
-	two_layer_residual_enabled_ = false;
+		two_layer_gate_include_one_body_ = false;
+		two_layer_gate_shared_radial_ = false;
+		two_layer_gate_mode_ = "mu-body-order";
+		two_layer_gate_site_mode_ = "neighbor";
+		two_layer_residual_enabled_ = false;
 	two_layer_gate_scale_mode_ = "legacy";
 		two_layer_gate_bias_ = 1.0;
 		two_layer_gate_tanh_amplitude_ = 0.8;
@@ -1830,12 +1845,22 @@ void MLMTPR::Load(const string& filename)
 		if (tmpstr != "two_layer_gate_include_one_body")
 			ERROR("SUS2-SH two-layer gate is missing two_layer_gate_include_one_body");
 		ifs.ignore(2);
-		ifs >> bool_token;
-		two_layer_gate_include_one_body_ = ReadBoolToken(bool_token);
+			ifs >> bool_token;
+			two_layer_gate_include_one_body_ = ReadBoolToken(bool_token);
 
-		ifs >> tmpstr;
-		if (tmpstr == "two_layer_residual_enabled") {
-			ifs.ignore(2);
+			ifs >> tmpstr;
+			if (tmpstr == "two_layer_gate_site_mode") {
+				ifs.ignore(2);
+				ifs >> two_layer_gate_site_mode_;
+				if (two_layer_gate_site_mode_ != "neighbor"
+				    && two_layer_gate_site_mode_ != "double")
+					ERROR("SUS2-SH two-layer gate has an unknown site mode: " + two_layer_gate_site_mode_);
+				ifs >> tmpstr;
+			} else {
+				two_layer_gate_site_mode_ = "neighbor";
+			}
+			if (tmpstr == "two_layer_residual_enabled") {
+				ifs.ignore(2);
 			ifs >> bool_token;
 			two_layer_residual_enabled_ = ReadBoolToken(bool_token);
 			if (two_layer_residual_enabled_)
@@ -2327,11 +2352,12 @@ void MLMTPR::Save(const string& filename)
 				ERROR("SUS2-SH mu-body-order gate scalar index has wrong body order");
 			}
 				ofs << "two_layer_gate_enabled = true\n";
-				ofs << "two_layer_gate_mode = mu-body-order\n";
-				ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order_max_ << '\n';
-				ofs << "two_layer_gate_include_one_body = false\n";
-				ofs << "two_layer_gate_tanh_amplitude = "
-				    << two_layer_gate_tanh_amplitude_ << '\n';
+					ofs << "two_layer_gate_mode = mu-body-order\n";
+					ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order_max_ << '\n';
+					ofs << "two_layer_gate_include_one_body = false\n";
+					ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode_ << '\n';
+					ofs << "two_layer_gate_tanh_amplitude = "
+					    << two_layer_gate_tanh_amplitude_ << '\n';
 				if (TwoLayerGateUsesSharedRadial()) {
 				const int gate_radial_count = TwoLayerGateRadialCoeffCount();
 				if (gate_radial_count <= 0)
@@ -2637,6 +2663,15 @@ const double* MLMTPR::TwoLayerGateNeighborSignals(const Neighborhood& nbh, int n
 	if (neighbor_index < 0 || neighbor_index >= nbh.count)
 		return nullptr;
 	const int atom_index = nbh.inds[neighbor_index];
+	return TwoLayerGateAtomSignals(atom_index);
+}
+
+const double* MLMTPR::TwoLayerGateAtomSignals(int atom_index) const
+{
+	if (active_two_layer_gate_values_ == nullptr)
+		return nullptr;
+	if (atom_index < 0)
+		return nullptr;
 	if (radial_func_count <= 0
 	    || active_two_layer_gate_values_->size() % radial_func_count != 0)
 		ERROR("SUS2-SH two-layer gate mu signal cache has inconsistent size");
@@ -2667,6 +2702,17 @@ void MLMTPR::AddTwoLayerGateMuAdjoint(const Neighborhood& nbh, int neighbor_inde
 	if (neighbor_index < 0 || neighbor_index >= nbh.count)
 		return;
 	const int atom_index = nbh.inds[neighbor_index];
+	AddTwoLayerGateAtomMuAdjoint(atom_index, mu, adjoint);
+}
+
+void MLMTPR::AddTwoLayerGateAtomMuAdjoint(int atom_index, int mu, double adjoint)
+{
+	if (active_two_layer_gate_adjoints_ == nullptr || adjoint == 0.0)
+		return;
+	if (mu < 0 || mu >= radial_func_count)
+		ERROR("SUS2-SH two-layer gate adjoint mu index is out of range");
+	if (atom_index < 0)
+		return;
 	if (radial_func_count <= 0
 	    || active_two_layer_gate_adjoints_->size() % radial_func_count != 0)
 		ERROR("SUS2-SH two-layer gate adjoint cache has inconsistent size");
@@ -3304,11 +3350,23 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 						has_tangent = true;
 				}
 			}
-			if (has_tangent)
+			const double* center_gate_tangent = TwoLayerGateUsesCenterGate()
+				? gate_chain_directional_values.data()
+					+ static_cast<size_t>(ind) * radial_func_count
+				: nullptr;
+			if (!has_tangent && center_gate_tangent != nullptr)
+				for (int mu = 0; mu < radial_func_count; ++mu)
+					if (center_gate_tangent[mu] != 0.0) {
+						has_tangent = true;
+						break;
+					}
+			if (has_tangent) {
 				AccumulateSHGateTangentGrad(nbh,
 				                            out_grads_accumulator,
 				                            neighbor_gate_tangent,
+				                            center_gate_tangent,
 				                            ind);
+			}
 		}
 		if (profile_two_layer)
 			profile_tangent_grad_s += TwoLayerProfileNow() - profile_tangent_start;

@@ -154,6 +154,17 @@ M_i,mu,m^main =
         [1 + A tanh(a_Zj,mu h_j,mu)]
 ```
 
+This is the default neighbor-site gate. The optional double-site gate uses the
+same shared \(w_q\), the same exact body-order bucket for each mu channel, and
+multiplies both endpoint gate factors:
+
+```text
+M_i,mu,m^main =
+  sum_j R_ZiZj,mu^main(r_ij) Y_lm(rhat_ij)
+        [1 + A tanh(a_Zi,mu h_i,mu)]
+        [1 + A tanh(a_Zj,mu h_j,mu)]
+```
+
 `A` is controlled by `--two-layer-gate-tanh-amplitude` and defaults to `0.8`.
 The additive coefficients `a_Z,mu` are initialized to `1.0`. With
 `--two-layer-gate-shared-radial`, the gate residual layer uses its own trained
@@ -203,6 +214,7 @@ Gate-specific options:
 | --- | --- |
 | `--two-layer-gate` | Add two-layer gate metadata to a new SH model, or upgrade a plain SH model before continuing training. |
 | `--two-layer-gate-body-order=<int>` | Not supported in mu-body-order mode; passing it explicitly is an error. The gate scalar body orders are fixed by `k_internal + 2`. |
+| `--two-layer-gate-site-mode=neighbor|double` | Select neighbor-only gate factors or the double-site gate \(g_i g_j\); default `neighbor`. |
 | `--two-layer-gate-shared-radial` | Train an independent first-layer gate radial contraction table instead of reusing the main radial coefficients. |
 | `--two-layer-gate-tanh-amplitude=<double>` | Bounded additive amplitude `A` in `[1 + A tanh(a f)]`; default `0.8`, accepted range `[0,1]`. |
 | `--inline-sh-model=<path>` | In `train train.cfg --init-sh`, create this file if missing or continue from it if it already exists. |

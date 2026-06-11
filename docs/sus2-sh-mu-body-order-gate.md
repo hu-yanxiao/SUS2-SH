@@ -26,7 +26,7 @@ The target smoke/test case directory is:
 /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/
 ```
 
-Submitted full test job in that directory:
+Submitted neighbor-site full test job in that directory:
 
 ```text
 job id: 3791918
@@ -34,10 +34,13 @@ script: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/bsub_gate_3000_additive_mu_
 log: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/mu_body_gate_3000_additive.log
 ```
 
-Implementation commit hash:
+Submitted double-site full test job in that directory:
 
 ```text
-264bf4a
+job id: 3792530
+script: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/bsub_gate_3000_additive_mu_body_double_codex.lsf
+log: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/mu_body_double_gate_3000_additive.log
+status at submission: PEND
 ```
 
 ## Formula
@@ -52,13 +55,29 @@ h_{j,\mu}
 w_r s_{q_r}(j)
 \]
 
-The final SH moment is:
+The default neighbor-site SH moment is:
 
 \[
 M_{i,\mu m}
 =
 \sum_{j\in N(i)} t_{z_i}t_{z_j}
 \left[1+A\tanh(a_{z_j,\mu}h_{j,\mu})\right]
+R_{\mu}(r_{ij})Y_{lm}(\hat r_{ij})
+\]
+
+The optional double-site gate first defines
+
+\[
+g_{a,\mu}=1+A\tanh(a_{z_a,\mu}h_{a,\mu})
+\]
+
+and then evaluates
+
+\[
+M_{i,\mu m}
+=
+\sum_{j\in N(i)} t_{z_i}t_{z_j}
+g_{i,\mu}g_{j,\mu}
 R_{\mu}(r_{ij})Y_{lm}(\hat r_{ij})
 \]
 
@@ -92,6 +111,7 @@ body orders `2,3,4,5`, respectively.
 
   ```text
   two_layer_gate_mode = mu-body-order
+  two_layer_gate_site_mode = neighbor|double
   ```
 
   Legacy two-layer gate metadata is rejected instead of being silently read as
@@ -106,9 +126,10 @@ body orders `2,3,4,5`, respectively.
   `k_internal + 2`.
 - The existing tanh cache, edge cache, site derivative cache, and shared-radial
   gate paths are preserved.
-- CPU LAMMPS reads `two_layer_gate_mode = mu-body-order`, builds the same exact
-  body-order buckets, communicates per-atom per-mu gate values and adjoints, and
-  rejects legacy gate fields.
+- CPU LAMMPS reads `two_layer_gate_mode = mu-body-order` and
+  `two_layer_gate_site_mode`, builds the same exact body-order buckets,
+  communicates per-atom per-mu gate values and adjoints, applies the same
+  neighbor or double-site gate factor, and rejects legacy gate fields.
 - Kokkos device gate evaluation is explicitly rejected for this branch rather
   than silently using the old scalar-gate kernels.
 
@@ -131,7 +152,19 @@ Final synchronized server binary:
 Final binary SHA-256:
 
 ```text
-dbac7b10cc0c15a69f043b85364f2ac61cf970ec1ffee31b334bd2a694f6e64c
+64231d45542b9c6bdb4eed5df169c3da3b3c6014d8931e9cd5da4112c204a342
+```
+
+Independent CPU LAMMPS binary for this branch:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2
+```
+
+LAMMPS binary SHA-256:
+
+```text
+da8f3365775d7adeab3c5a4adfc877963f4ef8542b908e4f1099cf1d43a51c5b
 ```
 
 Final build and smoke evidence on the server:
@@ -171,6 +204,7 @@ Local serial checks:
 
 ```bash
 bash dev_test/sh_two_layer_gate_mu_body_order_check.sh
+bash dev_test/sh_two_layer_gate_double_mode_check.sh
 bash dev_test/sh_two_layer_gate_init_check.sh
 bash dev_test/sh_two_layer_gate_zero_compat_check.sh
 bash dev_test/sh_two_layer_gate_forward_check.sh
@@ -180,6 +214,11 @@ bash dev_test/sh_two_layer_gate_shared_radial_check.sh
 bash dev_test/sh_two_layer_gate_train_weight_check.sh
 bash dev_test/sh_two_layer_gate_lmp_table_check.sh
 bash dev_test/sh_plain_to_gate_upgrade_check.sh
+LAMMPS_BIN=/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2 \
+  bash dev_test/lammps_two_layer_gate_additive_mlp_check.sh
+GATE_SITE_MODE=double \
+LAMMPS_BIN=/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2 \
+  bash dev_test/lammps_two_layer_gate_additive_mlp_check.sh
 ```
 
 Server checks:
@@ -191,5 +230,10 @@ Server checks:
 - Single nonzero gate weights in body-order buckets `2,3,4,5` affect only their
   matching k channels.
 - Zero gate weights match ordinary SH `calc-efs` energy and force.
+- Double-site gate zero weights also match ordinary SH `calc-efs`, and nonzero
+  double-site gate weights pass the loss-gradient check.
+- CPU LAMMPS neighbor-site and double-site gate models match `mlp-sus2
+  calc-efs` on the additive shared-radial smoke case. The 1-rank and 2-rank
+  LAMMPS runs are bitwise identical in the checked energy/force values.
 - Smoke run in `/work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/` with the new
   independent binary.

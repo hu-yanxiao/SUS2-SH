@@ -746,6 +746,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const int two_layer_gate_body_order = kmax + 1;
 	const double two_layer_gate_tanh_amplitude =
 		DoubleOpt(opts, "two-layer-gate-tanh-amplitude", 0.8);
+	const std::string two_layer_gate_site_mode =
+		StringOpt(opts, "two-layer-gate-site-mode", "neighbor");
 	const bool write_scalar_info = HasOpt(opts, "write-sh-scalar-info") || two_layer_gate;
 	std::ostringstream default_name;
 	default_name << "sus2sh_l" << lmax << "k" << kmax << "_b" << body_order;
@@ -767,6 +769,11 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	    || two_layer_gate_tanh_amplitude < 0.0
 	    || two_layer_gate_tanh_amplitude > 1.0)
 		ERROR("--two-layer-gate-tanh-amplitude should be finite and in [0, 1].");
+	if (two_layer_gate_site_mode != "neighbor"
+	    && two_layer_gate_site_mode != "double")
+		ERROR("--two-layer-gate-site-mode should be 'neighbor' or 'double'.");
+	if (HasOpt(opts, "two-layer-gate-site-mode") && !two_layer_gate)
+		ERROR("--two-layer-gate-site-mode requires --two-layer-gate.");
 	if (two_layer_gate_shared_radial && !two_layer_gate)
 		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate.");
 	if (two_layer_residual && !two_layer_gate)
@@ -870,11 +877,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				ERROR("--two-layer-gate selected no SH scalar basis functions for one required mu body-order bucket.");
 
 		ofs << "two_layer_gate_enabled = true\n";
-		ofs << "two_layer_gate_mode = mu-body-order\n";
-		ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
-		ofs << "two_layer_gate_include_one_body = false\n";
-		ofs << "two_layer_gate_tanh_amplitude = "
-		    << two_layer_gate_tanh_amplitude << "\n";
+			ofs << "two_layer_gate_mode = mu-body-order\n";
+			ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
+			ofs << "two_layer_gate_include_one_body = false\n";
+			ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode << "\n";
+			ofs << "two_layer_gate_tanh_amplitude = "
+			    << two_layer_gate_tanh_amplitude << "\n";
 		if (two_layer_gate_shared_radial) {
 			const int gate_radial_count = kmax * (lmax + 1) * rb_size;
 			ofs << "two_layer_gate_radial_mode = shared-radial\n";

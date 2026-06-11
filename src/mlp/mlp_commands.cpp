@@ -58,6 +58,7 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 				"two-layer-gate",
 				"two-layer-gate-body-order",
 				"two-layer-gate-tanh-amplitude",
+				"two-layer-gate-site-mode",
 				"two-layer-gate-shared-radial",
 				"two-layer-residual"
 		};
@@ -599,6 +600,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 				"    --two-layer-gate: initialize the exact body-order k+1 SUS2-SH mu gate.\n"
 				"    --two-layer-gate-body-order=<int>: rejected by mu-body-order gate models.\n"
 				"    --two-layer-gate-tanh-amplitude=<double>: bounded additive gate amplitude. Default=0.8\n"
+				"    --two-layer-gate-site-mode=neighbor|double: gate on neighbor j only, or on center i and neighbor j. Default=neighbor\n"
 				"    --two-layer-gate-shared-radial: give the gate independent radial contraction coefficients.\n"
 					"    --two-layer-residual: rejected by mu-body-order gate models.\n"
 			"    --two-layer-residual-staged: train residual two-layer model in A(E0), B(E1 residual), C(full) phases.\n"

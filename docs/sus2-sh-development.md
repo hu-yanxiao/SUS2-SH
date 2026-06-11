@@ -24,6 +24,17 @@ M_{i,\mu m}
 R_{\mu}(r_{ij})Y_{lm}(\hat r_{ij})
 \]
 
+This is `two_layer_gate_site_mode = neighbor`. The optional
+`two_layer_gate_site_mode = double` also applies the center factor
+\(g_{i,\mu}=1+A\tanh(a_{z_i,\mu}h_{i,\mu})\):
+
+\[
+M_{i,\mu m}
+=
+\sum_{j\in N(i)} t_{z_i}t_{z_j}
+g_{i,\mu}g_{j,\mu}R_{\mu}(r_{ij})Y_{lm}(\hat r_{ij})
+\]
+
 In code, `k` is zero-based, so the exact scalar body order is `k_internal + 2`.
 The full branch specification, server path, binary path, and verification list
 are recorded in `docs/sus2-sh-mu-body-order-gate.md`.
@@ -41,6 +52,7 @@ two_layer_gate_enabled = true
 two_layer_gate_mode = mu-body-order
 two_layer_gate_body_order_max = <int>
 two_layer_gate_include_one_body = false
+two_layer_gate_site_mode = neighbor|double
 two_layer_gate_weight_count = <count>
 two_layer_gate_scalar_indices = {...}
 two_layer_gate_weights = {...}
@@ -60,6 +72,8 @@ Implementation notes:
   atoms and all mu channels with the ordinary `r_c` neighbor list, then
   evaluates the final SH moments using the neighbor scale
   `1 + A*tanh(a*h_{j,mu})`.
+- Double-site mode reuses the same per-atom per-mu gate signals and multiplies
+  the center and neighbor factors in the final SH edge pass.
 - The force and training-gradient paths are configuration-level because a site
   energy centered at atom `a` depends on atom `c` when `c` is in the first-layer
   shell of neighbor `b`. This gives an effective mathematical radius `2*r_c`
@@ -88,12 +102,18 @@ Validation added:
 
 ```bash
 bash dev_test/sh_two_layer_gate_mu_body_order_check.sh
+bash dev_test/sh_two_layer_gate_double_mode_check.sh
 bash dev_test/sh_two_layer_gate_init_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_zero_compat_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_forward_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_force_fd_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_train_weight_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_loss_gradient_check.sh ./bin/mlp-sus2
+LAMMPS_BIN=/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2 \
+  bash dev_test/lammps_two_layer_gate_additive_mlp_check.sh
+GATE_SITE_MODE=double \
+LAMMPS_BIN=/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2 \
+  bash dev_test/lammps_two_layer_gate_additive_mlp_check.sh
 ```
 
 Local serial build and the focused gate tests pass with the developer build

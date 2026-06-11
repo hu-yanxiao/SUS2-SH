@@ -152,9 +152,10 @@ class PairSUS2MTP : public Pair {
 
   double *linear_coeffs;     // These are the moment tensor basis coeffs (xi)
   double *species_coeffs;    // For the species coefficients (0th rank moment tensor)
-  bool two_layer_gate_enabled = false;
-  bool two_layer_gate_shared_radial = false;
-  bool two_layer_residual_enabled = false;
+	  bool two_layer_gate_enabled = false;
+	  bool two_layer_gate_shared_radial = false;
+	  bool two_layer_gate_center_enabled = false;
+	  bool two_layer_residual_enabled = false;
   double two_layer_gate_tanh_amplitude = 0.8;
   int two_layer_gate_body_order_max = 0;
   int two_layer_gate_weight_count = 0;
@@ -214,8 +215,10 @@ class PairSUS2MTP : public Pair {
   double *coord_powers_z;   // Buffer used for powers of dz
   double *radial_vals;      // Buffer used for radial basis function values for each mu
   double *radial_ders;      // Buffer used for radial basis function derivatives for each mu
-  double *two_layer_raw_basic_vals = nullptr;
-  double *two_layer_gate_residual_radial_vals = nullptr;
+	  double *two_layer_raw_basic_vals = nullptr;
+	  double *two_layer_center_raw_basic_vals = nullptr;
+	  double *two_layer_gate_residual_radial_vals = nullptr;
+	  double *two_layer_gate_center_residual_radial_vals = nullptr;
   double *two_layer_gate_values = nullptr;
   double *two_layer_gate_adjoints = nullptr;
   double *two_layer_gate_multiplier_mu_cache = nullptr;
@@ -274,7 +277,7 @@ class PairSUS2MTP : public Pair {
   void calc_pair_radial_values(int, int, double, bool, const double * = nullptr,
                                bool = false, int = -1, int = -2, int = 0,
                                double = 0.0);
-  void accumulate_sh_basic_edge(int, const double *, double, double, bool, int, bool = false);
+	  void accumulate_sh_basic_edge(int, const double *, double, double, bool, int, bool = false, bool = false);
   bool is_static_fixed_type(int) const;
   bool static_fixed_cache_tag_matches(const tagint *, int) const;
   void configure_static_fixed_types();

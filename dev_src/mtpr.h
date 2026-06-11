@@ -149,19 +149,28 @@ protected:
 	std::vector<double> grad_neighbor_mu_contract_coord_ders_s_cache_;
 	std::vector<double> grad_neighbor_mu_contract_coord_ders_ss_cache_;
 	std::vector<double> grad_neighbor_sh_values_cache_;
-		std::vector<double> grad_neighbor_sh_ders_cache_;
-		std::vector<double> grad_radial_coeff_value_accum_;
-		std::vector<double> grad_radial_coeff_coord_accum_;
+			std::vector<double> grad_neighbor_sh_ders_cache_;
+			std::vector<double> grad_radial_coeff_value_accum_;
+			std::vector<double> grad_radial_coeff_coord_accum_;
+			std::vector<double> grad_radial_coeff_center_coord_accum_;
 			std::vector<double> two_layer_gate_additive_mu_buffer_;
 			std::vector<double> two_layer_gate_type_scale_mu_buffer_;
 			std::vector<double> two_layer_gate_multiplier_mu_buffer_;
 			std::vector<double> two_layer_gate_outer_mu_buffer_;
 			std::vector<double> two_layer_gate_additive_param_mu_buffer_;
-			std::vector<double> two_layer_gate_gate_residual_mu_buffer_;
-			std::vector<double> two_layer_gate_gate_outer_param_mu_buffer_;
-			std::vector<double> two_layer_gate_gate_additive_param_mu_buffer_;
-			std::vector<double> two_layer_gate_scaled_mu_vals_buffer_;
-			std::vector<double> two_layer_gate_scaled_mu_ders_buffer_;
+				std::vector<double> two_layer_gate_gate_residual_mu_buffer_;
+				std::vector<double> two_layer_gate_gate_outer_param_mu_buffer_;
+				std::vector<double> two_layer_gate_gate_additive_param_mu_buffer_;
+				std::vector<double> two_layer_gate_neighbor_multiplier_mu_buffer_;
+				std::vector<double> two_layer_gate_neighbor_additive_mu_buffer_;
+				std::vector<double> two_layer_gate_neighbor_additive_param_mu_buffer_;
+				std::vector<double> two_layer_gate_center_multiplier_mu_buffer_;
+				std::vector<double> two_layer_gate_center_additive_mu_buffer_;
+				std::vector<double> two_layer_gate_center_additive_param_mu_buffer_;
+				std::vector<double> two_layer_gate_center_residual_mu_buffer_;
+				std::vector<double> two_layer_gate_center_gate_additive_param_mu_buffer_;
+				std::vector<double> two_layer_gate_scaled_mu_vals_buffer_;
+				std::vector<double> two_layer_gate_scaled_mu_ders_buffer_;
 			std::vector<double> two_layer_gate_tanh_mu_cache_;
 			std::vector<char> two_layer_gate_tanh_mu_cache_valid_;
 			int two_layer_gate_tanh_mu_cache_atom_count_ = 0;
@@ -238,10 +247,11 @@ protected:
 		std::vector<double>& gate_linear_adjoints);
 	void CalcSHResidualSiteEnergyDers(const Neighborhood& nbh);
 	void CalcSHSiteEnergyDers(const Neighborhood& nbh);
-	void AccumulateSHGateTangentGrad(const Neighborhood& nbh,
-										std::vector<double>& out_grad_accumulator,
-										const std::vector<double>& neighbor_gate_tangent,
-										int cache_atom_index = -1);
+		void AccumulateSHGateTangentGrad(const Neighborhood& nbh,
+											std::vector<double>& out_grad_accumulator,
+											const std::vector<double>& neighbor_gate_tangent,
+											const double* center_gate_tangent = nullptr,
+											int cache_atom_index = -1);
 	void AccumulateSHCombinationGrad(const Neighborhood& nbh,
 										std::vector<double>& out_grad_accumulator,
 										const double se_weight = 0.0,
@@ -321,9 +331,10 @@ public:
 		bool two_layer_gate_enabled_ = false;
 		int two_layer_gate_body_order_max_ = 0;
 		bool two_layer_gate_include_one_body_ = false;
-		bool two_layer_gate_shared_radial_ = false;
-		std::string two_layer_gate_mode_ = "mu-body-order";
-			bool two_layer_residual_enabled_ = false;
+			bool two_layer_gate_shared_radial_ = false;
+			std::string two_layer_gate_mode_ = "mu-body-order";
+			std::string two_layer_gate_site_mode_ = "neighbor";
+				bool two_layer_residual_enabled_ = false;
 			std::string two_layer_gate_scale_mode_ = "legacy";
 			double two_layer_gate_bias_ = 1.0;
 			double two_layer_gate_tanh_amplitude_ = 0.8;
@@ -419,10 +430,12 @@ public:
 	bool RequiresTwoLayerGateEvaluation() const;
 	void PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods);
 	void AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighborhoods& neighborhoods);
-	void AddTwoLayerGateMuAdjoint(const Neighborhood& nbh, int neighbor_index, int mu, double adjoint);
-	double TwoLayerGateNeighborSignal(const Neighborhood& nbh, int neighbor_index, int mu) const;
-	const double* TwoLayerGateNeighborSignals(const Neighborhood& nbh, int neighbor_index) const;
-	int TwoLayerGateMuBodyOrder(int mu) const;
+		void AddTwoLayerGateMuAdjoint(const Neighborhood& nbh, int neighbor_index, int mu, double adjoint);
+		double TwoLayerGateNeighborSignal(const Neighborhood& nbh, int neighbor_index, int mu) const;
+		const double* TwoLayerGateNeighborSignals(const Neighborhood& nbh, int neighbor_index) const;
+		void AddTwoLayerGateAtomMuAdjoint(int atom_index, int mu, double adjoint);
+		const double* TwoLayerGateAtomSignals(int atom_index) const;
+		int TwoLayerGateMuBodyOrder(int mu) const;
 	int TwoLayerGateWeightBodyOrder(int weight_index) const;
 	void BuildTwoLayerGateBodyOrderBuckets();
 	void AccumulateTwoLayerGateBodyOrderScalarDers(
@@ -443,12 +456,25 @@ public:
 		kGateMuBufferGateAdditiveParam = 1 << 7,
 		kGateMuBufferAll = (1 << 8) - 1
 	};
-	void PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
-	                                          double center_type_coeff,
-	                                          double outer_type_coeff,
-	                                          const double* gate_signal_by_mu,
-	                                          int neighbor_atom_index = -1,
-	                                          int buffer_mask = kGateMuBufferAll);
+		void PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
+		                                          double center_type_coeff,
+		                                          double outer_type_coeff,
+		                                          const double* gate_signal_by_mu,
+		                                          int neighbor_atom_index = -1,
+		                                          int buffer_mask = kGateMuBufferAll);
+		void PrepareTwoLayerGateAtomMuBuffers(int atom_type,
+		                                      const double* gate_signal_by_mu,
+		                                      int atom_index,
+		                                      int buffer_mask = kGateMuBufferAll);
+		void PrepareTwoLayerGatePairMuBuffers(int type_center,
+		                                      int type_outer,
+		                                      double center_type_coeff,
+		                                      double outer_type_coeff,
+		                                      const double* center_gate_signal_by_mu,
+		                                      int center_atom_index,
+		                                      const double* neighbor_gate_signal_by_mu,
+		                                      int neighbor_atom_index,
+		                                      int buffer_mask = kGateMuBufferAll);
 //	void CalcEFS(Configuration& cfg) override
 //	{
 //		AnyLocalMLIP::CalcEFS(cfg);
@@ -484,15 +510,19 @@ public:
 		int RadialCoeffOffset() const;
 		int RadialCoeffBlockSize() const;
 		int BaseNonlinearCoeffCount() const;
-				bool TwoLayerGateUsesSharedRadial() const;
-				bool TwoLayerResidualEnabled() const;
-				bool TwoLayerGateUsesDirectScale() const;
-				double TwoLayerGateTanhAmplitude() const;
-				void SetTwoLayerGateTanhAmplitude(double amplitude);
-				bool IsSHPotential() const { return is_sh_potential_; }
-			bool TwoLayerGateEnabled() const { return two_layer_gate_enabled_; }
-			void UpgradePlainSHToTwoLayerGate(int gate_body_order,
-			                                  bool independent_gate_radial_coeffs);
+					bool TwoLayerGateUsesSharedRadial() const;
+					bool TwoLayerResidualEnabled() const;
+					bool TwoLayerGateUsesDirectScale() const;
+					bool TwoLayerGateUsesCenterGate() const;
+					const std::string& TwoLayerGateSiteMode() const { return two_layer_gate_site_mode_; }
+					double TwoLayerGateTanhAmplitude() const;
+					void SetTwoLayerGateTanhAmplitude(double amplitude);
+					void SetTwoLayerGateSiteMode(const std::string& mode);
+					bool IsSHPotential() const { return is_sh_potential_; }
+				bool TwoLayerGateEnabled() const { return two_layer_gate_enabled_; }
+				void UpgradePlainSHToTwoLayerGate(int gate_body_order,
+				                                  bool independent_gate_radial_coeffs,
+				                                  const std::string& gate_site_mode = "neighbor");
 			void RequestTwoLayerFullEdgeCacheForNextCalcEFS();
 			int TwoLayerGateRadialCoeffCount() const;
 		int TwoLayerGateRadialCoeffOffset() const;

@@ -1275,6 +1275,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
 			"         --two-layer-gate (uses exact body-order k+1 scalar buckets),\n"
 			"         --two-layer-gate-tanh-amplitude=<double> (default=0.8),\n"
+			"         --two-layer-gate-site-mode=neighbor|double (default=neighbor),\n"
 			"         --two-layer-gate-shared-radial,\n"
 			"         --two-layer-residual (rejected by mu-body-order gate models),\n"
 			"         --zbl-elements=<...>, --zbl-inner=<r>, --zbl-outer=<r>,\n"
