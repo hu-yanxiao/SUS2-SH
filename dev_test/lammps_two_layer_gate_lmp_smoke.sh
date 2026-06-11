@@ -25,7 +25,6 @@ lmp_model="$tmp_dir/gated_nonzero_lmp.mtp"
   --cutoff=5.0 \
   --write-sh-scalar-info \
   --two-layer-gate \
-  --two-layer-gate-body-order=3 \
   --two-layer-gate-shared-radial >/dev/null
 
 python3 - "$base_model" "$direct_model" "$lmp_model" <<'PY'

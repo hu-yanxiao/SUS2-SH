@@ -275,6 +275,20 @@ struct DevGateFastPathResult {
 	double worst_weighted_der_fast = 0.0;
 };
 
+struct DevGateMuBodyOrderResult {
+	int checked_values = 0;
+	int checked_body_orders = 0;
+	int active_body_orders = 0;
+	int worst_body_order = -1;
+	int worst_config = -1;
+	int worst_atom = -1;
+	int worst_mu = -1;
+	double worst_abs_err = 0.0;
+	double worst_rel_err = 0.0;
+	double worst_expected = 0.0;
+	double worst_actual = 0.0;
+};
+
 void UpdateWorst(double analytic,
                  double finite_difference,
                  double& worst_abs_err,
@@ -409,6 +423,138 @@ public:
 
 		active_two_layer_gate_values_ = saved_gate_values;
 		active_two_layer_gate_adjoints_ = saved_gate_adjoints;
+		return result;
+	}
+};
+
+class DevGateMuBodyOrderProbe : public MLMTPR {
+public:
+	DevGateMuBodyOrderProbe(const std::string& mtp_filename)
+		: MLMTPR(mtp_filename)
+	{
+	}
+
+	DevGateMuBodyOrderResult Check(std::vector<Configuration>& configs,
+	                               int max_atoms,
+	                               double probe_weight)
+	{
+		if (!two_layer_gate_enabled_)
+			ERROR("Model does not have two-layer gate enabled.");
+		if (TwoLayerGateWeightCount() <= 0)
+			ERROR("Model has no two-layer gate weights.");
+		BuildTwoLayerGateBodyOrderBuckets();
+
+		std::vector<int> probe_weight_by_body_order(
+			two_layer_gate_body_order_max_ + 1, -1);
+		std::vector<double> probe_weight_abs_by_body_order(
+			two_layer_gate_body_order_max_ + 1, 0.0);
+		for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+			const int body_order = TwoLayerGateWeightBodyOrder(q);
+			if (body_order >= 2 && body_order <= two_layer_gate_body_order_max_
+			    && probe_weight_by_body_order[body_order] < 0)
+				probe_weight_by_body_order[body_order] = q;
+		}
+		for (int body_order = 2; body_order <= two_layer_gate_body_order_max_;
+		     ++body_order) {
+			if (probe_weight_by_body_order[body_order] < 0)
+				ERROR("SUS2-SH mu-body-order gate is missing a scalar body-order bucket");
+		}
+
+		DevGateMuBodyOrderResult result;
+		std::vector<double> scalar_values;
+		for (int cfg_index = 0; cfg_index < static_cast<int>(configs.size());
+		     ++cfg_index) {
+			Neighborhoods neighborhoods(configs[cfg_index], CutOff());
+			const int atom_limit = max_atoms <= 0
+				? configs[cfg_index].size()
+				: std::min(max_atoms, configs[cfg_index].size());
+			for (int atom_index = 0; atom_index < atom_limit; ++atom_index) {
+				CalcTwoLayerGateScalarValuesOnly(neighborhoods[atom_index],
+				                                  scalar_values);
+				for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+					const int body_order = TwoLayerGateWeightBodyOrder(q);
+					const double abs_value = std::abs(scalar_values[q]);
+					if (abs_value > probe_weight_abs_by_body_order[body_order]) {
+						probe_weight_abs_by_body_order[body_order] = abs_value;
+						probe_weight_by_body_order[body_order] = q;
+					}
+				}
+			}
+		}
+		for (int body_order = 2; body_order <= two_layer_gate_body_order_max_;
+		     ++body_order) {
+			if (probe_weight_abs_by_body_order[body_order] <= 1.0e-14)
+				ERROR("SUS2-SH mu-body-order gate check could not find a nonzero scalar for one body-order bucket");
+		}
+
+		const std::vector<double> saved_weights = two_layer_gate_weights_;
+		const std::vector<double> saved_regression_coeffs = regression_coeffs;
+		const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
+		active_two_layer_gate_values_ = nullptr;
+
+		for (int body_order = 2; body_order <= two_layer_gate_body_order_max_;
+		     ++body_order) {
+			++result.checked_body_orders;
+			const int q_probe = probe_weight_by_body_order[body_order];
+			std::fill(two_layer_gate_weights_.begin(),
+			          two_layer_gate_weights_.end(), 0.0);
+			two_layer_gate_weights_[q_probe] = probe_weight;
+			for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+				const int coeff_index = TwoLayerGateWeightOffset() + q;
+				if (coeff_index < 0
+				    || coeff_index >= static_cast<int>(regression_coeffs.size()))
+					ERROR("SUS2-SH two-layer gate regression coefficient index is out of range");
+				regression_coeffs[coeff_index] =
+					(q == q_probe) ? probe_weight : 0.0;
+			}
+			two_layer_gate_values_from_edge_cache_ready_ = false;
+
+			bool saw_nonzero_matching_channel = false;
+			for (int cfg_index = 0; cfg_index < static_cast<int>(configs.size());
+			     ++cfg_index) {
+				Neighborhoods neighborhoods(configs[cfg_index], CutOff());
+				PrepareTwoLayerGateValues(configs[cfg_index], neighborhoods);
+				const int atom_limit = max_atoms <= 0
+					? configs[cfg_index].size()
+					: std::min(max_atoms, configs[cfg_index].size());
+				for (int atom_index = 0; atom_index < atom_limit; ++atom_index) {
+					const Neighborhood& nbh = neighborhoods[atom_index];
+					CalcTwoLayerGateScalarValuesOnly(nbh, scalar_values);
+					const double selected_scalar = scalar_values[q_probe];
+					for (int mu = 0; mu < radial_func_count; ++mu) {
+						const int mu_body_order = TwoLayerGateMuBodyOrder(mu);
+						const double expected =
+							mu_body_order == body_order ? probe_weight * selected_scalar : 0.0;
+						const double actual =
+							two_layer_gate_values_[static_cast<size_t>(atom_index) *
+							                       radial_func_count + mu];
+						const double old_abs = result.worst_abs_err;
+						UpdateWorst(expected, actual,
+						            result.worst_abs_err,
+						            result.worst_rel_err,
+						            result.worst_expected,
+						            result.worst_actual);
+						if (result.worst_abs_err > old_abs) {
+							result.worst_body_order = body_order;
+							result.worst_config = cfg_index;
+							result.worst_atom = atom_index;
+							result.worst_mu = mu;
+						}
+						if (mu_body_order == body_order
+						    && std::abs(expected) > 1.0e-14)
+							saw_nonzero_matching_channel = true;
+						++result.checked_values;
+					}
+				}
+			}
+			if (saw_nonzero_matching_channel)
+				++result.active_body_orders;
+		}
+
+		two_layer_gate_weights_ = saved_weights;
+		regression_coeffs = saved_regression_coeffs;
+		two_layer_gate_values_from_edge_cache_ready_ = false;
+		active_two_layer_gate_values_ = saved_gate_values;
 		return result;
 	}
 };
@@ -1066,16 +1212,71 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			&& result.worst_weighted_der_rel_err > rel_tolerance;
 		if (value_failed || der_failed || weighted_der_failed)
 			exit(1);
-	} END_COMMAND;
+		} END_COMMAND;
 
-		BEGIN_COMMAND("init-sh",
-			"writes an untrained SUS2-SH model",
-			"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
+		BEGIN_COMMAND("check-two-layer-gate-mu-body-order-dev",
+			"checks exact body-order routing for mu-dependent two-layer gate values",
+			"mlp-sus2 check-two-layer-gate-mu-body-order-dev model.mtp cfg --max-configs=1 --max-atoms=1 --probe-weight=0.5 --abs-tolerance=1e-12 --rel-tolerance=1e-10\n"
+		) {
+			if (args.size() != 2) {
+				std::cout << "mlp-sus2 check-two-layer-gate-mu-body-order-dev: model and cfg arguments are required\n";
+				return 1;
+			}
+			DevGateMuBodyOrderProbe mtpr(args[0]);
+			std::ifstream ifs(args[1], std::ios::binary);
+			if (!ifs)
+				ERROR("Cannot open configuration file for mu-body-order gate check.");
+
+			const int max_configs = ParseDevIntOption(opts, "max-configs", 1);
+			std::vector<Configuration> configs;
+			Configuration cfg;
+			while ((max_configs <= 0 || static_cast<int>(configs.size()) < max_configs)
+			       && cfg.Load(ifs)) {
+				configs.push_back(cfg);
+			}
+			if (configs.empty())
+				ERROR("No configurations loaded for mu-body-order gate check.");
+
+			const int max_atoms = ParseDevIntOption(opts, "max-atoms", 1);
+			const double probe_weight = ParseDevDoubleOption(opts, "probe-weight", 0.5);
+			const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-12);
+			const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-10);
+
+			const DevGateMuBodyOrderResult result =
+				mtpr.Check(configs, max_atoms, probe_weight);
+			if (mpi_rank == 0) {
+				std::cout << std::setprecision(12)
+				          << "checked_values=" << result.checked_values
+				          << " checked_body_orders=" << result.checked_body_orders
+				          << " active_body_orders=" << result.active_body_orders
+				          << " worst_body_order=" << result.worst_body_order
+				          << " worst_config=" << result.worst_config
+				          << " worst_atom=" << result.worst_atom
+				          << " worst_mu=" << result.worst_mu
+				          << " expected=" << result.worst_expected
+				          << " actual=" << result.worst_actual
+				          << " abs_err=" << result.worst_abs_err
+				          << " rel_err=" << result.worst_rel_err
+				          << std::endl;
+			}
+			if (result.active_body_orders != result.checked_body_orders)
+				exit(1);
+			const bool failed =
+				result.worst_abs_err > abs_tolerance
+				&& result.worst_rel_err > rel_tolerance;
+			if (failed)
+				exit(1);
+		} END_COMMAND;
+
+			BEGIN_COMMAND("init-sh",
+				"writes an untrained SUS2-SH model",
+				"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 			"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
 			"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
-			"         --two-layer-gate, --two-layer-gate-body-order=<int> (default=3),\n"
+			"         --two-layer-gate (uses exact body-order k+1 scalar buckets),\n"
 			"         --two-layer-gate-tanh-amplitude=<double> (default=0.8),\n"
-			"         --two-layer-gate-shared-radial, --two-layer-residual,\n"
+			"         --two-layer-gate-shared-radial,\n"
+			"         --two-layer-residual (rejected by mu-body-order gate models),\n"
 			"         --zbl-elements=<...>, --zbl-inner=<r>, --zbl-outer=<r>,\n"
 			"         --zbl-typewise-cutoff-factor=<factor>\n"
 		) {
@@ -1421,7 +1622,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const string input_filename = args[1];
 		const string output_filename = args[2];
 
-		MLMTPR mtpr(mtp_filename);	
+		MLMTPR mtpr(mtp_filename);
 
 		ifstream ifs(input_filename, std::ios::binary);
 		ofstream ofs(output_filename, std::ios::binary);
@@ -1451,7 +1652,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const string input_filename = args[1];
 		const string output_filename = args[2];
 
-		MLMTPR mtpr(mtp_filename);	
+		MLMTPR mtpr(mtp_filename);
 
 		ifstream ifs(input_filename, std::ios::binary);
 		ofstream ofs(output_filename, std::ios::binary);
@@ -1481,7 +1682,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const string input_filename = args[1];
 		const string output_filename = args[2];
 
-		MLMTPR mtpr(mtp_filename);	
+		MLMTPR mtpr(mtp_filename);
 
 		ifstream ifs(input_filename, std::ios::binary);
 		ofstream ofs(output_filename, std::ios::binary);

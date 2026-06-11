@@ -21,8 +21,7 @@ awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"
   --radial-basis-size=4 \
   --cutoff=5.0 \
   --write-sh-scalar-info \
-  --two-layer-gate \
-  --two-layer-gate-body-order=3
+  --two-layer-gate
 
 python3 - "$init_model" "$nonzero_model" <<'PY'
 import re

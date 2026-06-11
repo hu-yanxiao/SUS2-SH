@@ -27,8 +27,7 @@ common_opts=(
 
 ./bin/mlp-sus2 init-sh "$plain" "${common_opts[@]}"
 ./bin/mlp-sus2 init-sh "$gated" "${common_opts[@]}" \
-  --two-layer-gate \
-  --two-layer-gate-body-order=3
+  --two-layer-gate
 
 ./bin/mlp-sus2 calc-efs "$plain" "$train" "$plain_pred" >/dev/null
 ./bin/mlp-sus2 calc-efs "$gated" "$train" "$gated_pred" >/dev/null

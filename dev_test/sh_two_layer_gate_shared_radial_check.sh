@@ -25,7 +25,6 @@ common_opts=(
   --cutoff=5.0
   --write-sh-scalar-info
   --two-layer-gate
-  --two-layer-gate-body-order=3
 )
 
 ./bin/mlp-sus2 init-sh "$plain" "${common_opts[@]}"

@@ -22,8 +22,7 @@ awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"
   --radial-basis-size=4 \
   --cutoff=5.0 \
   --write-sh-scalar-info \
-  --two-layer-gate \
-  --two-layer-gate-body-order=3
+  --two-layer-gate
 
 grep -q "two_layer_gate_enabled = true" "$model"
 grep -q "two_layer_gate_include_one_body = false" "$model"

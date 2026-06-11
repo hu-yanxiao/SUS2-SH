@@ -7,12 +7,10 @@ tmp_dir=".codex_tmp/sh_two_layer_residual_init"
 mkdir -p "$tmp_dir"
 
 model="$tmp_dir/residual.mtp"
-saved="$tmp_dir/residual.saved.mtp"
-train="$tmp_dir/one.cfg"
-rm -f "$model" "$saved" "$train"
-awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"
+log="$tmp_dir/init.log"
+rm -f "$model" "$log"
 
-./bin/mlp-sus2 init-sh "$model" \
+if ./bin/mlp-sus2 init-sh "$model" \
   --species-count=2 \
   --l-max=2 \
   --k-max=2 \
@@ -22,25 +20,10 @@ awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"
   --cutoff=5.0 \
   --write-sh-scalar-info \
   --two-layer-gate \
-  --two-layer-gate-body-order=3 \
   --two-layer-gate-shared-radial \
-  --two-layer-residual
+  --two-layer-residual >"$log" 2>&1; then
+  echo "residual two-layer gate should be rejected by mu-body-order gate mode" >&2
+  exit 1
+fi
 
-grep -q "two_layer_gate_enabled = true" "$model"
-grep -q "two_layer_residual_enabled = true" "$model"
-grep -q "two_layer_gate_scale_mode = direct" "$model"
-grep -q "two_layer_gate_bias = 1" "$model"
-grep -q "two_layer_residual_e0_coeff_count" "$model"
-grep -q "two_layer_residual_e0_coeffs" "$model"
-
-./bin/mlp-sus2 train "$model" "$train" \
-  --max-iter=1 \
-  --skip-preinit \
-  --trained-pot-name="$saved" \
-  --energy-weight=1 \
-  --force-weight=0 \
-  --stress-weight=0 >/dev/null
-
-grep -q "two_layer_residual_enabled = true" "$saved"
-grep -q "two_layer_gate_scale_mode = direct" "$saved"
-grep -q "two_layer_residual_e0_coeffs" "$saved"
+grep -q "not supported by mu-body-order gate" "$log"

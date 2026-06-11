@@ -743,7 +743,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const bool two_layer_gate_shared_radial =
 		HasOpt(opts, "two-layer-gate-shared-radial");
 	const bool two_layer_residual = HasOpt(opts, "two-layer-residual");
-	const int two_layer_gate_body_order = IntOpt(opts, "two-layer-gate-body-order", 3);
+	const int two_layer_gate_body_order = kmax + 1;
 	const double two_layer_gate_tanh_amplitude =
 		DoubleOpt(opts, "two-layer-gate-tanh-amplitude", 0.8);
 	const bool write_scalar_info = HasOpt(opts, "write-sh-scalar-info") || two_layer_gate;
@@ -759,8 +759,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("init-sh requires --k-max > 0.");
 	if (body_order < 2 || body_order > 6)
 		ERROR("init-sh supports --body-order from 2 to 6.");
-	if (two_layer_gate && (two_layer_gate_body_order < 2 || two_layer_gate_body_order > body_order))
-		ERROR("--two-layer-gate-body-order should be between 2 and --body-order.");
+	if (two_layer_gate && HasOpt(opts, "two-layer-gate-body-order"))
+		ERROR("--two-layer-gate-body-order is not used by mu-body-order gate models; use --body-order >= --k-max + 1.");
+	if (two_layer_gate && body_order < two_layer_gate_body_order)
+		ERROR("--two-layer-gate requires --body-order >= --k-max + 1 for mu-body-order scalar buckets.");
 	if (!std::isfinite(two_layer_gate_tanh_amplitude)
 	    || two_layer_gate_tanh_amplitude < 0.0
 	    || two_layer_gate_tanh_amplitude > 1.0)
@@ -769,6 +771,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate.");
 	if (two_layer_residual && !two_layer_gate)
 		ERROR("--two-layer-residual requires --two-layer-gate.");
+	if (two_layer_residual && two_layer_gate)
+		ERROR("--two-layer-residual is not supported by mu-body-order gate models.");
 	if (!IsSupportedSHRadialBasis(rbasis))
 		ERROR("init-sh currently writes RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, or RBJacobi_sss models.");
 	if (rbasis == "RBJacobi_sss" && kmax > 6)
@@ -852,20 +856,23 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	}
 	if (two_layer_gate) {
 		std::vector<int> gate_scalar_indices;
+		std::vector<int> gate_body_counts(two_layer_gate_body_order + 1, 0);
 		for (size_t i = 0; i < graph.scalar_infos_.size(); ++i)
-			if (graph.scalar_infos_[i].body_order <= two_layer_gate_body_order)
+			if (graph.scalar_infos_[i].body_order >= 2
+			    && graph.scalar_infos_[i].body_order <= two_layer_gate_body_order) {
 				gate_scalar_indices.push_back(static_cast<int>(i));
+				++gate_body_counts[graph.scalar_infos_[i].body_order];
+			}
 		if (gate_scalar_indices.empty())
 			ERROR("--two-layer-gate selected no SH scalar basis functions.");
+		for (int bo = 2; bo <= two_layer_gate_body_order; ++bo)
+			if (gate_body_counts[bo] == 0)
+				ERROR("--two-layer-gate selected no SH scalar basis functions for one required mu body-order bucket.");
 
 		ofs << "two_layer_gate_enabled = true\n";
+		ofs << "two_layer_gate_mode = mu-body-order\n";
 		ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
 		ofs << "two_layer_gate_include_one_body = false\n";
-		if (two_layer_residual) {
-			ofs << "two_layer_residual_enabled = true\n";
-			ofs << "two_layer_gate_scale_mode = direct\n";
-			ofs << "two_layer_gate_bias = 1.0\n";
-		}
 		ofs << "two_layer_gate_tanh_amplitude = "
 		    << two_layer_gate_tanh_amplitude << "\n";
 		if (two_layer_gate_shared_radial) {

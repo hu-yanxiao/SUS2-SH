@@ -35,7 +35,6 @@ fi
   --do-lin-rescale \
   --fine-tune \
   --two-layer-gate \
-  --two-layer-gate-body-order=3 \
   --two-layer-gate-shared-radial \
   --energy-weight=1 \
   --force-weight=0 \

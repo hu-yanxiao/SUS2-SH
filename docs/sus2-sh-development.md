@@ -4,33 +4,41 @@
 
 SUS2-SH is developed by copying the SUS2-MLIP developer version and replacing the angular expression with real spherical harmonics. The original training flow remains the driver: `mlp-sus2 train`, E/F/S equations, nonlinear BFGS, linear sub-solve, model save/load, and MPI execution stay in the SUS2 code path.
 
-## Two-layer neighbor scalar gate
+## Exact-body mu two-layer gate
 
-The developer branch now has an experimental non-recursive two-layer gate for
-SUS2-SH. It changes the final-layer neighbor type factor as
+The `codex/mu-body-order-gate` branch has an experimental exact-body gate for
+SUS2-SH. The gate signal is per atom and per mu channel:
 
-```text
-lambda_b -> lambda_b * (1 + f_b)
-f_b = sum_q w_q Phi_q^(0)(b)
-```
+\[
+h_{j,\mu}
+=
+\sum_{r:\operatorname{body\_order}(s_{q_r})=k_\mu+1}
+w_r s_{q_r}(j)
+\]
 
-`Phi_q^(0)` is built from the same SH scalar graph as the main model but with a
-separate body-order cutoff. The default gate cutoff is body order 3. The final
-model may still use a higher body order, for example 6. One-body terms are not
-included in the first-layer gate; the existing species shift and linear
-one-body terms remain only in the final site-energy layer.
+\[
+M_{i,\mu m}
+=
+\sum_{j\in N(i)} t_{z_i}t_{z_j}
+\left[1+A\tanh(a_{z_j,\mu}h_{j,\mu})\right]
+R_{\mu}(r_{ij})Y_{lm}(\hat r_{ij})
+\]
+
+In code, `k` is zero-based, so the exact scalar body order is `k_internal + 2`.
+The full branch specification, server path, binary path, and verification list
+are recorded in `docs/sus2-sh-mu-body-order-gate.md`.
 
 The model initializer accepts:
 
 ```bash
 --two-layer-gate
---two-layer-gate-body-order=<int>
 ```
 
 When enabled, `init-sh` writes `sh_scalar_info` plus explicit gate metadata:
 
 ```text
 two_layer_gate_enabled = true
+two_layer_gate_mode = mu-body-order
 two_layer_gate_body_order_max = <int>
 two_layer_gate_include_one_body = false
 two_layer_gate_weight_count = <count>
@@ -38,22 +46,27 @@ two_layer_gate_scalar_indices = {...}
 two_layer_gate_weights = {...}
 ```
 
-The only new trainable coefficients are the `w_q` gate weights. They are stored
-after the radial/scaling nonlinear block and before the mirrored linear
-coefficients in `regression_coeffs`. They initialize to zero, so `calc-efs`
-uses the legacy SH path exactly until a gate weight becomes nonzero.
+The gate scalar set is selected automatically from exact body orders
+`2..k_max+1`. `--two-layer-gate-body-order` is rejected in this branch, and
+`--body-order` must be at least `--k-max + 1`. The only new trainable
+coefficients are the shared `w_q` gate weights. They are stored after the
+radial/scaling nonlinear block and before the mirrored linear coefficients in
+`regression_coeffs`. They initialize to zero, so \(1+A\tanh(0)=1\) and
+`calc-efs` reduces to ordinary SH until a gate weight becomes nonzero.
 
 Implementation notes:
 
 - The forward path first computes unmodulated first-layer gate scalars for all
-  atoms with the ordinary `r_c` neighbor list, then evaluates the final SH
-  moments using the neighbor scale `1 + f_b`.
+  atoms and all mu channels with the ordinary `r_c` neighbor list, then
+  evaluates the final SH moments using the neighbor scale
+  `1 + A*tanh(a*h_{j,mu})`.
 - The force and training-gradient paths are configuration-level because a site
   energy centered at atom `a` depends on atom `c` when `c` is in the first-layer
   shell of neighbor `b`. This gives an effective mathematical radius `2*r_c`
   without building a physical `2*r_c` neighbor list.
-- Reverse mode accumulates `dL/df_b` from final edges, then backpropagates
-  through the selected first-layer scalar graph. The `w_q` gradients are
+- Reverse mode accumulates `dL/dh_{j,mu}` from final edges, groups those
+  adjoints by the exact body order of each mu channel, then backpropagates only
+  through the matching first-layer scalar bucket. The `w_q` gradients are
   accumulated even when all `w_q` start at zero, which is required for the gate
   to leave the zero state during training.
 - Force-loss gradients include both gate-chain terms: the direct
@@ -62,17 +75,19 @@ Implementation notes:
   evaluated as a basic-moment tangent followed by SH product-graph tangent
   propagation, avoiding a full per-neighbor/per-scalar derivative matrix.
 - LAMMPS and GPUMD should not use a real `2*r_c` halo for this feature. The
-  intended interface design is to compute `f` on owned atoms, communicate the
-  scalar to ghosts, use it in the main pass, reverse-communicate `dE/df`, then
-  run the first-layer gate reverse pass on owners. The required interface
-  buffers are two-layer-only: `gate_scale[nall]`, `gate_adjoint[nall]`, and a
-  compact owned-atom first-layer gate-moment cache. The gate is neighbor
-  centered, not pair symmetric; final edge `a-b` uses `1 + f_b`, while edge
-  `b-a` uses `1 + f_a`.
+  intended interface design is to compute `h_{atom,mu}` on owned atoms,
+  communicate the per-mu vector to ghosts, use it in the main pass,
+  reverse-communicate `dE/dh_{atom,mu}`, then run the first-layer gate reverse
+  pass on owners. The required interface buffers are two-layer-only:
+  `gate_signal[nall][mu]`, `gate_adjoint[nall][mu]`, and a compact owned-atom
+  first-layer gate-moment cache. The gate is neighbor centered, not pair
+  symmetric; final edge `a-b` uses the mu-dependent signal of atom `b`, while
+  edge `b-a` uses the mu-dependent signal of atom `a`.
 
 Validation added:
 
 ```bash
+bash dev_test/sh_two_layer_gate_mu_body_order_check.sh
 bash dev_test/sh_two_layer_gate_init_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_zero_compat_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_forward_check.sh ./bin/mlp-sus2
@@ -81,8 +96,8 @@ bash dev_test/sh_two_layer_gate_train_weight_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_loss_gradient_check.sh ./bin/mlp-sus2
 ```
 
-Local serial build and the six focused gate tests pass with the developer
-build command:
+Local serial build and the focused gate tests pass with the developer build
+command:
 
 ```bash
 make mlp -j2 USE_MPI=0 CXX_EXE=g++ CC_EXE=gcc FC_EXE=true \
@@ -366,7 +381,12 @@ two-layer-only optimizations reduce the gradient-side total by about 55%
 
 ## Residual staged two-layer mode
 
-The developer branch also has an opt-in residual two-layer variant for staged
+This is a historical note for the previous direct-scale gate experiment. The
+`codex/mu-body-order-gate` branch rejects `--two-layer-residual` together with
+`--two-layer-gate`, because that mode depended on legacy `two_layer_gate_bias`
+and direct-scale metadata that are not part of the exact-body mu gate.
+
+The older developer branch had an opt-in residual two-layer variant for staged
 training:
 
 ```text

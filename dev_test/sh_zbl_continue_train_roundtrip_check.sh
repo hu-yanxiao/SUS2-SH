@@ -28,7 +28,6 @@ awk '{print} /^END_CFG/{exit}' dev_test/NaCl_small.cfgs > "$train_cfg"
   --k-max=1 \
   --body-order=2 \
   --two-layer-gate \
-  --two-layer-gate-body-order=2 \
   --two-layer-gate-shared-radial \
   --radial-basis-size=3 \
   --cutoff=3.0
@@ -39,7 +38,6 @@ awk '{print} /^END_CFG/{exit}' dev_test/NaCl_small.cfgs > "$train_cfg"
   --k-max=1 \
   --body-order=2 \
   --two-layer-gate \
-  --two-layer-gate-body-order=2 \
   --two-layer-gate-shared-radial \
   --radial-basis-size=3 \
   --cutoff=3.0 \

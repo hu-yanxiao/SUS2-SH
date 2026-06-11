@@ -1169,7 +1169,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	const bool requested_two_layer_residual = opts["two-layer-residual"] != "";
 	bool plain_to_gate_upgrade = false;
 	bool plain_to_gate_disabled_controls = false;
-	int plain_to_gate_body_order = 3;
+	int plain_to_gate_body_order = -1;
 	bool plain_to_gate_independent_radial = false;
 	if (requested_two_layer_gate_shared_radial && !requested_two_layer_gate
 	    && !mtpr.TwoLayerGateEnabled())
@@ -1178,9 +1178,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		if (!mtpr.IsSHPotential())
 			ERROR("--two-layer-gate can only upgrade or train a SUS2-SH model");
 		if (requested_two_layer_residual)
-			ERROR("plain SH to gate continuation uses non-residual legacy gate; remove --two-layer-residual");
+			ERROR("--two-layer-residual is not supported by mu-body-order gate models");
 		if (opts["two-layer-gate-body-order"] != "")
-			plain_to_gate_body_order = stoi(opts["two-layer-gate-body-order"]);
+			ERROR("--two-layer-gate-body-order is not used by mu-body-order gate models; use --body-order >= --k-max + 1.");
 		plain_to_gate_independent_radial = requested_two_layer_gate_shared_radial;
 		mtpr.UpgradePlainSHToTwoLayerGate(plain_to_gate_body_order,
 		                                  plain_to_gate_independent_radial);
@@ -1243,7 +1243,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		std::cout << "s-range override: " << s_range.first << ", " << s_range.second << std::endl;
 		if (prank == 0 && plain_to_gate_upgrade) {
 			std::cout << "SUS2-SH plain-to-gate upgrade enabled: "
-		          << "gate_body_order=" << plain_to_gate_body_order
+		          << "gate_body_order=mu-body-order"
 		          << " independent_gate_radial_coeffs="
 		          << (plain_to_gate_independent_radial ? "true" : "false")
 		          << " gate_weight_count=" << mtpr.TwoLayerGateWeightCount()

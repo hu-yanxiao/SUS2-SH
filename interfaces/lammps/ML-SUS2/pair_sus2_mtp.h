@@ -155,12 +155,12 @@ class PairSUS2MTP : public Pair {
   bool two_layer_gate_enabled = false;
   bool two_layer_gate_shared_radial = false;
   bool two_layer_residual_enabled = false;
-  bool two_layer_gate_direct_scale = false;
-  double two_layer_gate_bias = 1.0;
   double two_layer_gate_tanh_amplitude = 0.8;
   int two_layer_gate_body_order_max = 0;
   int two_layer_gate_weight_count = 0;
   std::vector<int> sh_scalar_body_order;
+  std::vector<int> two_layer_gate_scalar_body_order;
+  std::vector<int> two_layer_gate_mu_body_order;
   std::vector<int> two_layer_gate_scalar_indices;
   std::vector<double> two_layer_gate_weights;
   std::vector<double> two_layer_gate_radial_coeffs;
@@ -223,6 +223,7 @@ class PairSUS2MTP : public Pair {
   unsigned char *two_layer_gate_mu_cache_valid = nullptr;
   double *two_layer_radial_cache_vals = nullptr;
   double *two_layer_radial_cache_ders = nullptr;
+  std::vector<double> two_layer_gate_body_order_scratch;
   double *static_fixed_gate_basic_cache = nullptr;
   unsigned char *static_fixed_gate_basic_cache_valid = nullptr;
   double *static_fixed_gate_value_cache = nullptr;
@@ -259,6 +260,7 @@ class PairSUS2MTP : public Pair {
 
   bool has_nonzero_two_layer_gate_weights() const;
   bool requires_two_layer_gate_sh() const;
+  int gate_body_order_for_mu(int) const;
   void prepare_two_layer_gate_additive_ratios();
   void compute_two_layer_gate_sh(int, int);
   void compute_zbl(int, int);
@@ -267,9 +269,9 @@ class PairSUS2MTP : public Pair {
   int two_layer_gate_additive_coeff_index(int, int) const;
   double two_layer_gate_additive_coeff(int, int) const;
   bool get_radial_table_info(int, int, double, int &, int &, double &) const;
-  bool calc_gate_additive_table_radial_values(int, double, int, int, int,
+  bool calc_gate_additive_table_radial_values(int, const double *, int, int, int,
                                               double);
-  void calc_pair_radial_values(int, int, double, bool, double = 0.0,
+  void calc_pair_radial_values(int, int, double, bool, const double * = nullptr,
                                bool = false, int = -1, int = -2, int = 0,
                                double = 0.0);
   void accumulate_sh_basic_edge(int, const double *, double, double, bool, int, bool = false);
@@ -286,8 +288,8 @@ class PairSUS2MTP : public Pair {
   void invalidate_static_fixed_gate_main_cache();
   bool static_fixed_gate_main_cache_valid_for_center(int) const;
   void build_static_fixed_gate_main_cache_for_center(int, int, int, int *, const double *);
-  void ensure_two_layer_gate_mu_cache_for_atom(int, int, double);
-  bool apply_static_fixed_gate_main_cache_moments(int, double);
+  void ensure_two_layer_gate_mu_cache_for_atom(int, int, const double *);
+  bool apply_static_fixed_gate_main_cache_moments(int);
   void apply_static_fixed_gate_main_cache_adjoints(int);
   void forward_sh_products();
   void backprop_sh_products();

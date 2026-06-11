@@ -44,7 +44,7 @@ struct SHScalarInfo {
 
 
 
-class MLMTPR : virtual public AnyLocalMLIP
+class MLMTPR : public AnyLocalMLIP
 {
 protected:
 	void MemAlloc();
@@ -200,7 +200,8 @@ protected:
 	void CalcTwoLayerGateWeightedScalarDers(
 		const Neighborhood& nbh,
 		std::vector<Vector3>& gate_scalar_ders,
-		int cache_atom_index = -1);
+		int cache_atom_index = -1,
+		int body_order_filter = 0);
 	void AccumulateTwoLayerGateScalarParamGrad(
 		const Neighborhood& nbh,
 		std::vector<double>& out_grad_accumulator,
@@ -208,7 +209,8 @@ protected:
 		const Vector3* gate_der_weights,
 		int cache_atom_index = -1,
 		const double* gate_moment_tangents = nullptr,
-		double gate_moment_tangent_scale = 1.0);
+		double gate_moment_tangent_scale = 1.0,
+		int body_order_filter = 0);
 	void CalcSHBasisGateDers(const Neighborhood& nbh,
 	                         std::vector<double>& gate_basis_ders);
 	void CalcTwoLayerGateScalarDirectionalDerivatives(
@@ -306,6 +308,7 @@ public:
 		int two_layer_gate_body_order_max_ = 0;
 		bool two_layer_gate_include_one_body_ = false;
 		bool two_layer_gate_shared_radial_ = false;
+		std::string two_layer_gate_mode_ = "mu-body-order";
 			bool two_layer_residual_enabled_ = false;
 			std::string two_layer_gate_scale_mode_ = "legacy";
 			double two_layer_gate_bias_ = 1.0;
@@ -314,6 +317,10 @@ public:
 		int two_layer_residual_eval_stage_ = 0;
 		bool two_layer_residual_skip_outer_param_grad_ = false;
 		std::vector<int> two_layer_gate_scalar_indices_;
+		std::vector<int> two_layer_gate_scalar_body_orders_;
+		std::vector<int> two_layer_gate_body_order_weight_offsets_;
+		std::vector<int> two_layer_gate_body_order_weight_indices_;
+		std::vector<int> two_layer_gate_mu_body_orders_;
 		std::vector<double> two_layer_gate_radial_coeffs_;
 		std::vector<double> two_layer_gate_additive_coeffs_;
 		std::vector<double> two_layer_gate_weights_;
@@ -398,9 +405,18 @@ public:
 	bool RequiresTwoLayerGateEvaluation() const;
 	void PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods);
 	void AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighborhoods& neighborhoods);
-	void AddTwoLayerGateAdjoint(const Neighborhood& nbh, int neighbor_index, double adjoint);
-	double TwoLayerGateNeighborScale(const Neighborhood& nbh, int neighbor_index) const;
-	double TwoLayerGateNeighborResidual(const Neighborhood& nbh, int neighbor_index) const;
+	void AddTwoLayerGateMuAdjoint(const Neighborhood& nbh, int neighbor_index, int mu, double adjoint);
+	double TwoLayerGateNeighborSignal(const Neighborhood& nbh, int neighbor_index, int mu) const;
+	const double* TwoLayerGateNeighborSignals(const Neighborhood& nbh, int neighbor_index) const;
+	int TwoLayerGateMuBodyOrder(int mu) const;
+	int TwoLayerGateWeightBodyOrder(int weight_index) const;
+	void BuildTwoLayerGateBodyOrderBuckets();
+	void AccumulateTwoLayerGateBodyOrderScalarDers(
+		const Neighborhood& nbh,
+		int body_order,
+		double adjoint,
+		std::vector<Vector3>& gate_scalar_ders,
+		int cache_atom_index = -1);
 	void InvalidateTwoLayerGateTanhMuCache();
 	enum TwoLayerGateMuBufferMask {
 		kGateMuBufferAdditive = 1 << 0,
@@ -416,7 +432,7 @@ public:
 	void PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 	                                          double center_type_coeff,
 	                                          double outer_type_coeff,
-	                                          double gate_residual,
+	                                          const double* gate_signal_by_mu,
 	                                          int neighbor_atom_index = -1,
 	                                          int buffer_mask = kGateMuBufferAll);
 //	void CalcEFS(Configuration& cfg) override
