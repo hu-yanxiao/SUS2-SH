@@ -34,10 +34,10 @@ script: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/bsub_gate_3000_additive_mu_
 log: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/mu_body_gate_3000_additive.log
 ```
 
-Final implementation hash:
+Implementation commit hash:
 
 ```text
-TBD
+264bf4a
 ```
 
 ## Formula
