@@ -43,6 +43,12 @@ log: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/mu_body_double_gate_3000_addit
 status at submission: PEND
 ```
 
+Double-site implementation commit hash:
+
+```text
+e9de9dd
+```
+
 ## Formula
 
 The gate signal is mu-dependent. For a channel \(\mu=(l,k)\), the scalar bucket is
