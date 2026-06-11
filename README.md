@@ -138,11 +138,12 @@ Common training options:
 
 ## Gate Model Training CLI
 
-The current production gate form is the bounded tanh additive two-layer SH gate.
-The first layer computes a site residual from selected low-body SH scalars:
+The current production gate form is the bounded tanh additive mu-body-order
+two-layer SH gate. The first layer computes a mu-dependent site residual from
+selected exact-body SH scalars:
 
 ```text
-f_i = sum_q w_q B_i^gate,q
+h_i,mu = sum_{q: body_order(B_i^gate,q) = k_mu + 1} w_q B_i^gate,q
 ```
 
 The main-layer basic moment is then evaluated as
@@ -150,13 +151,15 @@ The main-layer basic moment is then evaluated as
 ```text
 M_i,mu,m^main =
   sum_j R_ZiZj,mu^main(r_ij) Y_lm(rhat_ij)
-        [1 + A tanh(a_Zj,mu f_j)]
+        [1 + A tanh(a_Zj,mu h_j,mu)]
 ```
 
 `A` is controlled by `--two-layer-gate-tanh-amplitude` and defaults to `0.8`.
 The additive coefficients `a_Z,mu` are initialized to `1.0`. With
 `--two-layer-gate-shared-radial`, the gate residual layer uses its own trained
-radial contraction coefficients for the first-layer `B_i^gate`.
+radial contraction coefficients for the first-layer `B_i^gate`. In code `k_mu`
+is zero-based, so the exact scalar body order is `k_internal + 2`; therefore
+`--two-layer-gate` requires `--body-order >= --k-max + 1`.
 
 Initialize and train a gate model directly:
 
@@ -172,7 +175,6 @@ bin/mlp-sus2 train train.cfg --init-sh \
   --radial-basis-size=10 \
   --radial-basis-type=RBLaguerre_log1p \
   --two-layer-gate \
-  --two-layer-gate-body-order=3 \
   --two-layer-gate-shared-radial \
   --two-layer-gate-tanh-amplitude=0.8 \
   --energy-weight=1 \
@@ -190,7 +192,6 @@ Continue a trained or partially trained plain SH model as a gate model:
 ```bash
 bin/mlp-sus2 train plain_sh.mtp train.cfg \
   --two-layer-gate \
-  --two-layer-gate-body-order=3 \
   --two-layer-gate-shared-radial \
   --curr-pot-name=current_gate.mtp \
   --trained-pot-name=gate.mtp
@@ -201,7 +202,7 @@ Gate-specific options:
 | Option | Meaning |
 | --- | --- |
 | `--two-layer-gate` | Add two-layer gate metadata to a new SH model, or upgrade a plain SH model before continuing training. |
-| `--two-layer-gate-body-order=<int>` | Maximum body order used by the first-layer gate residual scalars, default `3`; must be between `2` and the main SH body order. |
+| `--two-layer-gate-body-order=<int>` | Not supported in mu-body-order mode; passing it explicitly is an error. The gate scalar body orders are fixed by `k_internal + 2`. |
 | `--two-layer-gate-shared-radial` | Train an independent first-layer gate radial contraction table instead of reusing the main radial coefficients. |
 | `--two-layer-gate-tanh-amplitude=<double>` | Bounded additive amplitude `A` in `[1 + A tanh(a f)]`; default `0.8`, accepted range `[0,1]`. |
 | `--inline-sh-model=<path>` | In `train train.cfg --init-sh`, create this file if missing or continue from it if it already exists. |

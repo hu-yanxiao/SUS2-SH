@@ -120,6 +120,51 @@ CPU LAMMPS pair source compiled as a standalone object on the server against
 Kokkos device pair style rejects mu-body-order gate models at settings time.
 ```
 
+## Final Server Sync And Speed Decision
+
+Final synchronized server binary:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/bin/mlp-sus2
+```
+
+Final binary SHA-256:
+
+```text
+dbac7b10cc0c15a69f043b85364f2ac61cf970ec1ffee31b334bd2a694f6e64c
+```
+
+Final build and smoke evidence on the server:
+
+```text
+BUILD_RC=0
+SMOKE_RC=0
+```
+
+The accepted optimization keeps the exact-body mu math but merges per-body-order
+gate adjoints once per atom instead of rerunning the scalar reverse path once
+for every body-order bucket. This preserves the existing tanh cache, edge
+primitive cache, site-derivative cache, and shared-radial paths.
+
+500x55 profile directory:
+
+```text
+/work/phy-weigw/hyx/200w/5.31-new-44421/codex_mu_body_gate_opt1_speed_20260611_180753
+```
+
+Training-speed decision at matched profile settings:
+
+| Version | Gradient total | Forward total | Decision |
+| --- | ---: | ---: | --- |
+| legacy scalar gate | `71.738 ms` | `61.323 ms` | old reference |
+| accepted exact-body opt1 | `76.593 ms` | `62.535 ms` | synchronized |
+| rejected final clear/cache candidate | `79.046 ms` | `62.561 ms` | rejected |
+
+The final clear/cache candidate was stopped after collecting profile data
+because it remained slower at `calls=570`. Its LSF job `3792234` therefore
+ended with MPI interrupt text from the intentional stop, not from a correctness
+failure.
+
 ## Verification Checklist
 
 Local serial checks:

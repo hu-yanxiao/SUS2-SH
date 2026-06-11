@@ -167,10 +167,11 @@ protected:
 			int two_layer_gate_tanh_mu_cache_atom_count_ = 0;
 			int two_layer_gate_tanh_mu_cache_radial_func_count_ = 0;
 			std::vector<double> sh_gate_moment_ders_;
-	std::vector<double> sh_gate_basis_ders_;
-	std::vector<double> sh_gate_scalar_values_;
-	std::vector<double> sh_gate_linear_adjoints_;
-	std::vector<Vector3> sh_gate_component_ders_;
+		std::vector<double> sh_gate_basis_ders_;
+		std::vector<double> sh_gate_scalar_values_;
+		std::vector<double> sh_gate_linear_adjoints_;
+		std::vector<double> sh_gate_energy_ders_wrt_moments_;
+		std::vector<Vector3> sh_gate_component_ders_;
 	std::vector<int> basic_total_degree_cache_;
 	std::vector<int> basic_scaling_block_cache_;
 	std::vector<int> basic_radial_eval_block_cache_;
@@ -202,6 +203,11 @@ protected:
 		std::vector<Vector3>& gate_scalar_ders,
 		int cache_atom_index = -1,
 		int body_order_filter = 0);
+	void CalcTwoLayerGateWeightedScalarDersForBodyOrderAdjoints(
+		const Neighborhood& nbh,
+		std::vector<Vector3>& gate_scalar_ders,
+		int cache_atom_index,
+		const double* body_order_adjoints);
 	void AccumulateTwoLayerGateScalarParamGrad(
 		const Neighborhood& nbh,
 		std::vector<double>& out_grad_accumulator,
@@ -211,6 +217,14 @@ protected:
 		const double* gate_moment_tangents = nullptr,
 		double gate_moment_tangent_scale = 1.0,
 		int body_order_filter = 0);
+	void AccumulateTwoLayerGateScalarParamGradForBodyOrderAdjoints(
+		const Neighborhood& nbh,
+		std::vector<double>& out_grad_accumulator,
+		const double* body_order_gate_adjoints,
+		const Vector3* gate_der_weights,
+		int cache_atom_index,
+		const double* gate_moment_tangents,
+		const double* body_order_energy_adjoints);
 	void CalcSHBasisGateDers(const Neighborhood& nbh,
 	                         std::vector<double>& gate_basis_ders);
 	void CalcTwoLayerGateScalarDirectionalDerivatives(

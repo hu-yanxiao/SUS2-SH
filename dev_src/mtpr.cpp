@@ -2707,21 +2707,15 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 		if (!has_adjoint)
 			continue;
 		const Neighborhood& nbh = neighborhoods[ind];
-		for (int body_order = 2; body_order <= two_layer_gate_body_order_max_; ++body_order) {
-			const double gate_adjoint = body_order_adjoints[body_order];
-			if (gate_adjoint == 0.0)
-				continue;
-			CalcTwoLayerGateWeightedScalarDers(
-				nbh, sh_gate_component_ders_, ind, body_order);
-			for (int j = 0; j < nbh.count; ++j) {
-				Vector3 gate_der = sh_gate_component_ders_[j];
-				gate_der *= gate_adjoint;
-				cfg.force(ind) += gate_der;
-				cfg.force(nbh.inds[j]) -= gate_der;
-				for (int a = 0; a < 3; ++a)
-					for (int b = 0; b < 3; ++b)
-						cfg.stresses[a][b] -= gate_der[a] * nbh.vecs[j][b];
-			}
+		CalcTwoLayerGateWeightedScalarDersForBodyOrderAdjoints(
+			nbh, sh_gate_component_ders_, ind, body_order_adjoints.data());
+		for (int j = 0; j < nbh.count; ++j) {
+			const Vector3& gate_der = sh_gate_component_ders_[j];
+			cfg.force(ind) += gate_der;
+			cfg.force(nbh.inds[j]) -= gate_der;
+			for (int a = 0; a < 3; ++a)
+				for (int b = 0; b < 3; ++b)
+					cfg.stresses[a][b] -= gate_der[a] * nbh.vecs[j][b];
 		}
 	}
 
@@ -3387,13 +3381,16 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 						energy_gate_adjoints_by_mu[mu];
 			}
 			const Neighborhood& nbh = neighborhoods[ind];
+			const Vector3* gate_der_weights_ptr = nullptr;
+			bool has_energy_gate_adjoint = false;
 			for (int body_order = 2;
 			     body_order <= two_layer_gate_body_order_max_;
-			     ++body_order) {
-			const double gate_adjoint = body_order_adjoints[body_order];
-			const double energy_gate_adjoint = body_order_energy_adjoints[body_order];
-			const Vector3* gate_der_weights_ptr = nullptr;
-			if (energy_gate_adjoint != 0.0) {
+			     ++body_order)
+				if (body_order_energy_adjoints[body_order] != 0.0) {
+					has_energy_gate_adjoint = true;
+					break;
+				}
+			if (has_energy_gate_adjoint) {
 				gate_der_weights.resize(nbh.count);
 				FillWithZero(gate_der_weights);
 				bool has_der_weight = false;
@@ -3407,15 +3404,12 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 							gate_der_weights[j][a] +=
 								str_weights[a][b] * nbh.vecs[j][b];
 				for (int j = 0; j < nbh.count; ++j) {
-					gate_der_weights[j] *= energy_gate_adjoint;
 					if (gate_der_weights[j].NormSq() != 0.0)
 						has_der_weight = true;
 				}
 				if (has_der_weight)
 					gate_der_weights_ptr = gate_der_weights.data();
 			}
-			if (gate_adjoint == 0.0 && gate_der_weights_ptr == nullptr)
-				continue;
 			const double* gate_moment_tangents_ptr = nullptr;
 			if (gate_der_weights_ptr != nullptr
 			    && ind < static_cast<int>(
@@ -3425,15 +3419,14 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 					gate_directional_moment_tangent_cache.data()
 					+ static_cast<size_t>(ind) * alpha_moments_count;
 			}
-			AccumulateTwoLayerGateScalarParamGrad(nbh,
-			                                      out_grads_accumulator,
-			                                      gate_adjoint,
-			                                      gate_der_weights_ptr,
-			                                      ind,
-			                                      gate_moment_tangents_ptr,
-			                                      energy_gate_adjoint,
-			                                      body_order);
-			}
+			AccumulateTwoLayerGateScalarParamGradForBodyOrderAdjoints(
+				nbh,
+				out_grads_accumulator,
+				body_order_adjoints.data(),
+				gate_der_weights_ptr,
+				ind,
+				gate_moment_tangents_ptr,
+				body_order_energy_adjoints.data());
 		}
 	}
 	const double profile_after_scalar_param =
@@ -3539,29 +3532,23 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 	}
 
 	if (HasNonzeroTwoLayerGateWeights()) {
+		std::vector<double> body_order_adjoints(
+			two_layer_gate_body_order_max_ + 1, 0.0);
 		for (int ind = 0; ind < cfg.size(); ++ind) {
-			std::vector<double> body_order_adjoints(
-				two_layer_gate_body_order_max_ + 1, 0.0);
+			std::fill(body_order_adjoints.begin(), body_order_adjoints.end(), 0.0);
 			const double* gate_adjoints_by_mu = two_layer_gate_adjoints_.data()
 				+ static_cast<size_t>(ind) * radial_func_count;
 			for (int mu = 0; mu < radial_func_count; ++mu)
 				body_order_adjoints[two_layer_gate_mu_body_orders_[mu]] +=
 					gate_adjoints_by_mu[mu];
-			for (int body_order = 2;
-			     body_order <= two_layer_gate_body_order_max_;
-			     ++body_order) {
-				const double gate_adjoint = body_order_adjoints[body_order];
-				if (gate_adjoint == 0.0)
-					continue;
-				AccumulateTwoLayerGateScalarParamGrad(neighborhoods[ind],
-				                                      out_grads_accumulator,
-				                                      gate_adjoint,
-				                                      nullptr,
-				                                      ind,
-				                                      nullptr,
-				                                      0.0,
-				                                      body_order);
-			}
+			AccumulateTwoLayerGateScalarParamGradForBodyOrderAdjoints(
+				neighborhoods[ind],
+				out_grads_accumulator,
+				body_order_adjoints.data(),
+				nullptr,
+				ind,
+				nullptr,
+				nullptr);
 		}
 	}
 
