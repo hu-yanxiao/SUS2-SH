@@ -215,10 +215,12 @@ class PairSUS2MTP : public Pair {
   double *coord_powers_z;   // Buffer used for powers of dz
   double *radial_vals;      // Buffer used for radial basis function values for each mu
   double *radial_ders;      // Buffer used for radial basis function derivatives for each mu
-	  double *two_layer_raw_basic_vals = nullptr;
-	  double *two_layer_center_raw_basic_vals = nullptr;
-	  double *two_layer_gate_residual_radial_vals = nullptr;
-	  double *two_layer_gate_center_residual_radial_vals = nullptr;
+  double *two_layer_raw_basic_vals = nullptr;
+  double *two_layer_center_raw_basic_vals = nullptr;
+  double *two_layer_gate_residual_radial_vals = nullptr;
+  double *two_layer_gate_center_residual_radial_vals = nullptr;
+  double *two_layer_gate_adjoint_scratch = nullptr;
+  double *two_layer_gate_center_adjoint_scratch = nullptr;
   double *two_layer_gate_values = nullptr;
   double *two_layer_gate_adjoints = nullptr;
   double *two_layer_gate_multiplier_mu_cache = nullptr;

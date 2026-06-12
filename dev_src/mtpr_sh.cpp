@@ -678,6 +678,10 @@ void MLMTPR::InvalidateTwoLayerGateTanhMuCache()
 	if (!two_layer_gate_tanh_mu_cache_valid_.empty())
 		std::fill(two_layer_gate_tanh_mu_cache_valid_.begin(),
 		          two_layer_gate_tanh_mu_cache_valid_.end(), 0);
+	two_layer_gate_center_mu_buffer_atom_index_ = -1;
+	two_layer_gate_center_mu_buffer_atom_type_ = -1;
+	two_layer_gate_center_mu_buffer_mask_ = 0;
+	two_layer_gate_center_mu_buffer_signal_ = nullptr;
 }
 
 void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
@@ -745,6 +749,9 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 		need_gate_outer_param ? two_layer_gate_gate_outer_param_mu_buffer_.data() : nullptr;
 	double* gate_additive_param_by_mu =
 		need_gate_additive_param ? two_layer_gate_gate_additive_param_mu_buffer_.data() : nullptr;
+	const bool need_gate_derivatives =
+		need_additive || need_additive_param || need_gate_residual_param
+		|| need_gate_outer_param || need_gate_additive_param;
 	if (!two_layer_gate_enabled_) {
 		const double pair_type_scale = center_type_coeff * outer_type_coeff;
 		for (int mu = 0; mu < radial_func_count; ++mu) {
@@ -825,7 +832,9 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 			: (fill_tanh_cache
 				? (tanh_cache[mu] = std::tanh(arg))
 				: tanh_cache[mu]);
-		const double sech2 = 1.0 - tanh_arg * tanh_arg;
+		const double sech2 = need_gate_derivatives
+			? 1.0 - tanh_arg * tanh_arg
+			: 0.0;
 		const double multiplier = 1.0 + two_layer_gate_tanh_amplitude_ * tanh_arg;
 		if (need_additive) {
 			additive_by_mu[mu] =
@@ -907,6 +916,9 @@ void MLMTPR::PrepareTwoLayerGateAtomMuBuffers(int atom_type,
 		? two_layer_gate_center_residual_mu_buffer_.data() : nullptr;
 	double* gate_additive_param_by_mu = need_gate_additive_param
 		? two_layer_gate_center_gate_additive_param_mu_buffer_.data() : nullptr;
+	const bool need_gate_derivatives =
+		need_additive || need_additive_param || need_gate_residual_param
+		|| need_gate_additive_param;
 
 	if (!two_layer_gate_enabled_) {
 		for (int mu = 0; mu < radial_func_count; ++mu) {
@@ -981,7 +993,9 @@ void MLMTPR::PrepareTwoLayerGateAtomMuBuffers(int atom_type,
 			: (fill_tanh_cache
 				? (tanh_cache[mu] = std::tanh(arg))
 				: tanh_cache[mu]);
-		const double sech2 = 1.0 - tanh_arg * tanh_arg;
+		const double sech2 = need_gate_derivatives
+			? 1.0 - tanh_arg * tanh_arg
+			: 0.0;
 		if (need_multiplier)
 			multiplier_by_mu[mu] =
 				1.0 + two_layer_gate_tanh_amplitude_ * tanh_arg;
@@ -1020,13 +1034,6 @@ void MLMTPR::PrepareTwoLayerGatePairMuBuffers(int type_center,
 	if (!TwoLayerGateUsesCenterGate())
 		return;
 
-	const int center_mask =
-		kGateMuBufferMultiplier | kGateMuBufferAdditive
-		| kGateMuBufferAdditiveParam | kGateMuBufferGateResidualParam
-		| kGateMuBufferGateAdditiveParam;
-	PrepareTwoLayerGateAtomMuBuffers(
-		type_center, center_gate_signal_by_mu, center_atom_index, center_mask);
-
 	const bool need_additive =
 		(buffer_mask & kGateMuBufferAdditive) != 0;
 	const bool need_type_scale =
@@ -1043,8 +1050,31 @@ void MLMTPR::PrepareTwoLayerGatePairMuBuffers(int type_center,
 		(buffer_mask & kGateMuBufferGateOuterParam) != 0;
 	const bool need_gate_additive_param =
 		(buffer_mask & kGateMuBufferGateAdditiveParam) != 0;
+	int center_mask = kGateMuBufferMultiplier;
+	if (need_additive)
+		center_mask |= kGateMuBufferAdditive;
+	if (need_additive_param)
+		center_mask |= kGateMuBufferAdditiveParam;
+	if (need_gate_residual_param)
+		center_mask |= kGateMuBufferGateResidualParam;
+	if (need_gate_additive_param)
+		center_mask |= kGateMuBufferGateAdditiveParam;
+	const bool center_cache_hit =
+		two_layer_gate_center_mu_buffer_atom_index_ == center_atom_index
+		&& two_layer_gate_center_mu_buffer_atom_type_ == type_center
+		&& two_layer_gate_center_mu_buffer_signal_ == center_gate_signal_by_mu
+		&& (two_layer_gate_center_mu_buffer_mask_ & center_mask) == center_mask;
+	if (!center_cache_hit) {
+		PrepareTwoLayerGateAtomMuBuffers(
+			type_center, center_gate_signal_by_mu, center_atom_index, center_mask);
+		two_layer_gate_center_mu_buffer_atom_index_ = center_atom_index;
+		two_layer_gate_center_mu_buffer_atom_type_ = type_center;
+		two_layer_gate_center_mu_buffer_mask_ = center_mask;
+		two_layer_gate_center_mu_buffer_signal_ = center_gate_signal_by_mu;
+	}
 
-	if (static_cast<int>(two_layer_gate_neighbor_multiplier_mu_buffer_.size())
+	if (need_multiplier
+	    && static_cast<int>(two_layer_gate_neighbor_multiplier_mu_buffer_.size())
 	    != radial_func_count)
 		two_layer_gate_neighbor_multiplier_mu_buffer_.resize(radial_func_count);
 	if (need_additive
@@ -1064,16 +1094,6 @@ void MLMTPR::PrepareTwoLayerGatePairMuBuffers(int type_center,
 			two_layer_gate_neighbor_multiplier_mu_buffer_[mu] =
 				two_layer_gate_multiplier_mu_buffer_[mu];
 			two_layer_gate_multiplier_mu_buffer_[mu] *= center_mult;
-		} else {
-			const double neighbor_signal = neighbor_gate_signal_by_mu == nullptr
-				? 0.0 : neighbor_gate_signal_by_mu[mu];
-			const double additive_coeff =
-				TwoLayerGateAdditiveCoeff(type_outer, mu);
-			const double tanh_arg =
-				neighbor_signal == 0.0 || additive_coeff == 0.0
-					? 0.0 : std::tanh(additive_coeff * neighbor_signal);
-			two_layer_gate_neighbor_multiplier_mu_buffer_[mu] =
-				1.0 + two_layer_gate_tanh_amplitude_ * tanh_arg;
 		}
 		if (need_additive) {
 			two_layer_gate_neighbor_additive_mu_buffer_[mu] =

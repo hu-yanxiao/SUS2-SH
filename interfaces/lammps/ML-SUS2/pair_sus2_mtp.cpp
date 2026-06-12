@@ -498,6 +498,8 @@ PairSUS2MTP::~PairSUS2MTP()
     memory->destroy(two_layer_center_raw_basic_vals);
     memory->destroy(two_layer_gate_residual_radial_vals);
     memory->destroy(two_layer_gate_center_residual_radial_vals);
+    memory->destroy(two_layer_gate_adjoint_scratch);
+    memory->destroy(two_layer_gate_center_adjoint_scratch);
     memory->destroy(two_layer_gate_values);
     memory->destroy(two_layer_gate_adjoints);
     memory->destroy(two_layer_gate_multiplier_mu_cache);
@@ -994,7 +996,9 @@ void PairSUS2MTP::apply_static_fixed_gate_main_cache_adjoints(int i)
     const double *__restrict base =
         static_fixed_gate_main_base_basic.data() +
         edge_index * alpha_index_basic_count;
-    std::vector<double> gate_adjoint_by_mu(radial_func_count, 0.0);
+    double *__restrict gate_adjoint_by_mu = two_layer_gate_adjoint_scratch;
+    std::fill(gate_adjoint_by_mu,
+              gate_adjoint_by_mu + radial_func_count, 0.0);
     if (sh_basic_mu_grouped) {
       for (int mu = 0; mu < radial_func_count; mu++) {
         const int begin = sh_basic_mu_offsets[mu];
@@ -1939,13 +1943,19 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       if (use_static_fixed_gate_main_cache &&
           is_static_fixed_type(two_layer_gate_edge_types[active_idx]))
         continue;
-	      double fx = 0.0, fy = 0.0, fz = 0.0;
-	      std::vector<double> gate_adjoint_by_mu(radial_func_count, 0.0);
-	      std::vector<double> center_gate_adjoint_by_mu(radial_func_count, 0.0);
-	      const size_t jac_offset = static_cast<size_t>(active_local) * alpha_index_basic_count;
-	      const double *__restrict jac_x = moment_jacobian_x + jac_offset;
-	      const double *__restrict jac_y = moment_jacobian_y + jac_offset;
-	      const double *__restrict jac_z = moment_jacobian_z + jac_offset;
+      double fx = 0.0, fy = 0.0, fz = 0.0;
+      double *__restrict gate_adjoint_by_mu = two_layer_gate_adjoint_scratch;
+      double *__restrict center_gate_adjoint_by_mu =
+          two_layer_gate_center_adjoint_scratch;
+      std::fill(gate_adjoint_by_mu,
+                gate_adjoint_by_mu + radial_func_count, 0.0);
+      if (two_layer_gate_center_enabled)
+        std::fill(center_gate_adjoint_by_mu,
+                  center_gate_adjoint_by_mu + radial_func_count, 0.0);
+      const size_t jac_offset = static_cast<size_t>(active_local) * alpha_index_basic_count;
+      const double *__restrict jac_x = moment_jacobian_x + jac_offset;
+      const double *__restrict jac_y = moment_jacobian_y + jac_offset;
+      const double *__restrict jac_z = moment_jacobian_z + jac_offset;
 	      const double *__restrict raw = two_layer_raw_basic_vals + jac_offset;
 	      const double *__restrict center_raw =
 	          two_layer_gate_center_enabled
@@ -4197,10 +4207,14 @@ access to the buffer size that is not provided in PFR.
   // Temporary arrays are now created locally in compute() function
   memory->create(radial_vals, radial_func_count, "radial_vals");
   memory->create(radial_ders, radial_func_count, "radial_ders");
-	  memory->create(two_layer_gate_residual_radial_vals, radial_func_count,
-	                 "two_layer_gate_residual_radial_vals");
-	  memory->create(two_layer_gate_center_residual_radial_vals, radial_func_count,
-	                 "two_layer_gate_center_residual_radial_vals");
+  memory->create(two_layer_gate_residual_radial_vals, radial_func_count,
+                 "two_layer_gate_residual_radial_vals");
+  memory->create(two_layer_gate_center_residual_radial_vals, radial_func_count,
+                 "two_layer_gate_center_residual_radial_vals");
+  memory->create(two_layer_gate_adjoint_scratch, radial_func_count,
+                 "two_layer_gate_adjoint_scratch");
+  memory->create(two_layer_gate_center_adjoint_scratch, radial_func_count,
+                 "two_layer_gate_center_adjoint_scratch");
 
 
   // Now allocate arrays that depend on broadcasted values

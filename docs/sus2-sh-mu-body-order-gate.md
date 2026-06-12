@@ -142,8 +142,8 @@ body orders `2,3,4,5`, respectively.
 Interface verification:
 
 ```text
-CPU LAMMPS pair source compiled as a standalone object on the server against
-/work/phy-weigw/apps/lammps-10Dec2025/src headers.
+CPU LAMMPS pair source built into the independent branch LAMMPS work tree:
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps
 Kokkos device pair style rejects mu-body-order gate models at settings time.
 ```
 
@@ -158,19 +158,20 @@ Final synchronized server binary:
 Final binary SHA-256:
 
 ```text
-64231d45542b9c6bdb4eed5df169c3da3b3c6014d8931e9cd5da4112c204a342
+86eb63f7d3a8087e335ebe0d78e7681c1363649107ba63cd67f32b568e87ec6c
 ```
 
 Independent CPU LAMMPS binary for this branch:
 
 ```text
 /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/bin/lmp.sus2_sh_cpu_avx2_mu_body_gate_opt_20260612
 ```
 
 LAMMPS binary SHA-256:
 
 ```text
-da8f3365775d7adeab3c5a4adfc877963f4ef8542b908e4f1099cf1d43a51c5b
+244007cfa6e5cb06d61a9c8f3d593dc20edc1fd9daca368453e9763b8c808d93
 ```
 
 Final build and smoke evidence on the server:
@@ -203,6 +204,48 @@ The final clear/cache candidate was stopped after collecting profile data
 because it remained slower at `calls=570`. Its LSF job `3792234` therefore
 ended with MPI interrupt text from the intentional stop, not from a correctness
 failure.
+
+## Double-Site Optimization Update 2026-06-12
+
+The final double-site optimization keeps the existing exact-body gate math and
+the existing neighbor-site fast paths. It adds a small center-gate scratch cache
+for repeated `PrepareTwoLayerGatePairMuBuffers()` calls with the same center
+atom and signal pointer, avoids computing `sech^2` when no derivative buffer is
+requested, and avoids materializing the neighbor multiplier buffer unless the
+caller asks for it. The LAMMPS CPU pair style also reuses per-pair mu adjoint
+scratch arrays instead of allocating `std::vector<double>` inside the edge
+adjoint loops.
+
+Matched 500x55 profile directory:
+
+```text
+/work/phy-weigw/hyx/200w/5.31-new-44421/codex_mu_body_gate_double_opt_profile_20260612_082023
+```
+
+Final matched profile:
+
+| Mode | Runtime | Linear total | Gradient total | Forward total |
+| --- | ---: | ---: | ---: | ---: |
+| neighbor-site | `478 s` | `428.333 ms` | `90.000 ms` | `68.500 ms` |
+| double-site | `485 s` | `423.258 ms` | `96.217 ms` | `69.497 ms` |
+
+The double-site runtime overhead at the matched profile settings is therefore
+`485 / 478 = 1.015x`. Before this update the same comparison was `501 / 478 =
+1.048x`, so the measured double-site overhead dropped from about `4.8%` to
+about `1.5%`.
+
+Fresh server verification after this optimization:
+
+```text
+mlp-sus2 build: PASS, SHA-256 86eb63f7d3a8087e335ebe0d78e7681c1363649107ba63cd67f32b568e87ec6c
+sh_two_layer_gate_mu_body_order_check.sh: PASS
+sh_two_layer_gate_double_mode_check.sh: PASS
+sh_two_layer_gate_loss_gradient_check.sh: PASS
+sh_two_layer_gate_force_fd_check.sh: PASS
+LAMMPS neighbor additive smoke: PASS, max_abs=8.694700e-05
+LAMMPS double additive smoke: PASS, max_abs=8.695400e-05
+LAMMPS 1-rank vs 2-rank: PASS, max_abs=0
+```
 
 ## Verification Checklist
 
