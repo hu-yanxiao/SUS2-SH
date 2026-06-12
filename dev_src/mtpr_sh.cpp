@@ -5257,6 +5257,8 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 						two_layer_gate_center_additive_param_mu_buffer_.data();
 					const double* center_gate_residual_by_mu =
 						two_layer_gate_center_residual_mu_buffer_.data();
+					const double* center_gate_gate_additive_param_by_mu =
+						two_layer_gate_center_gate_additive_param_mu_buffer_.data();
 					std::vector<double> gate_adjoint_by_mu(radial_func_count, 0.0);
 					std::vector<double> center_gate_adjoint_by_mu(radial_func_count, 0.0);
 			double* radial_coeff_value_accum = grad_radial_coeff_value_accum_.data();
@@ -5341,9 +5343,17 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 					if (value_accum != 0.0)
 						gate_adjoint_by_mu[mu] +=
 							center_type_coeff * gate_df * dot_val * value_accum;
+					if (value_accum != 0.0 && TwoLayerGateUsesCenterGate())
+						center_gate_adjoint_by_mu[mu] +=
+							center_type_coeff * center_gate_df * dot_val * value_accum;
 					if (direct_accum != 0.0)
 						gate_adjoint_by_mu[mu] +=
 							center_type_coeff * gate_df_df * dot_val * direct_accum;
+					if (direct_accum != 0.0 && TwoLayerGateUsesCenterGate())
+						center_gate_adjoint_by_mu[mu] +=
+							center_type_coeff * neighbor_gate_additive_by_mu[mu]
+							* center_gate_additive_by_mu[mu]
+							* dot_val * direct_accum;
 					if (center_direct_accum != 0.0) {
 						gate_adjoint_by_mu[mu] +=
 							center_type_coeff * neighbor_gate_additive_by_mu[mu]
@@ -5360,6 +5370,17 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 					if (two_layer_gate_enabled_ && additive_accum != 0.0)
 						out_grad_accumulator[TwoLayerGateAdditiveCoeffIndex(type_outer, mu)] +=
 							dot_val * additive_accum;
+					if (value_accum != 0.0 && TwoLayerGateUsesCenterGate())
+						out_grad_accumulator[TwoLayerGateAdditiveCoeffIndex(type_central, mu)] +=
+							center_type_coeff * outer_type_coeff
+							* neighbor_gate_multiplier_by_mu[mu]
+							* center_gate_additive_param_by_mu[mu]
+							* dot_val * value_accum;
+					if (direct_accum != 0.0 && TwoLayerGateUsesCenterGate())
+						out_grad_accumulator[TwoLayerGateAdditiveCoeffIndex(type_central, mu)] +=
+							center_type_coeff * neighbor_gate_additive_by_mu[mu]
+							* center_gate_additive_param_by_mu[mu]
+							* dot_val * direct_accum;
 					if (center_direct_accum != 0.0) {
 						out_grad_accumulator[TwoLayerGateAdditiveCoeffIndex(type_outer, mu)] +=
 							center_type_coeff * neighbor_gate_additive_param_by_mu[mu]
@@ -5368,7 +5389,7 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 						out_grad_accumulator[TwoLayerGateAdditiveCoeffIndex(type_central, mu)] +=
 							center_type_coeff * outer_type_coeff
 							* neighbor_gate_multiplier_by_mu[mu]
-							* center_gate_additive_param_by_mu[mu]
+							* center_gate_gate_additive_param_by_mu[mu]
 							* dot_val * center_direct_accum;
 					}
 					const double sigma_accum =
