@@ -345,7 +345,7 @@ public:
 		int two_layer_gate_body_order_max_ = 0;
 		bool two_layer_gate_include_one_body_ = false;
 			bool two_layer_gate_shared_radial_ = false;
-			std::string two_layer_gate_mode_ = "mu-body-order";
+			std::string two_layer_gate_mode_ = "mu-body-linear-combo";
 			std::string two_layer_gate_site_mode_ = "neighbor";
 				bool two_layer_residual_enabled_ = false;
 			std::string two_layer_gate_scale_mode_ = "legacy";
@@ -362,9 +362,11 @@ public:
 		std::vector<double> two_layer_gate_radial_coeffs_;
 		std::vector<double> two_layer_gate_additive_coeffs_;
 		std::vector<double> two_layer_gate_weights_;
+		std::vector<double> two_layer_gate_body_mix_weights_;
 		std::vector<double> two_layer_residual_e0_coeffs_;
 			std::vector<double> two_layer_gate_values_;
 			std::vector<double> two_layer_gate_scalar_values_cache_;
+			std::vector<double> two_layer_gate_body_values_cache_;
 			std::vector<double> two_layer_gate_moment_values_cache_;
 			std::vector<double> two_layer_final_moment_values_cache_;
 			std::vector<double> two_layer_final_moment_ders_cache_;
@@ -545,9 +547,12 @@ public:
 		int TwoLayerGateRadialCoeffOffset() const;
 		int TwoLayerGateAdditiveCoeffCount() const;
 		int TwoLayerGateAdditiveCoeffOffset() const;
+		int TwoLayerGateBodyOrderCount() const;
 		int TwoLayerGateScalarCount() const;
 		int TwoLayerGateWeightCount() const;
 		int TwoLayerGateWeightOffset() const;
+		int TwoLayerGateBodyMixWeightCount() const;
+		int TwoLayerGateBodyMixWeightOffset() const;
 		int TwoLayerResidualE0CoeffCount() const;
 		int TwoLayerResidualE0CoeffOffset() const;
 		int LinearCoeffOffset() const;
@@ -557,9 +562,18 @@ public:
 		double TwoLayerGateRadialCoeff(int mu, int xi) const;
 		int TwoLayerGateAdditiveCoeffIndex(int type_outer, int mu) const;
 		double TwoLayerGateAdditiveCoeff(int type_outer, int mu) const;
+		int TwoLayerGateWeightIndex(int scalar_weight_index) const;
 		int TwoLayerGateWeightIndex(int mu, int scalar_weight_index) const;
+		int TwoLayerGateBodyMixWeightIndex(int mu, int body_order) const;
+		double TwoLayerGateScalarWeight(int scalar_weight_index) const;
 		double TwoLayerGateWeight(int mu, int scalar_weight_index) const;
 		double TwoLayerGateWeight(int weight_index) const;
+		double TwoLayerGateBodyMixWeight(int mu, int body_order) const;
+		double TwoLayerGateBodyMixWeight(int weight_index) const;
+		void ComputeTwoLayerGateBodySignals(const double* scalar_values,
+		                                    double* body_values) const;
+		void ComputeTwoLayerGateMuSignals(const double* body_values,
+		                                  double* mu_values) const;
 		double TwoLayerResidualE0Coeff(int scalar_index) const;
 		void InitializeTwoLayerGateRadialCoeffsFromBase();
 		void InitializeTwoLayerGateAdditiveCoeffs(double value = 1.0);
@@ -606,6 +620,7 @@ public:
 				const int gate_radial_count = TwoLayerGateRadialCoeffCount();
 				const int gate_additive_count = TwoLayerGateAdditiveCoeffCount();
 				const int gate_weight_count = TwoLayerGateWeightCount();
+				const int gate_body_mix_weight_count = TwoLayerGateBodyMixWeightCount();
 					const int e0_count = TwoLayerResidualE0CoeffCount();
 					const int linear_size = LinearCoeffCount();
 					std::vector<double> old_coeffs = regression_coeffs;
@@ -613,10 +628,11 @@ public:
 						ERROR("DistributeCoeffs found an inconsistent nonlinear coefficient block");
 					const int new_gate_additive_offset = base_nonlinear_size + gate_radial_count;
 					const int new_gate_offset = new_gate_additive_offset + gate_additive_count;
+					const int new_gate_body_mix_offset = new_gate_offset + gate_weight_count;
 					const bool old_coeffs_have_additive_layout =
 						gate_additive_count > 0
 						&& static_cast<int>(old_coeffs.size()) >=
-							new_gate_offset + gate_weight_count + e0_count;
+							new_gate_body_mix_offset + gate_body_mix_weight_count + e0_count;
 					if (gate_radial_count > 0
 					    && static_cast<int>(old_coeffs.size()) >= base_nonlinear_size + gate_radial_count) {
 						two_layer_gate_radial_coeffs_.assign(gate_radial_count, 0.0);
@@ -645,17 +661,34 @@ public:
 								two_layer_gate_weights_[i] = old_coeffs[old_gate_offset + i];
 						}
 					}
+					if (gate_body_mix_weight_count > 0) {
+						const int old_gate_body_mix_offset = old_coeffs_have_additive_layout
+							? new_gate_body_mix_offset
+							: base_nonlinear_size + gate_radial_count + gate_weight_count;
+						if (static_cast<int>(old_coeffs.size())
+						    >= old_gate_body_mix_offset + gate_body_mix_weight_count) {
+							two_layer_gate_body_mix_weights_.assign(
+								gate_body_mix_weight_count, 0.0);
+							for (int i = 0; i < gate_body_mix_weight_count; ++i)
+								two_layer_gate_body_mix_weights_[i] =
+									old_coeffs[old_gate_body_mix_offset + i];
+						} else if (static_cast<int>(two_layer_gate_body_mix_weights_.size())
+						           != gate_body_mix_weight_count) {
+							two_layer_gate_body_mix_weights_.assign(
+								gate_body_mix_weight_count, 1.0);
+						}
+					}
 					if (e0_count > 0) {
 						const int old_e0_offset =
-							(old_coeffs_have_additive_layout ? new_gate_offset : base_nonlinear_size + gate_radial_count)
-							+ gate_weight_count;
+							(old_coeffs_have_additive_layout ? new_gate_body_mix_offset : base_nonlinear_size + gate_radial_count + gate_weight_count)
+							+ gate_body_mix_weight_count;
 						if (static_cast<int>(old_coeffs.size()) >= old_e0_offset + e0_count) {
 							two_layer_residual_e0_coeffs_.assign(e0_count, 0.0);
 							for (int i = 0; i < e0_count; ++i)
 								two_layer_residual_e0_coeffs_[i] = old_coeffs[old_e0_offset + i];
 						}
 					}
-					regression_coeffs.assign(base_nonlinear_size + gate_radial_count + gate_additive_count + gate_weight_count + e0_count + linear_size, 0.0);
+					regression_coeffs.assign(base_nonlinear_size + gate_radial_count + gate_additive_count + gate_weight_count + gate_body_mix_weight_count + e0_count + linear_size, 0.0);
 				for (int i = 0; i < base_nonlinear_size; ++i)
 					regression_coeffs[i] = old_coeffs[i];
 			if (gate_radial_count > 0) {
@@ -678,6 +711,15 @@ public:
 					for (int i = 0; i < gate_weight_count; ++i)
 						regression_coeffs[TwoLayerGateWeightOffset() + i] =
 							two_layer_gate_weights_[i];
+				}
+				if (gate_body_mix_weight_count > 0) {
+					if (static_cast<int>(two_layer_gate_body_mix_weights_.size())
+					    != gate_body_mix_weight_count)
+						two_layer_gate_body_mix_weights_.assign(
+							gate_body_mix_weight_count, 1.0);
+					for (int i = 0; i < gate_body_mix_weight_count; ++i)
+						regression_coeffs[TwoLayerGateBodyMixWeightOffset() + i] =
+							two_layer_gate_body_mix_weights_[i];
 				}
 				if (e0_count > 0) {
 					if (static_cast<int>(two_layer_residual_e0_coeffs_.size()) != e0_count)

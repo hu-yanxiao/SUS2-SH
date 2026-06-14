@@ -1,4 +1,4 @@
-# SUS2-SH Exact-Body Mu Gate
+# SUS2-SH Mu Body Linear-Combo Gate
 
 ## Branch And Scope
 
@@ -51,14 +51,42 @@ e9de9dd
 
 ## Formula
 
-The gate signal is mu-dependent. For a channel \(\mu=(l,k)\), the scalar bucket is
-selected by the exact body order:
+The gate first forms one shared scalar per body order:
 
 \[
-h_{j,\mu}
+H_{a,B}
 =
-\sum_{r:\operatorname{body\_order}(s_{q_r})=k_\mu+1}
-w_r s_{q_r}(j)
+\sum_{q:\operatorname{body\_order}(s_q)=B}
+c_q s_q(a),
+\qquad
+B=2,\ldots,k_{\max}+1 .
+\]
+
+Each \(\mu\) channel then mixes those body-order scalars with its own
+coefficients:
+
+\[
+h_{a,\mu}
+=
+\sum_{B=2}^{k_{\max}+1}
+W_{\mu B}H_{a,B}.
+\]
+
+Equivalently,
+
+\[
+h_{a,\mu}
+=
+\sum_{B=2}^{k_{\max}+1}
+W_{\mu B}
+\sum_{q:\operatorname{body\_order}(s_q)=B}
+c_q s_q(a).
+\]
+
+The additive tanh coefficient is species-only:
+
+\[
+a_{z,\mu}=a_z .
 \]
 
 The default neighbor-site SH moment is:
@@ -67,14 +95,14 @@ The default neighbor-site SH moment is:
 M_{i,\mu m}
 =
 \sum_{j\in N(i)} t_{z_i}t_{z_j}
-\left[1+A\tanh(a_{z_j,\mu}h_{j,\mu})\right]
+\left[1+A\tanh(a_{z_j}h_{j,\mu})\right]
 R_{\mu}(r_{ij})Y_{lm}(\hat r_{ij})
 \]
 
 The optional double-site gate first defines
 
 \[
-g_{a,\mu}=1+A\tanh(a_{z_a,\mu}h_{a,\mu})
+g_{a,\mu}=1+A\tanh(a_{z_a}h_{a,\mu})
 \]
 
 and then evaluates
@@ -87,14 +115,15 @@ g_{i,\mu}g_{j,\mu}
 R_{\mu}(r_{ij})Y_{lm}(\hat r_{ij})
 \]
 
-In code, \(k\) is zero-based, so the exact target body order is:
+Default initialization is:
 
-```text
-k_internal + 2
-```
+\[
+c_q^{(0)}=0,\qquad W_{\mu B}^{(0)}=1,\qquad a_z^{(0)}=1.
+\]
 
-For example, with `k-max=4`, channels with internal `k=0,1,2,3` use scalar
-body orders `2,3,4,5`, respectively.
+Thus \(h_{a,\mu}^{(0)}=0\), the initial gate factor is exactly 1, and the
+model starts from ordinary SUS2-SH while \(c_q\) still has a nonzero first-step
+gradient.
 
 ## CLI And Model Rules
 
@@ -108,15 +137,17 @@ body orders `2,3,4,5`, respectively.
 
 - `two_layer_gate_scalar_indices` automatically contains scalar basis functions
   with body orders `2..k_max+1`.
-- `two_layer_gate_weights` remains one shared weight vector. The mu channel only
-  selects the exact body-order bucket from that shared vector.
+- `two_layer_gate_weights` is the shared \(c_q\) vector and has length equal to
+  `two_layer_gate_scalar_indices`.
+- `two_layer_gate_body_mix_weights` is the \(W_{\mu B}\) matrix flattened as
+  `radial_func_count * k_max`.
 - The branch does not save or use `two_layer_gate_bias` / \(G_0\). Zero gate
   weights give \(h_{j,\mu}=0\), hence \(1+A\tanh(0)=1\), so the model reduces to
   ordinary SUS2-SH.
 - New gate models write:
 
   ```text
-  two_layer_gate_mode = mu-body-order
+  two_layer_gate_mode = mu-body-linear-combo
   two_layer_gate_site_mode = neighbor|double
   ```
 
@@ -127,12 +158,15 @@ body orders `2,3,4,5`, respectively.
 ## Implementation Notes
 
 - Gate caches are per atom times mu: \(h_{j,\mu}\), not one scalar per atom.
-- Gate adjoints are also per atom times mu. During reverse mode, each mu
-  adjoint only backpropagates into scalar weights whose exact body order matches
-  `k_internal + 2`.
+- The implementation caches \(s_q\), compresses them to the small \(H_B\) vector,
+  and then applies the \(W_{\mu B}\) matrix. This keeps the core signal build at
+  \(O(N_q+N_\mu k_{\max})\) per atom instead of \(O(N_\mu N_q)\).
+- Gate adjoints are also per atom times mu. During reverse mode, adjoints first
+  accumulate into body-order buckets and then into the shared \(c_q\) scalar
+  weights and scalar-value chain.
 - The existing tanh cache, edge cache, site derivative cache, and shared-radial
   gate paths are preserved.
-- CPU LAMMPS reads `two_layer_gate_mode = mu-body-order` and
+- CPU LAMMPS reads `two_layer_gate_mode = mu-body-linear-combo` and
   `two_layer_gate_site_mode`, builds the same exact body-order buckets,
   communicates per-atom per-mu gate values and adjoints, applies the same
   neighbor or double-site gate factor, and rejects legacy gate fields.
@@ -158,7 +192,7 @@ Final synchronized server binary:
 Final binary SHA-256:
 
 ```text
-86eb63f7d3a8087e335ebe0d78e7681c1363649107ba63cd67f32b568e87ec6c
+34aa439bff8a7333f8f4fb99b140494ec45cbd2c70da42f555a294fb37f520a6
 ```
 
 Independent CPU LAMMPS binary for this branch:
@@ -171,7 +205,7 @@ Independent CPU LAMMPS binary for this branch:
 LAMMPS binary SHA-256:
 
 ```text
-244007cfa6e5cb06d61a9c8f3d593dc20edc1fd9daca368453e9763b8c808d93
+377948d06dca557e89accdeea86f96d762d2a4b851d785b9eea23bc68276ab5b
 ```
 
 Final build and smoke evidence on the server:

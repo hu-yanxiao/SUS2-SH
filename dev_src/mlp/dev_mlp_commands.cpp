@@ -490,6 +490,8 @@ public:
 		}
 
 		const std::vector<double> saved_weights = two_layer_gate_weights_;
+		const std::vector<double> saved_body_mix_weights =
+			two_layer_gate_body_mix_weights_;
 		const std::vector<double> saved_regression_coeffs = regression_coeffs;
 		const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
 		active_two_layer_gate_values_ = nullptr;
@@ -500,6 +502,8 @@ public:
 			const int q_probe = probe_weight_by_body_order[body_order];
 			std::fill(two_layer_gate_weights_.begin(),
 			          two_layer_gate_weights_.end(), 0.0);
+			std::fill(two_layer_gate_body_mix_weights_.begin(),
+			          two_layer_gate_body_mix_weights_.end(), 0.0);
 			for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
 				const int coeff_index = TwoLayerGateWeightOffset() + q;
 				if (coeff_index < 0
@@ -507,16 +511,27 @@ public:
 					ERROR("SUS2-SH two-layer gate regression coefficient index is out of range");
 				regression_coeffs[coeff_index] = 0.0;
 			}
+			for (int i = 0; i < TwoLayerGateBodyMixWeightCount(); ++i) {
+				const int coeff_index = TwoLayerGateBodyMixWeightOffset() + i;
+				if (coeff_index < 0
+				    || coeff_index >= static_cast<int>(regression_coeffs.size()))
+					ERROR("SUS2-SH two-layer gate body mix regression coefficient index is out of range");
+				regression_coeffs[coeff_index] = 0.0;
+			}
+			two_layer_gate_weights_[q_probe] = probe_weight;
+			regression_coeffs[TwoLayerGateWeightIndex(q_probe)] = probe_weight;
 			for (int mu = 0; mu < radial_func_count; ++mu) {
 				if (TwoLayerGateMuBodyOrder(mu) != body_order)
 					continue;
-				const int local_index = mu * TwoLayerGateScalarCount() + q_probe;
-				two_layer_gate_weights_[local_index] = probe_weight;
-				const int coeff_index = TwoLayerGateWeightIndex(mu, q_probe);
+				const int local_index =
+					mu * TwoLayerGateBodyOrderCount() + (body_order - 2);
+				two_layer_gate_body_mix_weights_[local_index] = 1.0;
+				const int coeff_index =
+					TwoLayerGateBodyMixWeightIndex(mu, body_order);
 				if (coeff_index < 0
 				    || coeff_index >= static_cast<int>(regression_coeffs.size()))
 					ERROR("SUS2-SH two-layer gate regression coefficient index is out of range");
-				regression_coeffs[coeff_index] = probe_weight;
+				regression_coeffs[coeff_index] = 1.0;
 			}
 			two_layer_gate_values_from_edge_cache_ready_ = false;
 
@@ -563,6 +578,7 @@ public:
 		}
 
 		two_layer_gate_weights_ = saved_weights;
+		two_layer_gate_body_mix_weights_ = saved_body_mix_weights;
 		regression_coeffs = saved_regression_coeffs;
 		two_layer_gate_values_from_edge_cache_ready_ = false;
 		active_two_layer_gate_values_ = saved_gate_values;

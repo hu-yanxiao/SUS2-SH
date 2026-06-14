@@ -1618,6 +1618,8 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 			static_cast<size_t>(atom_count) * radial_func_count, 0.0);
 		two_layer_gate_scalar_values_cache_.resize(
 			static_cast<size_t>(atom_count) * gate_count);
+		two_layer_gate_body_values_cache_.resize(
+			static_cast<size_t>(atom_count) * TwoLayerGateBodyOrderCount());
 		two_layer_gate_moment_values_cache_.resize(
 			static_cast<size_t>(atom_count) * cached_gate_moment_count);
 	}
@@ -1891,12 +1893,10 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 			}
 			double* gate_values = two_layer_gate_values_.data()
 				+ static_cast<size_t>(ind) * radial_func_count;
-			for (int mu = 0; mu < radial_func_count; ++mu) {
-				double signal = 0.0;
-				for (int q = 0; q < gate_count; ++q)
-					signal += TwoLayerGateWeight(mu, q) * cached_scalars[q];
-				gate_values[mu] = signal;
-			}
+			double* body_values = two_layer_gate_body_values_cache_.data()
+				+ static_cast<size_t>(ind) * TwoLayerGateBodyOrderCount();
+			ComputeTwoLayerGateBodySignals(cached_scalars, body_values);
+			ComputeTwoLayerGateMuSignals(body_values, gate_values);
 		}
 	}
 	if (prepare_gate_values_from_cache)

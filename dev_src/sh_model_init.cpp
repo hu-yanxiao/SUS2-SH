@@ -877,7 +877,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				ERROR("--two-layer-gate selected no SH scalar basis functions for one required mu body-order bucket.");
 
 		ofs << "two_layer_gate_enabled = true\n";
-			ofs << "two_layer_gate_mode = mu-body-order\n";
+			ofs << "two_layer_gate_mode = mu-body-linear-combo\n";
 			ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
 			ofs << "two_layer_gate_include_one_body = false\n";
 			ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode << "\n";
@@ -907,7 +907,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			}
 			ofs << "}\n";
 			const int gate_weight_count =
-				radial_func_count * static_cast<int>(gate_scalar_indices.size());
+				static_cast<int>(gate_scalar_indices.size());
 			ofs << "two_layer_gate_weight_count = " << gate_weight_count << "\n";
 			ofs << "two_layer_gate_scalar_indices = {";
 		for (size_t i = 0; i < gate_scalar_indices.size(); ++i) {
@@ -918,6 +918,17 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ofs << "}\n";
 		ofs << "two_layer_gate_weights = {";
 		for (int i = 0; i < gate_weight_count; ++i) {
+			if (i != 0)
+				ofs << ", ";
+			ofs << 0.0;
+		}
+		ofs << "}\n";
+		const int gate_body_mix_weight_count =
+			radial_func_count * (two_layer_gate_body_order - 1);
+		ofs << "two_layer_gate_body_mix_weight_count = "
+		    << gate_body_mix_weight_count << "\n";
+		ofs << "two_layer_gate_body_mix_weights = {";
+		for (int i = 0; i < gate_body_mix_weight_count; ++i) {
 			if (i != 0)
 				ofs << ", ";
 			ofs << 1.0;

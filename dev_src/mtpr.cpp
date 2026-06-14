@@ -516,7 +516,7 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 			ERROR("--two-layer-gate selected no SH scalar basis functions for one required mu body-order bucket");
 
 	two_layer_gate_enabled_ = true;
-	two_layer_gate_mode_ = "mu-body-order";
+	two_layer_gate_mode_ = "mu-body-linear-combo";
 	SetTwoLayerGateSiteMode(gate_site_mode);
 	two_layer_gate_body_order_max_ = required_gate_body_order;
 	two_layer_gate_include_one_body_ = false;
@@ -526,7 +526,8 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 	two_layer_gate_bias_ = 1.0;
 	two_layer_gate_tanh_amplitude_ = 0.8;
 	InitializeTwoLayerGateAdditiveCoeffs();
-	two_layer_gate_weights_.assign(TwoLayerGateWeightCount(), 1.0);
+	two_layer_gate_weights_.assign(TwoLayerGateWeightCount(), 0.0);
+	two_layer_gate_body_mix_weights_.assign(TwoLayerGateBodyMixWeightCount(), 1.0);
 	two_layer_residual_e0_coeffs_.clear();
 
 	if (two_layer_gate_shared_radial_)
@@ -568,12 +569,15 @@ void MLMTPR::BuildTwoLayerGateBodyOrderBuckets()
 	two_layer_gate_mu_body_orders_.clear();
 	if (!is_sh_potential_ || !two_layer_gate_enabled_)
 		return;
-	if (two_layer_gate_mode_ != "mu-body-order")
-		ERROR("SUS2-SH two-layer gate model is not mu-body-order mode");
+	if (two_layer_gate_mode_ != "mu-body-linear-combo")
+		ERROR("SUS2-SH two-layer gate model is not mu-body-linear-combo mode");
 	if (!has_sh_scalar_info_)
 		ERROR("SUS2-SH two-layer gate requires sh_scalar_info metadata");
 	if (static_cast<int>(two_layer_gate_weights_.size()) != TwoLayerGateWeightCount())
 		ERROR("SUS2-SH two-layer gate metadata has inconsistent sizes");
+	if (static_cast<int>(two_layer_gate_body_mix_weights_.size())
+	    != TwoLayerGateBodyMixWeightCount())
+		ERROR("SUS2-SH two-layer gate body mix metadata has inconsistent sizes");
 	const int required_gate_body_order = sh_k_max_ + 1;
 	if (sh_body_order_ < required_gate_body_order)
 		ERROR("SUS2-SH two-layer gate requires sh_body_order >= sh_k_max + 1");
@@ -638,7 +642,7 @@ int MLMTPR::TwoLayerGateRadialCoeffOffset() const
 int MLMTPR::TwoLayerGateWeightCount() const
 {
 	return two_layer_gate_enabled_
-		? radial_func_count * TwoLayerGateScalarCount()
+		? TwoLayerGateScalarCount()
 		: 0;
 }
 
@@ -654,6 +658,11 @@ int MLMTPR::TwoLayerGateScalarCount() const
 		: 0;
 }
 
+int MLMTPR::TwoLayerGateBodyOrderCount() const
+{
+	return two_layer_gate_enabled_ ? two_layer_gate_body_order_max_ - 1 : 0;
+}
+
 int MLMTPR::TwoLayerGateAdditiveCoeffOffset() const
 {
 	return BaseNonlinearCoeffCount() + TwoLayerGateRadialCoeffCount();
@@ -664,6 +673,18 @@ int MLMTPR::TwoLayerGateWeightOffset() const
 	return TwoLayerGateAdditiveCoeffOffset() + TwoLayerGateAdditiveCoeffCount();
 }
 
+int MLMTPR::TwoLayerGateBodyMixWeightCount() const
+{
+	return two_layer_gate_enabled_
+		? radial_func_count * TwoLayerGateBodyOrderCount()
+		: 0;
+}
+
+int MLMTPR::TwoLayerGateBodyMixWeightOffset() const
+{
+	return TwoLayerGateWeightOffset() + TwoLayerGateWeightCount();
+}
+
 int MLMTPR::TwoLayerResidualE0CoeffCount() const
 {
 	return TwoLayerResidualEnabled() ? alpha_scalar_moments : 0;
@@ -671,7 +692,7 @@ int MLMTPR::TwoLayerResidualE0CoeffCount() const
 
 int MLMTPR::TwoLayerResidualE0CoeffOffset() const
 {
-	return TwoLayerGateWeightOffset() + TwoLayerGateWeightCount();
+	return TwoLayerGateBodyMixWeightOffset() + TwoLayerGateBodyMixWeightCount();
 }
 
 int MLMTPR::LinearCoeffOffset() const
@@ -742,29 +763,51 @@ double MLMTPR::TwoLayerGateAdditiveCoeff(int type_outer, int mu) const
 	return 1.0;
 }
 
+int MLMTPR::TwoLayerGateWeightIndex(int scalar_weight_index) const
+{
+	if (!two_layer_gate_enabled_)
+		return -1;
+	if (scalar_weight_index < 0 || scalar_weight_index >= TwoLayerGateScalarCount())
+		ERROR("SUS2-SH two-layer gate scalar weight index is out of range");
+	return TwoLayerGateWeightOffset() + scalar_weight_index;
+}
+
 int MLMTPR::TwoLayerGateWeightIndex(int mu, int scalar_weight_index) const
+{
+	(void)mu;
+	return TwoLayerGateWeightIndex(scalar_weight_index);
+}
+
+int MLMTPR::TwoLayerGateBodyMixWeightIndex(int mu, int body_order) const
 {
 	if (!two_layer_gate_enabled_)
 		return -1;
 	if (mu < 0 || mu >= radial_func_count)
-		ERROR("SUS2-SH two-layer gate weight mu index is out of range");
-	if (scalar_weight_index < 0 || scalar_weight_index >= TwoLayerGateScalarCount())
-		ERROR("SUS2-SH two-layer gate scalar weight index is out of range");
-	return TwoLayerGateWeightOffset()
-		+ mu * TwoLayerGateScalarCount()
-		+ scalar_weight_index;
+		ERROR("SUS2-SH two-layer gate body mix mu index is out of range");
+	if (body_order < 2 || body_order > two_layer_gate_body_order_max_)
+		ERROR("SUS2-SH two-layer gate body mix body order is out of range");
+	return TwoLayerGateBodyMixWeightOffset()
+		+ mu * TwoLayerGateBodyOrderCount()
+		+ (body_order - 2);
+}
+
+double MLMTPR::TwoLayerGateScalarWeight(int scalar_weight_index) const
+{
+	const int coeff_index = TwoLayerGateWeightIndex(scalar_weight_index);
+	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	if (scalar_weight_index >= 0
+	    && scalar_weight_index < static_cast<int>(two_layer_gate_weights_.size()))
+		return two_layer_gate_weights_[scalar_weight_index];
+	ERROR("SUS2-SH two-layer gate scalar weight storage is inconsistent");
+	return 0.0;
 }
 
 double MLMTPR::TwoLayerGateWeight(int mu, int scalar_weight_index) const
 {
-	const int coeff_index = TwoLayerGateWeightIndex(mu, scalar_weight_index);
-	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
-		return regression_coeffs[coeff_index];
-	const int local_index = mu * TwoLayerGateScalarCount() + scalar_weight_index;
-	if (local_index >= 0 && local_index < static_cast<int>(two_layer_gate_weights_.size()))
-		return two_layer_gate_weights_[local_index];
-	ERROR("SUS2-SH two-layer gate weight storage is inconsistent");
-	return 0.0;
+	const int body_order = TwoLayerGateWeightBodyOrder(scalar_weight_index);
+	return TwoLayerGateScalarWeight(scalar_weight_index)
+		* TwoLayerGateBodyMixWeight(mu, body_order);
 }
 
 double MLMTPR::TwoLayerGateWeight(int weight_index) const
@@ -773,13 +816,74 @@ double MLMTPR::TwoLayerGateWeight(int weight_index) const
 		return 0.0;
 	if (weight_index < 0 || weight_index >= TwoLayerGateWeightCount())
 		ERROR("SUS2-SH two-layer gate weight index is out of range");
-	const int coeff_index = TwoLayerGateWeightOffset() + weight_index;
+	const int coeff_index = TwoLayerGateWeightIndex(weight_index);
 	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
 		return regression_coeffs[coeff_index];
 	if (weight_index < static_cast<int>(two_layer_gate_weights_.size()))
 		return two_layer_gate_weights_[weight_index];
 	ERROR("SUS2-SH two-layer gate weight storage is inconsistent");
 	return 0.0;
+}
+
+double MLMTPR::TwoLayerGateBodyMixWeight(int mu, int body_order) const
+{
+	const int coeff_index = TwoLayerGateBodyMixWeightIndex(mu, body_order);
+	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	const int local_index =
+		mu * TwoLayerGateBodyOrderCount() + (body_order - 2);
+	if (local_index >= 0
+	    && local_index < static_cast<int>(two_layer_gate_body_mix_weights_.size()))
+		return two_layer_gate_body_mix_weights_[local_index];
+	ERROR("SUS2-SH two-layer gate body mix weight storage is inconsistent");
+	return 0.0;
+}
+
+double MLMTPR::TwoLayerGateBodyMixWeight(int weight_index) const
+{
+	if (!two_layer_gate_enabled_)
+		return 0.0;
+	if (weight_index < 0 || weight_index >= TwoLayerGateBodyMixWeightCount())
+		ERROR("SUS2-SH two-layer gate body mix weight index is out of range");
+	const int coeff_index = TwoLayerGateBodyMixWeightOffset() + weight_index;
+	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	if (weight_index < static_cast<int>(two_layer_gate_body_mix_weights_.size()))
+		return two_layer_gate_body_mix_weights_[weight_index];
+	ERROR("SUS2-SH two-layer gate body mix weight storage is inconsistent");
+	return 0.0;
+}
+
+void MLMTPR::ComputeTwoLayerGateBodySignals(const double* scalar_values,
+                                            double* body_values) const
+{
+	const int body_count = TwoLayerGateBodyOrderCount();
+	for (int b = 0; b < body_count; ++b)
+		body_values[b] = 0.0;
+	for (int body_order = 2; body_order <= two_layer_gate_body_order_max_;
+	     ++body_order) {
+		double value = 0.0;
+		for (int cursor = two_layer_gate_body_order_weight_offsets_[body_order];
+		     cursor < two_layer_gate_body_order_weight_offsets_[body_order + 1];
+		     ++cursor) {
+			const int q = two_layer_gate_body_order_weight_indices_[cursor];
+			value += TwoLayerGateScalarWeight(q) * scalar_values[q];
+		}
+		body_values[body_order - 2] = value;
+	}
+}
+
+void MLMTPR::ComputeTwoLayerGateMuSignals(const double* body_values,
+                                          double* mu_values) const
+{
+	for (int mu = 0; mu < radial_func_count; ++mu) {
+		double signal = 0.0;
+		for (int body_order = 2; body_order <= two_layer_gate_body_order_max_;
+		     ++body_order)
+			signal += TwoLayerGateBodyMixWeight(mu, body_order)
+				* body_values[body_order - 2];
+		mu_values[mu] = signal;
+	}
 }
 
 double MLMTPR::TwoLayerResidualE0Coeff(int scalar_index) const
@@ -1083,7 +1187,10 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		? new_species_count
 		: 0;
 	const int gate_weight_count = two_layer_gate_enabled_
-		? radial_func_count * static_cast<int>(two_layer_gate_scalar_indices_.size())
+		? static_cast<int>(two_layer_gate_scalar_indices_.size())
+		: 0;
+	const int gate_body_mix_weight_count = two_layer_gate_enabled_
+		? radial_func_count * (two_layer_gate_body_order_max_ - 1)
 		: 0;
 	const int old_gate_radial_offset =
 		old_radial_offset + radial_func_count * old_radial_block_size;
@@ -1093,8 +1200,10 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 	const int new_gate_additive_offset = new_gate_radial_offset + gate_radial_count;
 	const int old_gate_offset = old_gate_additive_offset + old_gate_additive_count;
 	const int new_gate_offset = new_gate_additive_offset + new_gate_additive_count;
-	const int old_linear_offset = old_gate_offset + gate_weight_count;
-	const int new_linear_offset = new_gate_offset + gate_weight_count;
+	const int old_gate_body_mix_offset = old_gate_offset + gate_weight_count;
+	const int new_gate_body_mix_offset = new_gate_offset + gate_weight_count;
+	const int old_linear_offset = old_gate_body_mix_offset + gate_body_mix_weight_count;
+	const int new_linear_offset = new_gate_body_mix_offset + gate_body_mix_weight_count;
 	const int old_linear_count = alpha_count + old_species_count - 1;
 	const int new_linear_count = alpha_count + new_species_count - 1;
 
@@ -1155,6 +1264,10 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 	for (int i = 0; i < gate_weight_count; ++i)
 		new_coeffs[new_gate_offset + i] = old_coeffs[old_gate_offset + i];
 
+	for (int i = 0; i < gate_body_mix_weight_count; ++i)
+		new_coeffs[new_gate_body_mix_offset + i] =
+			old_coeffs[old_gate_body_mix_offset + i];
+
 	for (int new_type = 0; new_type < new_species_count; ++new_type) {
 		const int old_type = old_species_indices[new_type];
 		new_coeffs[new_linear_offset + new_type] = old_coeffs[old_linear_offset + old_type];
@@ -1179,6 +1292,12 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		two_layer_gate_weights_.assign(gate_weight_count, 0.0);
 		for (int i = 0; i < gate_weight_count; ++i)
 			two_layer_gate_weights_[i] = regression_coeffs[new_gate_offset + i];
+	}
+	if (gate_body_mix_weight_count > 0) {
+		two_layer_gate_body_mix_weights_.assign(gate_body_mix_weight_count, 0.0);
+		for (int i = 0; i < gate_body_mix_weight_count; ++i)
+			two_layer_gate_body_mix_weights_[i] =
+				regression_coeffs[new_gate_body_mix_offset + i];
 	}
 	if (new_gate_additive_count > 0) {
 		two_layer_gate_additive_coeffs_.assign(new_gate_additive_count, 0.0);
@@ -1288,7 +1407,7 @@ void MLMTPR::Load(const string& filename)
 	two_layer_gate_body_order_max_ = 0;
 		two_layer_gate_include_one_body_ = false;
 		two_layer_gate_shared_radial_ = false;
-		two_layer_gate_mode_ = "mu-body-order";
+		two_layer_gate_mode_ = "mu-body-linear-combo";
 		two_layer_gate_site_mode_ = "neighbor";
 		two_layer_residual_enabled_ = false;
 	two_layer_gate_scale_mode_ = "legacy";
@@ -1302,6 +1421,7 @@ void MLMTPR::Load(const string& filename)
 			two_layer_gate_radial_coeffs_.clear();
 			two_layer_gate_additive_coeffs_.clear();
 			two_layer_gate_weights_.clear();
+			two_layer_gate_body_mix_weights_.clear();
 	two_layer_residual_e0_coeffs_.clear();
 	two_layer_gate_required_moments_.clear();
 	two_layer_gate_required_moment_indices_.clear();
@@ -1313,6 +1433,7 @@ void MLMTPR::Load(const string& filename)
 	two_layer_gate_required_radial_eval_blocks_.clear();
 	two_layer_gate_values_.clear();
 	two_layer_gate_scalar_values_cache_.clear();
+	two_layer_gate_body_values_cache_.clear();
 		two_layer_gate_moment_values_cache_.clear();
 		two_layer_final_moment_values_cache_.clear();
 		two_layer_final_moment_ders_cache_.clear();
@@ -1862,7 +1983,7 @@ void MLMTPR::Load(const string& filename)
 			ERROR("SUS2-SH legacy two-layer gate models are not compatible with mu-body-order gate mode");
 		ifs.ignore(2);
 		ifs >> two_layer_gate_mode_;
-		if (two_layer_gate_mode_ != "mu-body-order")
+		if (two_layer_gate_mode_ != "mu-body-linear-combo")
 			ERROR("SUS2-SH two-layer gate has an unknown mode: " + two_layer_gate_mode_);
 
 		ifs >> tmpstr;
@@ -1965,9 +2086,7 @@ void MLMTPR::Load(const string& filename)
 		ifs >> gate_weight_count;
 		if (gate_weight_count <= 0)
 			ERROR("SUS2-SH two-layer gate should contain at least one scalar weight");
-		if (radial_func_count <= 0 || gate_weight_count % radial_func_count != 0)
-			ERROR("SUS2-SH two-layer gate weight count should be radial_func_count times scalar count");
-		const int gate_scalar_count = gate_weight_count / radial_func_count;
+		const int gate_scalar_count = gate_weight_count;
 
 		ifs >> tmpstr;
 		if (tmpstr != "two_layer_gate_scalar_indices")
@@ -1979,6 +2098,25 @@ void MLMTPR::Load(const string& filename)
 		if (tmpstr != "two_layer_gate_weights")
 			ERROR("SUS2-SH two-layer gate is missing two_layer_gate_weights");
 		ReadDoubleList(ifs, two_layer_gate_weights_, gate_weight_count);
+		ifs.ignore(1000, '\n');
+
+		ifs >> tmpstr;
+		if (tmpstr != "two_layer_gate_body_mix_weight_count")
+			ERROR("SUS2-SH two-layer gate is missing two_layer_gate_body_mix_weight_count");
+		ifs.ignore(2);
+		int gate_body_mix_weight_count = 0;
+		ifs >> gate_body_mix_weight_count;
+		const int expected_gate_body_mix_weight_count =
+			radial_func_count * (two_layer_gate_body_order_max_ - 1);
+		if (gate_body_mix_weight_count != expected_gate_body_mix_weight_count)
+			ERROR("SUS2-SH two-layer gate body mix weight count is inconsistent");
+
+		ifs >> tmpstr;
+		if (tmpstr != "two_layer_gate_body_mix_weights")
+			ERROR("SUS2-SH two-layer gate is missing two_layer_gate_body_mix_weights");
+		ReadDoubleList(ifs,
+		               two_layer_gate_body_mix_weights_,
+		               gate_body_mix_weight_count);
 		ifs.ignore(1000, '\n');
 
 		if (!has_sh_scalar_info_)
@@ -2385,7 +2523,7 @@ void MLMTPR::Save(const string& filename)
 				ERROR("SUS2-SH mu-body-order gate scalar index has wrong body order");
 			}
 				ofs << "two_layer_gate_enabled = true\n";
-					ofs << "two_layer_gate_mode = mu-body-order\n";
+					ofs << "two_layer_gate_mode = mu-body-linear-combo\n";
 					ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order_max_ << '\n';
 					ofs << "two_layer_gate_include_one_body = false\n";
 					ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode_ << '\n';
@@ -2433,6 +2571,15 @@ void MLMTPR::Save(const string& filename)
 				if (i > 0)
 					ofs << ", ";
 				ofs << TwoLayerGateWeight(i);
+			}
+			ofs << "}\n";
+			ofs << "two_layer_gate_body_mix_weight_count = "
+			    << TwoLayerGateBodyMixWeightCount() << '\n';
+			ofs << "two_layer_gate_body_mix_weights = {";
+			for (int i = 0; i < TwoLayerGateBodyMixWeightCount(); ++i) {
+				if (i > 0)
+					ofs << ", ";
+				ofs << TwoLayerGateBodyMixWeight(i);
 			}
 			ofs << "}\n";
 			if (two_layer_residual_enabled_) {
@@ -2625,6 +2772,7 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 		two_layer_gate_values_.assign(
 			static_cast<size_t>(cfg.size()) * radial_func_count, 0.0);
 		two_layer_gate_scalar_values_cache_.clear();
+		two_layer_gate_body_values_cache_.clear();
 		two_layer_gate_moment_values_cache_.clear();
 		two_layer_gate_values_from_edge_cache_ready_ = false;
 		InvalidateTwoLayerGateTanhMuCache();
@@ -2637,6 +2785,8 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 		static_cast<int>(two_layer_gate_required_moment_indices_.size());
 	const size_t expected_scalar_size =
 		static_cast<size_t>(cfg.size()) * gate_count;
+	const size_t expected_body_size =
+		static_cast<size_t>(cfg.size()) * TwoLayerGateBodyOrderCount();
 	const size_t expected_moment_size =
 		static_cast<size_t>(cfg.size()) * cached_moment_count;
 	const size_t expected_gate_value_size =
@@ -2644,6 +2794,7 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 	if (two_layer_gate_values_from_edge_cache_ready_
 	    && two_layer_gate_values_.size() == expected_gate_value_size
 	    && two_layer_gate_scalar_values_cache_.size() == expected_scalar_size
+	    && two_layer_gate_body_values_cache_.size() == expected_body_size
 	    && two_layer_gate_moment_values_cache_.size() == expected_moment_size) {
 		InvalidateTwoLayerGateTanhMuCache();
 		return;
@@ -2652,6 +2803,7 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 	InvalidateTwoLayerGateTanhMuCache();
 	two_layer_gate_values_.assign(expected_gate_value_size, 0.0);
 	two_layer_gate_scalar_values_cache_.resize(expected_scalar_size);
+	two_layer_gate_body_values_cache_.resize(expected_body_size);
 	two_layer_gate_moment_values_cache_.resize(expected_moment_size);
 
 	const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
@@ -2675,12 +2827,10 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 		}
 		double* cached_gate_values = two_layer_gate_values_.data()
 			+ static_cast<size_t>(ind) * radial_func_count;
-		for (int mu = 0; mu < radial_func_count; ++mu) {
-			double signal = 0.0;
-			for (int q = 0; q < gate_count; ++q)
-				signal += TwoLayerGateWeight(mu, q) * cached_scalars[q];
-			cached_gate_values[mu] = signal;
-		}
+		double* cached_body_values = two_layer_gate_body_values_cache_.data()
+			+ static_cast<size_t>(ind) * TwoLayerGateBodyOrderCount();
+		ComputeTwoLayerGateBodySignals(cached_scalars, cached_body_values);
+		ComputeTwoLayerGateMuSignals(cached_body_values, cached_gate_values);
 	}
 	active_two_layer_gate_values_ = saved_gate_values;
 }
@@ -3259,6 +3409,8 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 	if (!energy_gate_adjoints.empty()) {
 		std::vector<Vector3> gate_chain_weights;
 		std::vector<double> gate_scalar_tangents;
+		std::vector<double> gate_body_tangents(TwoLayerGateBodyOrderCount(), 0.0);
+		std::vector<double> gate_body_adjoint(TwoLayerGateBodyOrderCount(), 0.0);
 		std::vector<double> gate_moment_tangents;
 		std::vector<double> gate_chain_directional_values(
 			static_cast<size_t>(cfg.size()) * radial_func_count, 0.0);
@@ -3326,18 +3478,38 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 			}
 			double* directional_by_mu = gate_chain_directional_values.data()
 				+ static_cast<size_t>(ind) * radial_func_count;
+			std::fill(gate_body_tangents.begin(), gate_body_tangents.end(), 0.0);
+			for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
+				const int body_order = TwoLayerGateWeightBodyOrder(q);
+				gate_body_tangents[body_order - 2] +=
+					TwoLayerGateScalarWeight(q) * gate_scalar_tangents[q];
+			}
+			std::fill(gate_body_adjoint.begin(), gate_body_adjoint.end(), 0.0);
 			for (int mu = 0; mu < radial_func_count; ++mu) {
 				double directional = 0.0;
 				const double energy_adjoint = energy_gate_adjoint_by_mu[mu];
-				for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
-					const double directional_derivative = gate_scalar_tangents[q];
-					directional +=
-						TwoLayerGateWeight(mu, q) * directional_derivative;
-					if (energy_adjoint != 0.0)
-						out_grads_accumulator[TwoLayerGateWeightIndex(mu, q)] +=
-							energy_adjoint * directional_derivative;
+				for (int body_order = 2;
+				     body_order <= two_layer_gate_body_order_max_;
+				     ++body_order) {
+					const double tangent = gate_body_tangents[body_order - 2];
+					const double mix = TwoLayerGateBodyMixWeight(mu, body_order);
+					directional += mix * tangent;
+					if (energy_adjoint != 0.0) {
+						out_grads_accumulator[
+							TwoLayerGateBodyMixWeightIndex(mu, body_order)] +=
+							energy_adjoint * tangent;
+						gate_body_adjoint[body_order - 2] += energy_adjoint * mix;
+					}
 				}
 				directional_by_mu[mu] = directional;
+			}
+			for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
+				const int body_order = TwoLayerGateWeightBodyOrder(q);
+				const double tangent = gate_scalar_tangents[q];
+				const double adjoint = gate_body_adjoint[body_order - 2];
+				if (adjoint != 0.0)
+					out_grads_accumulator[TwoLayerGateWeightIndex(q)] +=
+						adjoint * tangent;
 			}
 		}
 		if (profile_two_layer) {
@@ -3396,6 +3568,8 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 
 	const double profile_gate_weight_start =
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
+	std::vector<double> gate_body_values_scratch(TwoLayerGateBodyOrderCount(), 0.0);
+	std::vector<double> gate_body_adjoint_scratch(TwoLayerGateBodyOrderCount(), 0.0);
 	for (int ind = 0; ind < cfg.size(); ++ind) {
 		const double* gate_adjoints_by_mu = two_layer_gate_adjoints_.data()
 			+ static_cast<size_t>(ind) * radial_func_count;
@@ -3420,16 +3594,44 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 			CalcTwoLayerGateScalarValuesOnly(neighborhoods[ind],
 			                                  sh_gate_scalar_values_,
 			                                  ind);
+		const double* scalar_values =
+			(cached_scalars == nullptr) ? sh_gate_scalar_values_.data() : cached_scalars;
+		const double* cached_body_values = nullptr;
+		if (two_layer_gate_body_values_cache_.size() ==
+		    static_cast<size_t>(cfg.size()) * TwoLayerGateBodyOrderCount())
+			cached_body_values = two_layer_gate_body_values_cache_.data()
+				+ static_cast<size_t>(ind) * TwoLayerGateBodyOrderCount();
+		const double* body_values = cached_body_values;
+		if (body_values == nullptr) {
+			ComputeTwoLayerGateBodySignals(scalar_values,
+			                               gate_body_values_scratch.data());
+			body_values = gate_body_values_scratch.data();
+		}
+		std::fill(gate_body_adjoint_scratch.begin(),
+		          gate_body_adjoint_scratch.end(),
+		          0.0);
 		for (int mu = 0; mu < radial_func_count; ++mu) {
 			const double gate_adjoint = gate_adjoints_by_mu[mu];
 			if (gate_adjoint == 0.0)
 				continue;
-			for (int q = 0; q < gate_count; ++q) {
-			const double scalar_value =
-				(cached_scalars == nullptr) ? sh_gate_scalar_values_[q] : cached_scalars[q];
-			out_grads_accumulator[TwoLayerGateWeightIndex(mu, q)] +=
-				gate_adjoint * scalar_value;
+			for (int body_order = 2;
+			     body_order <= two_layer_gate_body_order_max_;
+			     ++body_order) {
+				const double body_value = body_values[body_order - 2];
+				out_grads_accumulator[
+					TwoLayerGateBodyMixWeightIndex(mu, body_order)] +=
+					gate_adjoint * body_value;
+				gate_body_adjoint_scratch[body_order - 2] +=
+					gate_adjoint * TwoLayerGateBodyMixWeight(mu, body_order);
 			}
+		}
+		for (int q = 0; q < gate_count; ++q) {
+			const int body_order = TwoLayerGateWeightBodyOrder(q);
+			const double body_adjoint =
+				gate_body_adjoint_scratch[body_order - 2];
+			if (body_adjoint != 0.0)
+				out_grads_accumulator[TwoLayerGateWeightIndex(q)] +=
+					body_adjoint * scalar_values[q];
 		}
 	}
 	const double profile_after_gate_weight =
@@ -3546,7 +3748,7 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
                                              Array1D& out_grads_accumulator,
                                              const Neighborhoods& neighborhoods)
 {
-	if (!is_sh_potential_ || !two_layer_gate_enabled_ || !RequiresTwoLayerGateEvaluation()) {
+	if (!is_sh_potential_ || !two_layer_gate_enabled_) {
 		AnyLocalMLIP::AccumulateEnergyCombinationGrad(cfg, ene_weight,
 		                                              out_grads_accumulator,
 		                                              neighborhoods);
@@ -3577,6 +3779,8 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 	}
 	active_two_layer_edge_cache_atom_index_ = -1;
 
+	std::vector<double> energy_gate_body_values(TwoLayerGateBodyOrderCount(), 0.0);
+	std::vector<double> energy_gate_body_adjoint(TwoLayerGateBodyOrderCount(), 0.0);
 	for (int ind = 0; ind < cfg.size(); ++ind) {
 		const double* gate_adjoints_by_mu = two_layer_gate_adjoints_.data()
 			+ static_cast<size_t>(ind) * radial_func_count;
@@ -3601,16 +3805,43 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 			CalcTwoLayerGateScalarValuesOnly(neighborhoods[ind],
 			                                  sh_gate_scalar_values_,
 			                                  ind);
+		const double* scalar_values =
+			(cached_scalars == nullptr) ? sh_gate_scalar_values_.data() : cached_scalars;
+		const double* cached_body_values = nullptr;
+		if (two_layer_gate_body_values_cache_.size() ==
+		    static_cast<size_t>(cfg.size()) * TwoLayerGateBodyOrderCount())
+			cached_body_values = two_layer_gate_body_values_cache_.data()
+				+ static_cast<size_t>(ind) * TwoLayerGateBodyOrderCount();
+		const double* body_values = cached_body_values;
+		if (body_values == nullptr) {
+			ComputeTwoLayerGateBodySignals(scalar_values,
+			                               energy_gate_body_values.data());
+			body_values = energy_gate_body_values.data();
+		}
+		std::fill(energy_gate_body_adjoint.begin(),
+		          energy_gate_body_adjoint.end(),
+		          0.0);
 		for (int mu = 0; mu < radial_func_count; ++mu) {
 			const double gate_adjoint = gate_adjoints_by_mu[mu];
 			if (gate_adjoint == 0.0)
 				continue;
-			for (int q = 0; q < gate_count; ++q) {
-			const double scalar_value =
-				(cached_scalars == nullptr) ? sh_gate_scalar_values_[q] : cached_scalars[q];
-			out_grads_accumulator[TwoLayerGateWeightIndex(mu, q)] +=
-				gate_adjoint * scalar_value;
+			for (int body_order = 2;
+			     body_order <= two_layer_gate_body_order_max_;
+			     ++body_order) {
+				out_grads_accumulator[
+					TwoLayerGateBodyMixWeightIndex(mu, body_order)] +=
+					gate_adjoint * body_values[body_order - 2];
+				energy_gate_body_adjoint[body_order - 2] +=
+					gate_adjoint * TwoLayerGateBodyMixWeight(mu, body_order);
 			}
+		}
+		for (int q = 0; q < gate_count; ++q) {
+			const int body_order = TwoLayerGateWeightBodyOrder(q);
+			const double body_adjoint =
+				energy_gate_body_adjoint[body_order - 2];
+			if (body_adjoint != 0.0)
+				out_grads_accumulator[TwoLayerGateWeightIndex(q)] +=
+					body_adjoint * scalar_values[q];
 		}
 	}
 

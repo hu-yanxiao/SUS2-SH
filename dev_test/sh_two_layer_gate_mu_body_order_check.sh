@@ -51,7 +51,7 @@ fi
   --write-sh-scalar-info \
   --two-layer-gate
 
-grep -q "two_layer_gate_mode = mu-body-order" "$model"
+grep -q "two_layer_gate_mode = mu-body-linear-combo" "$model"
 grep -q "two_layer_gate_body_order_max = 5" "$model"
 grep -q "two_layer_gate_site_mode = neighbor" "$model"
 if grep -q "two_layer_gate_bias" "$model"; then
@@ -122,9 +122,15 @@ if not count_match:
 radial_match = re.search(r"radial_funcs_count = (\d+)", text)
 if not radial_match:
     raise SystemExit("missing radial_funcs_count")
-expected_weight_count = int(radial_match.group(1)) * len(indices)
+expected_weight_count = len(indices)
 if int(count_match.group(1)) != expected_weight_count:
-    raise SystemExit("gate weight count does not match radial_funcs_count * scalar index count")
+    raise SystemExit("gate weight count does not match scalar index count")
+mix_count_match = re.search(r"two_layer_gate_body_mix_weight_count = (\d+)", text)
+if not mix_count_match:
+    raise SystemExit("missing two_layer_gate_body_mix_weight_count")
+expected_mix_count = int(radial_match.group(1)) * 4
+if int(mix_count_match.group(1)) != expected_mix_count:
+    raise SystemExit("gate body mix weight count does not match radial_funcs_count * k_max")
 PY
 
 ./bin/mlp-sus2 check-two-layer-gate-mu-body-order-dev "$model" "$train" \

@@ -53,7 +53,9 @@ scalar_count = len(re.search(
 
 additive_count = int_value("two_layer_gate_additive_coeff_count")
 weight_count = int_value("two_layer_gate_weight_count")
+mix_weight_count = int_value("two_layer_gate_body_mix_weight_count")
 weights = float_list("two_layer_gate_weights")
+mix_weights = float_list("two_layer_gate_body_mix_weights")
 additive = float_list("two_layer_gate_additive_coeffs")
 
 if additive_count != species:
@@ -65,15 +67,25 @@ if len(additive) != additive_count:
 if any(abs(x - 1.0) > 1e-14 for x in additive):
     raise SystemExit("additive coefficients should initialize to 1")
 
-expected_weight_count = radial_func_count * scalar_count
+expected_weight_count = scalar_count
 if weight_count != expected_weight_count:
     raise SystemExit(
-        f"expected per-mu weight count {expected_weight_count}, got {weight_count}"
+        f"expected shared scalar weight count {expected_weight_count}, got {weight_count}"
     )
 if len(weights) != weight_count:
     raise SystemExit("gate weight list length mismatch")
-if any(abs(x - 1.0) > 1e-14 for x in weights):
-    raise SystemExit("gate weights should initialize to 1")
+if any(abs(x) > 1e-14 for x in weights):
+    raise SystemExit("shared scalar weights should initialize to 0")
+
+expected_mix_count = radial_func_count * k_max
+if mix_weight_count != expected_mix_count:
+    raise SystemExit(
+        f"expected mu/body mix weight count {expected_mix_count}, got {mix_weight_count}"
+    )
+if len(mix_weights) != mix_weight_count:
+    raise SystemExit("gate body mix weight list length mismatch")
+if any(abs(x - 1.0) > 1e-14 for x in mix_weights):
+    raise SystemExit("gate body mix weights should initialize to 1")
 
 print("mu-linear-combo gate init metadata OK")
 PY

@@ -160,11 +160,13 @@ class PairSUS2MTP : public Pair {
 	  int two_layer_gate_body_order_max = 0;
 	  int two_layer_gate_scalar_count = 0;
 	  int two_layer_gate_weight_count = 0;
+	  int two_layer_gate_body_mix_weight_count = 0;
   std::vector<int> sh_scalar_body_order;
   std::vector<int> two_layer_gate_scalar_body_order;
   std::vector<int> two_layer_gate_mu_body_order;
   std::vector<int> two_layer_gate_scalar_indices;
   std::vector<double> two_layer_gate_weights;
+  std::vector<double> two_layer_gate_body_mix_weights;
   std::vector<double> two_layer_gate_radial_coeffs;
   std::vector<double> two_layer_gate_additive_coeffs;
   std::vector<double> two_layer_gate_additive_ratios;
