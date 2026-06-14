@@ -55,9 +55,10 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 				"scaling",
 			"potential-name",
 			"inline-sh-model",
-				"two-layer-gate",
-				"two-layer-gate-body-order",
-				"two-layer-gate-tanh-amplitude",
+					"two-layer-gate",
+					"two-layer-gate-body-order",
+					"two-layer-gate-mode",
+					"two-layer-gate-tanh-amplitude",
 				"two-layer-gate-site-mode",
 				"two-layer-gate-shared-radial",
 				"two-layer-residual"
@@ -597,9 +598,10 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"    --inline-sh-model=<string>: inline SUS2-SH model path. If the file exists,\n"
 			"                                continue training from it; otherwise create it\n"
 			"                                from the init-sh options.\n"
-				"    --two-layer-gate: initialize the exact body-order k+1 SUS2-SH mu gate.\n"
-				"    --two-layer-gate-body-order=<int>: rejected by mu-body-order gate models.\n"
-				"    --two-layer-gate-tanh-amplitude=<double>: bounded additive gate amplitude. Default=0.8\n"
+					"    --two-layer-gate: initialize the exact body-order k+1 SUS2-SH mu gate.\n"
+					"    --two-layer-gate-body-order=<int>: rejected by mu-body-order gate models.\n"
+					"    --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full: gate scalar parameterization. Default=mu-body-linear-combo\n"
+					"    --two-layer-gate-tanh-amplitude=<double>: bounded additive gate amplitude. Default=0.8\n"
 				"    --two-layer-gate-site-mode=neighbor|double: gate on neighbor j only, or on center i and neighbor j. Default=neighbor\n"
 				"    --two-layer-gate-shared-radial: give the gate independent radial contraction coefficients.\n"
 					"    --two-layer-residual: rejected by mu-body-order gate models.\n"

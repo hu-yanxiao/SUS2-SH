@@ -529,19 +529,23 @@ public:
 		int RadialCoeffOffset() const;
 		int RadialCoeffBlockSize() const;
 		int BaseNonlinearCoeffCount() const;
-					bool TwoLayerGateUsesSharedRadial() const;
-					bool TwoLayerResidualEnabled() const;
-					bool TwoLayerGateUsesDirectScale() const;
-					bool TwoLayerGateUsesCenterGate() const;
-					const std::string& TwoLayerGateSiteMode() const { return two_layer_gate_site_mode_; }
-					double TwoLayerGateTanhAmplitude() const;
-					void SetTwoLayerGateTanhAmplitude(double amplitude);
-					void SetTwoLayerGateSiteMode(const std::string& mode);
+						bool TwoLayerGateUsesSharedRadial() const;
+						bool TwoLayerGateUsesBodyLinearCombo() const;
+						bool TwoLayerGateUsesFullScalarWeights() const;
+						bool TwoLayerResidualEnabled() const;
+						bool TwoLayerGateUsesDirectScale() const;
+						bool TwoLayerGateUsesCenterGate() const;
+						const std::string& TwoLayerGateSiteMode() const { return two_layer_gate_site_mode_; }
+						void SetTwoLayerGateMode(const std::string& mode);
+						double TwoLayerGateTanhAmplitude() const;
+						void SetTwoLayerGateTanhAmplitude(double amplitude);
+						void SetTwoLayerGateSiteMode(const std::string& mode);
 					bool IsSHPotential() const { return is_sh_potential_; }
 				bool TwoLayerGateEnabled() const { return two_layer_gate_enabled_; }
-				void UpgradePlainSHToTwoLayerGate(int gate_body_order,
-				                                  bool independent_gate_radial_coeffs,
-				                                  const std::string& gate_site_mode = "neighbor");
+					void UpgradePlainSHToTwoLayerGate(int gate_body_order,
+					                                  bool independent_gate_radial_coeffs,
+					                                  const std::string& gate_site_mode = "neighbor",
+					                                  const std::string& gate_mode = "mu-body-linear-combo");
 			void RequestTwoLayerFullEdgeCacheForNextCalcEFS();
 			int TwoLayerGateRadialCoeffCount() const;
 		int TwoLayerGateRadialCoeffOffset() const;
@@ -570,10 +574,14 @@ public:
 		double TwoLayerGateWeight(int weight_index) const;
 		double TwoLayerGateBodyMixWeight(int mu, int body_order) const;
 		double TwoLayerGateBodyMixWeight(int weight_index) const;
-		void ComputeTwoLayerGateBodySignals(const double* scalar_values,
-		                                    double* body_values) const;
-		void ComputeTwoLayerGateMuSignals(const double* body_values,
-		                                  double* mu_values) const;
+			void ComputeTwoLayerGateBodySignals(const double* scalar_values,
+			                                    double* body_values) const;
+			void ComputeTwoLayerGateMuSignals(const double* body_values,
+			                                  double* mu_values) const;
+			void AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
+				const double* mu_adjoints,
+				double* scalar_seeds,
+				std::vector<double>& body_scratch) const;
 		double TwoLayerResidualE0Coeff(int scalar_index) const;
 		void InitializeTwoLayerGateRadialCoeffsFromBase();
 		void InitializeTwoLayerGateAdditiveCoeffs(double value = 1.0);

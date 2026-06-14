@@ -1622,11 +1622,16 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
     error->all(FLERR, "LAMMPS SUS2-SH two-layer gate cannot be combined with env_gate.");
   if (two_layer_residual_enabled)
     error->all(FLERR, "LAMMPS SUS2-SH interface does not support residual two-layer models.");
+  const int expected_gate_weight_count = two_layer_gate_full_scalar_weights
+      ? radial_func_count * two_layer_gate_scalar_count
+      : two_layer_gate_scalar_count;
+  const int expected_gate_body_mix_count = two_layer_gate_body_linear_combo
+      ? radial_func_count * (two_layer_gate_body_order_max - 1)
+      : 0;
   if (two_layer_gate_scalar_count != static_cast<int>(two_layer_gate_scalar_indices.size()) ||
-      two_layer_gate_weight_count != two_layer_gate_scalar_count ||
+      two_layer_gate_weight_count != expected_gate_weight_count ||
       two_layer_gate_weight_count != static_cast<int>(two_layer_gate_weights.size()) ||
-      two_layer_gate_body_mix_weight_count !=
-          radial_func_count * (two_layer_gate_body_order_max - 1) ||
+      two_layer_gate_body_mix_weight_count != expected_gate_body_mix_count ||
       two_layer_gate_body_mix_weight_count !=
           static_cast<int>(two_layer_gate_body_mix_weights.size()))
     error->all(FLERR, "SUS2-SH two-layer gate metadata has inconsistent sizes.");
@@ -1782,19 +1787,33 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
         error->all(FLERR, "SUS2-SH two-layer gate scalar index is out of range.");
       two_layer_gate_body_order_scratch[q] =
           moment_tensor_vals[alpha_moment_mapping[scalar_index]];
-      const int body_order = two_layer_gate_scalar_body_order[q];
-      gate_body_values[body_order - 2] +=
-          two_layer_gate_weights[q] * two_layer_gate_body_order_scratch[q];
+      if (two_layer_gate_body_linear_combo) {
+        const int body_order = two_layer_gate_scalar_body_order[q];
+        gate_body_values[body_order - 2] +=
+            two_layer_gate_weights[q] * two_layer_gate_body_order_scratch[q];
+      }
     }
     double *gate_values_i =
         two_layer_gate_values + static_cast<size_t>(i) * radial_func_count;
-    for (int mu = 0; mu < radial_func_count; mu++) {
-      double signal = 0.0;
-      const size_t mix_offset = static_cast<size_t>(mu) * gate_body_stride;
-      for (int b = 0; b < gate_body_stride; b++)
-        signal += two_layer_gate_body_mix_weights[mix_offset + b] *
-                  gate_body_values[b];
-      gate_values_i[mu] = signal;
+    if (two_layer_gate_body_linear_combo) {
+      for (int mu = 0; mu < radial_func_count; mu++) {
+        double signal = 0.0;
+        const size_t mix_offset = static_cast<size_t>(mu) * gate_body_stride;
+        for (int b = 0; b < gate_body_stride; b++)
+          signal += two_layer_gate_body_mix_weights[mix_offset + b] *
+                    gate_body_values[b];
+        gate_values_i[mu] = signal;
+      }
+    } else {
+      for (int mu = 0; mu < radial_func_count; mu++) {
+        double signal = 0.0;
+        const size_t weight_offset =
+            static_cast<size_t>(mu) * two_layer_gate_scalar_count;
+        for (int q = 0; q < two_layer_gate_scalar_count; q++)
+          signal += two_layer_gate_weights[weight_offset + q] *
+                    two_layer_gate_body_order_scratch[q];
+        gate_values_i[mu] = signal;
+      }
     }
     if (use_static_fixed_gate_cache &&
         first_layer_active_local_count == 0) {
@@ -2029,22 +2048,36 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
     const double *gate_adjoint_center_by_mu =
         two_layer_gate_adjoints + static_cast<size_t>(i) * radial_func_count;
     two_layer_gate_body_order_scratch.assign(gate_scalar_stride, 0.0);
-    std::fill(gate_body_adjoints.begin(), gate_body_adjoints.end(), 0.0);
     bool has_gate_adjoint_center = false;
-    for (int mu = 0; mu < radial_func_count; mu++) {
-      const double adjoint = gate_adjoint_center_by_mu[mu];
-      if (adjoint == 0.0) continue;
-      const size_t mix_offset = static_cast<size_t>(mu) * gate_body_stride;
-      for (int b = 0; b < gate_body_stride; b++)
-        gate_body_adjoints[b] +=
-            adjoint * two_layer_gate_body_mix_weights[mix_offset + b];
-      has_gate_adjoint_center = true;
-    }
-    if (!has_gate_adjoint_center) continue;
-    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
-      const int body_order = two_layer_gate_scalar_body_order[q];
-      two_layer_gate_body_order_scratch[q] =
-          gate_body_adjoints[body_order - 2] * two_layer_gate_weights[q];
+    if (two_layer_gate_body_linear_combo) {
+      std::fill(gate_body_adjoints.begin(), gate_body_adjoints.end(), 0.0);
+      for (int mu = 0; mu < radial_func_count; mu++) {
+        const double adjoint = gate_adjoint_center_by_mu[mu];
+        if (adjoint == 0.0) continue;
+        const size_t mix_offset = static_cast<size_t>(mu) * gate_body_stride;
+        for (int b = 0; b < gate_body_stride; b++)
+          gate_body_adjoints[b] +=
+              adjoint * two_layer_gate_body_mix_weights[mix_offset + b];
+        has_gate_adjoint_center = true;
+      }
+      if (!has_gate_adjoint_center) continue;
+      for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+        const int body_order = two_layer_gate_scalar_body_order[q];
+        two_layer_gate_body_order_scratch[q] =
+            gate_body_adjoints[body_order - 2] * two_layer_gate_weights[q];
+      }
+    } else {
+      for (int mu = 0; mu < radial_func_count; mu++) {
+        const double adjoint = gate_adjoint_center_by_mu[mu];
+        if (adjoint == 0.0) continue;
+        const size_t weight_offset =
+            static_cast<size_t>(mu) * two_layer_gate_scalar_count;
+        for (int q = 0; q < two_layer_gate_scalar_count; q++)
+          two_layer_gate_body_order_scratch[q] +=
+              adjoint * two_layer_gate_weights[weight_offset + q];
+        has_gate_adjoint_center = true;
+      }
+      if (!has_gate_adjoint_center) continue;
     }
     const size_t active_begin = two_layer_gate_edge_offsets[ii];
     const size_t active_end = two_layer_gate_edge_offsets[ii + 1];
@@ -2907,10 +2940,12 @@ access to the buffer size that is not provided in PFR.
   std::vector<double> alpha_times_coeff_buffer;
   sh_body_order = 0;
   sh_scalar_body_order.clear();
-	  two_layer_gate_enabled = false;
-	  two_layer_gate_shared_radial = false;
-	  two_layer_gate_center_enabled = false;
-	  two_layer_residual_enabled = false;
+  two_layer_gate_enabled = false;
+  two_layer_gate_shared_radial = false;
+  two_layer_gate_body_linear_combo = true;
+  two_layer_gate_full_scalar_weights = false;
+  two_layer_gate_center_enabled = false;
+  two_layer_residual_enabled = false;
   two_layer_gate_tanh_amplitude = 0.8;
   two_layer_gate_body_order_max = 0;
   two_layer_gate_scalar_count = 0;
@@ -3875,8 +3910,19 @@ access to the buffer size that is not provided in PFR.
       post_scalar_line = std::string(tfr.next_line());
       if (first_keyword(post_scalar_line) != "two_layer_gate_mode")
         error->one(FLERR, "SUS2-SH legacy two-layer gate models are not compatible with mu-body-order gate mode.");
-      if (parse_string_assignment(post_scalar_line) != "mu-body-linear-combo")
-        error->one(FLERR, "LAMMPS SUS2-SH two-layer gate requires two_layer_gate_mode = mu-body-linear-combo.");
+      {
+        std::string gate_mode = parse_string_assignment(post_scalar_line);
+        if (gate_mode == "mu-body-order") gate_mode = "mu-scalar-full";
+        if (gate_mode == "mu-body-linear-combo") {
+          two_layer_gate_body_linear_combo = true;
+          two_layer_gate_full_scalar_weights = false;
+        } else if (gate_mode == "mu-scalar-full") {
+          two_layer_gate_body_linear_combo = false;
+          two_layer_gate_full_scalar_weights = true;
+        } else {
+          error->one(FLERR, "LAMMPS SUS2-SH two-layer gate has unknown mode: {}", gate_mode);
+        }
+      }
 
       post_scalar_line = std::string(tfr.next_line());
       if (first_keyword(post_scalar_line) != "two_layer_gate_body_order_max")
@@ -3891,26 +3937,26 @@ access to the buffer size that is not provided in PFR.
       post_scalar_line = std::string(tfr.next_line());
       if (first_keyword(post_scalar_line) != "two_layer_gate_include_one_body")
         error->one(FLERR, "SUS2-SH two-layer gate is missing two_layer_gate_include_one_body.");
-	      if (parse_bool_assignment(post_scalar_line))
-	        error->one(FLERR, "LAMMPS SUS2-SH two-layer gate requires include_one_body = false.");
+      if (parse_bool_assignment(post_scalar_line))
+        error->one(FLERR, "LAMMPS SUS2-SH two-layer gate requires include_one_body = false.");
 
-	      post_scalar_line = std::string(tfr.next_line());
-	      keyword = first_keyword(post_scalar_line);
-	      if (keyword == "two_layer_gate_site_mode") {
-	        const std::string site_mode = parse_string_assignment(post_scalar_line);
-	        if (site_mode == "neighbor") {
-	          two_layer_gate_center_enabled = false;
-	        } else if (site_mode == "double") {
-	          two_layer_gate_center_enabled = true;
-	        } else {
-	          error->one(FLERR, "Unknown SUS2-SH two-layer gate site mode: {}", site_mode);
-	        }
-	        post_scalar_line = std::string(tfr.next_line());
-	        keyword = first_keyword(post_scalar_line);
-	      } else {
-	        two_layer_gate_center_enabled = false;
-	      }
-	      if (keyword == "two_layer_residual_enabled") {
+      post_scalar_line = std::string(tfr.next_line());
+      keyword = first_keyword(post_scalar_line);
+      if (keyword == "two_layer_gate_site_mode") {
+        const std::string site_mode = parse_string_assignment(post_scalar_line);
+        if (site_mode == "neighbor") {
+          two_layer_gate_center_enabled = false;
+        } else if (site_mode == "double") {
+          two_layer_gate_center_enabled = true;
+        } else {
+          error->one(FLERR, "Unknown SUS2-SH two-layer gate site mode: {}", site_mode);
+        }
+        post_scalar_line = std::string(tfr.next_line());
+        keyword = first_keyword(post_scalar_line);
+      } else {
+        two_layer_gate_center_enabled = false;
+      }
+      if (keyword == "two_layer_residual_enabled") {
         two_layer_residual_enabled = parse_bool_assignment(post_scalar_line);
         if (two_layer_residual_enabled)
           error->one(FLERR, "LAMMPS SUS2-SH interface does not support residual two-layer models.");
@@ -3977,17 +4023,24 @@ access to the buffer size that is not provided in PFR.
       }
       if (keyword != "two_layer_gate_weight_count")
         error->one(FLERR, "SUS2-SH two-layer gate is missing two_layer_gate_weight_count.");
-	      two_layer_gate_weight_count = parse_int_assignment(post_scalar_line);
-	      if (two_layer_gate_weight_count <= 0)
-	        error->one(FLERR, "SUS2-SH two-layer gate should contain at least one scalar weight.");
-	      two_layer_gate_scalar_count = two_layer_gate_weight_count;
+      two_layer_gate_weight_count = parse_int_assignment(post_scalar_line);
+      if (two_layer_gate_weight_count <= 0)
+        error->one(FLERR, "SUS2-SH two-layer gate should contain at least one scalar weight.");
+      two_layer_gate_scalar_count = two_layer_gate_weight_count;
+      if (two_layer_gate_full_scalar_weights) {
+        if (radial_func_count <= 0 ||
+            two_layer_gate_weight_count % radial_func_count != 0)
+          error->one(FLERR, "SUS2-SH full mu/scalar gate weight count is inconsistent.");
+        two_layer_gate_scalar_count =
+            two_layer_gate_weight_count / radial_func_count;
+      }
 
-	      post_scalar_line = std::string(tfr.next_line());
-	      if (first_keyword(post_scalar_line) != "two_layer_gate_scalar_indices")
-	        error->one(FLERR, "SUS2-SH two-layer gate is missing scalar indices.");
-	      two_layer_gate_scalar_indices = parse_int_list_line(post_scalar_line);
-	      if (static_cast<int>(two_layer_gate_scalar_indices.size()) != two_layer_gate_scalar_count)
-	        error->one(FLERR, "SUS2-SH two-layer gate scalar index list has wrong size.");
+      post_scalar_line = std::string(tfr.next_line());
+      if (first_keyword(post_scalar_line) != "two_layer_gate_scalar_indices")
+        error->one(FLERR, "SUS2-SH two-layer gate is missing scalar indices.");
+      two_layer_gate_scalar_indices = parse_int_list_line(post_scalar_line);
+      if (static_cast<int>(two_layer_gate_scalar_indices.size()) != two_layer_gate_scalar_count)
+        error->one(FLERR, "SUS2-SH two-layer gate scalar index list has wrong size.");
 
       post_scalar_line = std::string(tfr.next_line());
       if (first_keyword(post_scalar_line) != "two_layer_gate_weights")
@@ -3997,31 +4050,38 @@ access to the buffer size that is not provided in PFR.
         error->one(FLERR, "SUS2-SH two-layer gate weight list has wrong size.");
 
       post_scalar_line = std::string(tfr.next_line());
-      if (first_keyword(post_scalar_line) != "two_layer_gate_body_mix_weight_count")
-        error->one(FLERR, "SUS2-SH two-layer gate is missing body mix weight count.");
-      two_layer_gate_body_mix_weight_count = parse_int_assignment(post_scalar_line);
-      const int expected_mix_count =
-          radial_func_count * (two_layer_gate_body_order_max - 1);
-      if (two_layer_gate_body_mix_weight_count != expected_mix_count)
-        error->one(FLERR, "SUS2-SH two-layer gate body mix weight count is inconsistent.");
-      post_scalar_line = std::string(tfr.next_line());
-      if (first_keyword(post_scalar_line) != "two_layer_gate_body_mix_weights")
-        error->one(FLERR, "SUS2-SH two-layer gate is missing body mix weights.");
-      two_layer_gate_body_mix_weights = parse_double_list_line(post_scalar_line);
-      if (static_cast<int>(two_layer_gate_body_mix_weights.size()) !=
-          two_layer_gate_body_mix_weight_count)
-        error->one(FLERR, "SUS2-SH two-layer gate body mix weight list has wrong size.");
-
-      post_scalar_line = std::string(tfr.next_line());
       keyword = first_keyword(post_scalar_line);
+      if (two_layer_gate_body_linear_combo) {
+        if (keyword != "two_layer_gate_body_mix_weight_count")
+          error->one(FLERR, "SUS2-SH two-layer gate is missing body mix weight count.");
+        two_layer_gate_body_mix_weight_count = parse_int_assignment(post_scalar_line);
+        const int expected_mix_count =
+            radial_func_count * (two_layer_gate_body_order_max - 1);
+        if (two_layer_gate_body_mix_weight_count != expected_mix_count)
+          error->one(FLERR, "SUS2-SH two-layer gate body mix weight count is inconsistent.");
+        post_scalar_line = std::string(tfr.next_line());
+        if (first_keyword(post_scalar_line) != "two_layer_gate_body_mix_weights")
+          error->one(FLERR, "SUS2-SH two-layer gate is missing body mix weights.");
+        two_layer_gate_body_mix_weights = parse_double_list_line(post_scalar_line);
+        if (static_cast<int>(two_layer_gate_body_mix_weights.size()) !=
+            two_layer_gate_body_mix_weight_count)
+          error->one(FLERR, "SUS2-SH two-layer gate body mix weight list has wrong size.");
+        post_scalar_line = std::string(tfr.next_line());
+        keyword = first_keyword(post_scalar_line);
+      } else {
+        two_layer_gate_body_mix_weight_count = 0;
+        two_layer_gate_body_mix_weights.clear();
+        if (keyword == "two_layer_gate_body_mix_weight_count")
+          error->one(FLERR, "SUS2-SH mu-scalar-full gate models should not contain body mix weights.");
+      }
       if (keyword == "two_layer_residual_e0_coeff_count")
         error->one(FLERR, "LAMMPS SUS2-SH interface does not support residual two-layer models.");
 
       if (sh_scalar_body_order.empty())
         error->one(FLERR, "SUS2-SH mu-body-order gate requires sh_scalar_info metadata.");
-	      two_layer_gate_scalar_body_order.assign(two_layer_gate_scalar_count, 0);
-	      std::vector<int> body_order_counts(two_layer_gate_body_order_max + 1, 0);
-	      for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+      two_layer_gate_scalar_body_order.assign(two_layer_gate_scalar_count, 0);
+      std::vector<int> body_order_counts(two_layer_gate_body_order_max + 1, 0);
+      for (int q = 0; q < two_layer_gate_scalar_count; q++) {
         const int scalar_index = two_layer_gate_scalar_indices[q];
         if (scalar_index < 0 || scalar_index >= alpha_scalar_count)
           error->one(FLERR, "SUS2-SH two-layer gate scalar index is out of range.");
@@ -4130,23 +4190,33 @@ access to the buffer size that is not provided in PFR.
     sus2_mtp_zbl::FillPairConstants(species_count, zbl_atomic_numbers,
                                     zbl_pair_constants);
   }
-	  int two_layer_gate_enabled_int = two_layer_gate_enabled ? 1 : 0;
-	  int two_layer_gate_shared_radial_int = two_layer_gate_shared_radial ? 1 : 0;
-	  int two_layer_gate_center_enabled_int = two_layer_gate_center_enabled ? 1 : 0;
-	  int two_layer_residual_enabled_int = two_layer_residual_enabled ? 1 : 0;
-	  MPI_Bcast(&two_layer_gate_enabled_int, 1, MPI_INT, 0, world);
-	  MPI_Bcast(&two_layer_gate_shared_radial_int, 1, MPI_INT, 0, world);
-	  MPI_Bcast(&two_layer_gate_center_enabled_int, 1, MPI_INT, 0, world);
-	  MPI_Bcast(&two_layer_residual_enabled_int, 1, MPI_INT, 0, world);
-	  two_layer_gate_enabled = (two_layer_gate_enabled_int != 0);
-	  two_layer_gate_shared_radial = (two_layer_gate_shared_radial_int != 0);
-	  two_layer_gate_center_enabled = (two_layer_gate_center_enabled_int != 0);
-	  two_layer_residual_enabled = (two_layer_residual_enabled_int != 0);
-	  MPI_Bcast(&two_layer_gate_tanh_amplitude, 1, MPI_DOUBLE, 0, world);
-	  MPI_Bcast(&two_layer_gate_body_order_max, 1, MPI_INT, 0, world);
-	  MPI_Bcast(&two_layer_gate_scalar_count, 1, MPI_INT, 0, world);
-	  MPI_Bcast(&two_layer_gate_weight_count, 1, MPI_INT, 0, world);
-	  MPI_Bcast(&two_layer_gate_body_mix_weight_count, 1, MPI_INT, 0, world);
+  int two_layer_gate_enabled_int = two_layer_gate_enabled ? 1 : 0;
+  int two_layer_gate_shared_radial_int = two_layer_gate_shared_radial ? 1 : 0;
+  int two_layer_gate_body_linear_combo_int =
+      two_layer_gate_body_linear_combo ? 1 : 0;
+  int two_layer_gate_full_scalar_weights_int =
+      two_layer_gate_full_scalar_weights ? 1 : 0;
+  int two_layer_gate_center_enabled_int = two_layer_gate_center_enabled ? 1 : 0;
+  int two_layer_residual_enabled_int = two_layer_residual_enabled ? 1 : 0;
+  MPI_Bcast(&two_layer_gate_enabled_int, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_gate_shared_radial_int, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_gate_body_linear_combo_int, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_gate_full_scalar_weights_int, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_gate_center_enabled_int, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_residual_enabled_int, 1, MPI_INT, 0, world);
+  two_layer_gate_enabled = (two_layer_gate_enabled_int != 0);
+  two_layer_gate_shared_radial = (two_layer_gate_shared_radial_int != 0);
+  two_layer_gate_body_linear_combo =
+      (two_layer_gate_body_linear_combo_int != 0);
+  two_layer_gate_full_scalar_weights =
+      (two_layer_gate_full_scalar_weights_int != 0);
+  two_layer_gate_center_enabled = (two_layer_gate_center_enabled_int != 0);
+  two_layer_residual_enabled = (two_layer_residual_enabled_int != 0);
+  MPI_Bcast(&two_layer_gate_tanh_amplitude, 1, MPI_DOUBLE, 0, world);
+  MPI_Bcast(&two_layer_gate_body_order_max, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_gate_scalar_count, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_gate_weight_count, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_gate_body_mix_weight_count, 1, MPI_INT, 0, world);
   int sh_scalar_info_count = static_cast<int>(sh_scalar_body_order.size());
   MPI_Bcast(&sh_scalar_info_count, 1, MPI_INT, 0, world);
   if (comm->me != 0) sh_scalar_body_order.resize(sh_scalar_info_count);
@@ -4157,38 +4227,45 @@ access to the buffer size that is not provided in PFR.
   int two_layer_gate_additive_count =
       static_cast<int>(two_layer_gate_additive_coeffs.size());
   MPI_Bcast(&two_layer_gate_radial_count, 1, MPI_INT, 0, world);
-	  MPI_Bcast(&two_layer_gate_additive_count, 1, MPI_INT, 0, world);
-	  if (comm->me != 0) {
-	    two_layer_gate_scalar_indices.resize(two_layer_gate_scalar_count);
-	    two_layer_gate_weights.resize(two_layer_gate_weight_count);
-	    two_layer_gate_body_mix_weights.resize(two_layer_gate_body_mix_weight_count);
-	    two_layer_gate_radial_coeffs.resize(two_layer_gate_radial_count);
-	    two_layer_gate_additive_coeffs.resize(two_layer_gate_additive_count);
-	  }
-	  if (two_layer_gate_scalar_count > 0)
-	    MPI_Bcast(two_layer_gate_scalar_indices.data(), two_layer_gate_scalar_count,
-	              MPI_INT, 0, world);
-	  if (two_layer_gate_weight_count > 0) {
-	    MPI_Bcast(two_layer_gate_weights.data(), two_layer_gate_weight_count,
-	              MPI_DOUBLE, 0, world);
-	  }
-	  if (two_layer_gate_body_mix_weight_count > 0) {
-	    MPI_Bcast(two_layer_gate_body_mix_weights.data(),
-	              two_layer_gate_body_mix_weight_count, MPI_DOUBLE, 0, world);
-	  }
-	  if (two_layer_gate_enabled) {
-	    if (sh_scalar_body_order.empty())
-	      error->all(FLERR, "SUS2-SH mu-body-order gate requires sh_scalar_info metadata.");
-	    if (two_layer_gate_body_order_max != sh_k_max + 1)
-	      error->all(FLERR, "SUS2-SH mu-body-order gate body order should be sh_k_max + 1.");
-	    if (radial_func_count <= 0 ||
-	        two_layer_gate_weight_count != two_layer_gate_scalar_count ||
-	        two_layer_gate_body_mix_weight_count !=
-	            radial_func_count * (two_layer_gate_body_order_max - 1))
-	      error->all(FLERR, "SUS2-SH two-layer gate metadata has inconsistent sizes.");
-	    two_layer_gate_scalar_body_order.assign(two_layer_gate_scalar_count, 0);
-	    std::vector<int> body_order_counts(two_layer_gate_body_order_max + 1, 0);
-	    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+  MPI_Bcast(&two_layer_gate_additive_count, 1, MPI_INT, 0, world);
+  if (comm->me != 0) {
+    two_layer_gate_scalar_indices.resize(two_layer_gate_scalar_count);
+    two_layer_gate_weights.resize(two_layer_gate_weight_count);
+    two_layer_gate_body_mix_weights.resize(two_layer_gate_body_mix_weight_count);
+    two_layer_gate_radial_coeffs.resize(two_layer_gate_radial_count);
+    two_layer_gate_additive_coeffs.resize(two_layer_gate_additive_count);
+  }
+  if (two_layer_gate_scalar_count > 0)
+    MPI_Bcast(two_layer_gate_scalar_indices.data(), two_layer_gate_scalar_count,
+              MPI_INT, 0, world);
+  if (two_layer_gate_weight_count > 0) {
+    MPI_Bcast(two_layer_gate_weights.data(), two_layer_gate_weight_count,
+              MPI_DOUBLE, 0, world);
+  }
+  if (two_layer_gate_body_mix_weight_count > 0) {
+    MPI_Bcast(two_layer_gate_body_mix_weights.data(),
+              two_layer_gate_body_mix_weight_count, MPI_DOUBLE, 0, world);
+  }
+  if (two_layer_gate_enabled) {
+    if (sh_scalar_body_order.empty())
+      error->all(FLERR, "SUS2-SH mu-body-order gate requires sh_scalar_info metadata.");
+    if (two_layer_gate_body_order_max != sh_k_max + 1)
+      error->all(FLERR, "SUS2-SH mu-body-order gate body order should be sh_k_max + 1.");
+    const int expected_gate_weight_count =
+        two_layer_gate_full_scalar_weights
+            ? radial_func_count * two_layer_gate_scalar_count
+            : two_layer_gate_scalar_count;
+    const int expected_gate_body_mix_count =
+        two_layer_gate_body_linear_combo
+            ? radial_func_count * (two_layer_gate_body_order_max - 1)
+            : 0;
+    if (radial_func_count <= 0 ||
+        two_layer_gate_weight_count != expected_gate_weight_count ||
+        two_layer_gate_body_mix_weight_count != expected_gate_body_mix_count)
+      error->all(FLERR, "SUS2-SH two-layer gate metadata has inconsistent sizes.");
+    two_layer_gate_scalar_body_order.assign(two_layer_gate_scalar_count, 0);
+    std::vector<int> body_order_counts(two_layer_gate_body_order_max + 1, 0);
+    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
       const int scalar_index = two_layer_gate_scalar_indices[q];
       if (scalar_index < 0 || scalar_index >= alpha_scalar_count)
         error->all(FLERR, "SUS2-SH two-layer gate scalar index is out of range.");

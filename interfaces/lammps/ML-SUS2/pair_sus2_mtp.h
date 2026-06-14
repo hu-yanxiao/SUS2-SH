@@ -152,15 +152,17 @@ class PairSUS2MTP : public Pair {
 
   double *linear_coeffs;     // These are the moment tensor basis coeffs (xi)
   double *species_coeffs;    // For the species coefficients (0th rank moment tensor)
-	  bool two_layer_gate_enabled = false;
-	  bool two_layer_gate_shared_radial = false;
-	  bool two_layer_gate_center_enabled = false;
-	  bool two_layer_residual_enabled = false;
-	  double two_layer_gate_tanh_amplitude = 0.8;
-	  int two_layer_gate_body_order_max = 0;
-	  int two_layer_gate_scalar_count = 0;
-	  int two_layer_gate_weight_count = 0;
-	  int two_layer_gate_body_mix_weight_count = 0;
+  bool two_layer_gate_enabled = false;
+  bool two_layer_gate_shared_radial = false;
+  bool two_layer_gate_body_linear_combo = true;
+  bool two_layer_gate_full_scalar_weights = false;
+  bool two_layer_gate_center_enabled = false;
+  bool two_layer_residual_enabled = false;
+  double two_layer_gate_tanh_amplitude = 0.8;
+  int two_layer_gate_body_order_max = 0;
+  int two_layer_gate_scalar_count = 0;
+  int two_layer_gate_weight_count = 0;
+  int two_layer_gate_body_mix_weight_count = 0;
   std::vector<int> sh_scalar_body_order;
   std::vector<int> two_layer_gate_scalar_body_order;
   std::vector<int> two_layer_gate_mu_body_order;

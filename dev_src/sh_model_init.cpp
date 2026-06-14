@@ -746,6 +746,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const int two_layer_gate_body_order = kmax + 1;
 	const double two_layer_gate_tanh_amplitude =
 		DoubleOpt(opts, "two-layer-gate-tanh-amplitude", 0.8);
+	std::string two_layer_gate_mode =
+		StringOpt(opts, "two-layer-gate-mode", "mu-body-linear-combo");
+	if (two_layer_gate_mode == "mu-body-order")
+		two_layer_gate_mode = "mu-scalar-full";
 	const std::string two_layer_gate_site_mode =
 		StringOpt(opts, "two-layer-gate-site-mode", "neighbor");
 	const bool write_scalar_info = HasOpt(opts, "write-sh-scalar-info") || two_layer_gate;
@@ -765,6 +769,11 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-body-order is not used by mu-body-order gate models; use --body-order >= --k-max + 1.");
 	if (two_layer_gate && body_order < two_layer_gate_body_order)
 		ERROR("--two-layer-gate requires --body-order >= --k-max + 1 for mu-body-order scalar buckets.");
+	if (two_layer_gate_mode != "mu-body-linear-combo"
+	    && two_layer_gate_mode != "mu-scalar-full")
+		ERROR("--two-layer-gate-mode should be mu-body-linear-combo or mu-scalar-full.");
+	if (HasOpt(opts, "two-layer-gate-mode") && !two_layer_gate)
+		ERROR("--two-layer-gate-mode requires --two-layer-gate.");
 	if (!std::isfinite(two_layer_gate_tanh_amplitude)
 	    || two_layer_gate_tanh_amplitude < 0.0
 	    || two_layer_gate_tanh_amplitude > 1.0)
@@ -877,12 +886,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				ERROR("--two-layer-gate selected no SH scalar basis functions for one required mu body-order bucket.");
 
 		ofs << "two_layer_gate_enabled = true\n";
-			ofs << "two_layer_gate_mode = mu-body-linear-combo\n";
-			ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
-			ofs << "two_layer_gate_include_one_body = false\n";
-			ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode << "\n";
-			ofs << "two_layer_gate_tanh_amplitude = "
-			    << two_layer_gate_tanh_amplitude << "\n";
+		ofs << "two_layer_gate_mode = " << two_layer_gate_mode << "\n";
+		ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
+		ofs << "two_layer_gate_include_one_body = false\n";
+		ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode << "\n";
+		ofs << "two_layer_gate_tanh_amplitude = "
+		    << two_layer_gate_tanh_amplitude << "\n";
 		if (two_layer_gate_shared_radial) {
 			const int gate_radial_count = kmax * (lmax + 1) * rb_size;
 			ofs << "two_layer_gate_radial_mode = shared-radial\n";
@@ -892,24 +901,26 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				if (i != 0)
 					ofs << ", ";
 				ofs << 1.0e-2;
-				}
-				ofs << "}\n";
-			}
-			const int radial_func_count = kmax * (lmax + 1);
-			const int gate_additive_count = species_count;
-			ofs << "two_layer_gate_additive_coeff_count = "
-			    << gate_additive_count << "\n";
-			ofs << "two_layer_gate_additive_coeffs = {";
-			for (int i = 0; i < gate_additive_count; ++i) {
-				if (i != 0)
-					ofs << ", ";
-				ofs << 1.0;
 			}
 			ofs << "}\n";
-			const int gate_weight_count =
-				static_cast<int>(gate_scalar_indices.size());
-			ofs << "two_layer_gate_weight_count = " << gate_weight_count << "\n";
-			ofs << "two_layer_gate_scalar_indices = {";
+		}
+		const int radial_func_count = kmax * (lmax + 1);
+		const int gate_additive_count = species_count;
+		ofs << "two_layer_gate_additive_coeff_count = "
+		    << gate_additive_count << "\n";
+		ofs << "two_layer_gate_additive_coeffs = {";
+		for (int i = 0; i < gate_additive_count; ++i) {
+			if (i != 0)
+				ofs << ", ";
+			ofs << 1.0;
+		}
+		ofs << "}\n";
+		const int gate_weight_count =
+			(two_layer_gate_mode == "mu-scalar-full")
+				? radial_func_count * static_cast<int>(gate_scalar_indices.size())
+				: static_cast<int>(gate_scalar_indices.size());
+		ofs << "two_layer_gate_weight_count = " << gate_weight_count << "\n";
+		ofs << "two_layer_gate_scalar_indices = {";
 		for (size_t i = 0; i < gate_scalar_indices.size(); ++i) {
 			if (i != 0)
 				ofs << ", ";
@@ -920,20 +931,22 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		for (int i = 0; i < gate_weight_count; ++i) {
 			if (i != 0)
 				ofs << ", ";
-			ofs << 0.0;
+			ofs << (two_layer_gate_mode == "mu-scalar-full" ? 1.0 : 0.0);
 		}
 		ofs << "}\n";
-		const int gate_body_mix_weight_count =
-			radial_func_count * (two_layer_gate_body_order - 1);
-		ofs << "two_layer_gate_body_mix_weight_count = "
-		    << gate_body_mix_weight_count << "\n";
-		ofs << "two_layer_gate_body_mix_weights = {";
-		for (int i = 0; i < gate_body_mix_weight_count; ++i) {
-			if (i != 0)
-				ofs << ", ";
-			ofs << 1.0;
+		if (two_layer_gate_mode == "mu-body-linear-combo") {
+			const int gate_body_mix_weight_count =
+				radial_func_count * (two_layer_gate_body_order - 1);
+			ofs << "two_layer_gate_body_mix_weight_count = "
+			    << gate_body_mix_weight_count << "\n";
+			ofs << "two_layer_gate_body_mix_weights = {";
+			for (int i = 0; i < gate_body_mix_weight_count; ++i) {
+				if (i != 0)
+					ofs << ", ";
+				ofs << 1.0;
+			}
+			ofs << "}\n";
 		}
-		ofs << "}\n";
 		if (two_layer_residual) {
 			ofs << "two_layer_residual_e0_coeff_count = "
 			    << graph.scalars_.size() << "\n";

@@ -468,10 +468,11 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 			"scaling",
 		"potential-name",
 				"inline-sh-model",
-				"two-layer-gate",
-					"two-layer-gate-body-order",
-					"two-layer-gate-tanh-amplitude",
-					"two-layer-gate-site-mode",
+					"two-layer-gate",
+						"two-layer-gate-body-order",
+						"two-layer-gate-mode",
+						"two-layer-gate-tanh-amplitude",
+						"two-layer-gate-site-mode",
 					"two-layer-gate-shared-radial",
 					"two-layer-residual"
 		};
@@ -1107,25 +1108,36 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (radial_smooth_grid <= 0)
 		ERROR("--radial-smooth-grid should be > 0");
 
-		bool custom_two_layer_gate_tanh_amplitude = false;
-		double two_layer_gate_tanh_amplitude = 0.8;
+	bool custom_two_layer_gate_tanh_amplitude = false;
+	double two_layer_gate_tanh_amplitude = 0.8;
 	if (opts["two-layer-gate-tanh-amplitude"] != "") {
 		two_layer_gate_tanh_amplitude = stod(opts["two-layer-gate-tanh-amplitude"]);
 		custom_two_layer_gate_tanh_amplitude = true;
 	}
-		if (!std::isfinite(two_layer_gate_tanh_amplitude)
-		    || two_layer_gate_tanh_amplitude < 0.0
-		    || two_layer_gate_tanh_amplitude > 1.0)
-			ERROR("--two-layer-gate-tanh-amplitude should be finite and in [0, 1]");
-		bool custom_two_layer_gate_site_mode = false;
-		std::string two_layer_gate_site_mode = "neighbor";
-		if (opts["two-layer-gate-site-mode"] != "") {
-			two_layer_gate_site_mode = opts["two-layer-gate-site-mode"];
-			custom_two_layer_gate_site_mode = true;
-		}
-		if (two_layer_gate_site_mode != "neighbor"
-		    && two_layer_gate_site_mode != "double")
-			ERROR("--two-layer-gate-site-mode should be 'neighbor' or 'double'");
+	if (!std::isfinite(two_layer_gate_tanh_amplitude)
+	    || two_layer_gate_tanh_amplitude < 0.0
+	    || two_layer_gate_tanh_amplitude > 1.0)
+		ERROR("--two-layer-gate-tanh-amplitude should be finite and in [0, 1]");
+	bool custom_two_layer_gate_site_mode = false;
+	std::string two_layer_gate_site_mode = "neighbor";
+	if (opts["two-layer-gate-site-mode"] != "") {
+		two_layer_gate_site_mode = opts["two-layer-gate-site-mode"];
+		custom_two_layer_gate_site_mode = true;
+	}
+	if (two_layer_gate_site_mode != "neighbor"
+	    && two_layer_gate_site_mode != "double")
+		ERROR("--two-layer-gate-site-mode should be 'neighbor' or 'double'");
+	bool custom_two_layer_gate_mode = false;
+	std::string two_layer_gate_mode = "mu-body-linear-combo";
+	if (opts["two-layer-gate-mode"] != "") {
+		two_layer_gate_mode = opts["two-layer-gate-mode"];
+		if (two_layer_gate_mode == "mu-body-order")
+			two_layer_gate_mode = "mu-scalar-full";
+		custom_two_layer_gate_mode = true;
+	}
+	if (two_layer_gate_mode != "mu-body-linear-combo"
+	    && two_layer_gate_mode != "mu-scalar-full")
+		ERROR("--two-layer-gate-mode should be 'mu-body-linear-combo' or 'mu-scalar-full'");
 
 	std::vector<double> fixed_atomic_energies;
 	if (opts["atomic-energies"] != "")
@@ -1173,7 +1185,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                  zbl_options.typewise,
 		                  zbl_options.typewise_factor);
 	}
-		const bool requested_two_layer_gate = opts["two-layer-gate"] != "";
+	const bool requested_two_layer_gate = opts["two-layer-gate"] != "";
 	const bool requested_two_layer_gate_shared_radial =
 		opts["two-layer-gate-shared-radial"] != "";
 	const bool requested_two_layer_residual = opts["two-layer-residual"] != "";
@@ -1181,41 +1193,55 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	bool plain_to_gate_disabled_controls = false;
 	int plain_to_gate_body_order = -1;
 	bool plain_to_gate_independent_radial = false;
-		if (requested_two_layer_gate_shared_radial && !requested_two_layer_gate
-		    && !mtpr.TwoLayerGateEnabled())
-			ERROR("--two-layer-gate-shared-radial requires --two-layer-gate when upgrading a plain SH model");
-		if (custom_two_layer_gate_site_mode && !requested_two_layer_gate
-		    && !mtpr.TwoLayerGateEnabled())
-			ERROR("--two-layer-gate-site-mode requires --two-layer-gate when upgrading a plain SH model");
-		if (requested_two_layer_gate && !mtpr.TwoLayerGateEnabled()) {
+	if (requested_two_layer_gate_shared_radial && !requested_two_layer_gate
+	    && !mtpr.TwoLayerGateEnabled())
+		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate when upgrading a plain SH model");
+	if (custom_two_layer_gate_site_mode && !requested_two_layer_gate
+	    && !mtpr.TwoLayerGateEnabled())
+		ERROR("--two-layer-gate-site-mode requires --two-layer-gate when upgrading a plain SH model");
+	if (custom_two_layer_gate_mode && !requested_two_layer_gate
+	    && !mtpr.TwoLayerGateEnabled())
+		ERROR("--two-layer-gate-mode requires --two-layer-gate when upgrading a plain SH model");
+	if (requested_two_layer_gate && !mtpr.TwoLayerGateEnabled()) {
 		if (!mtpr.IsSHPotential())
 			ERROR("--two-layer-gate can only upgrade or train a SUS2-SH model");
 		if (requested_two_layer_residual)
 			ERROR("--two-layer-residual is not supported by mu-body-order gate models");
 		if (opts["two-layer-gate-body-order"] != "")
 			ERROR("--two-layer-gate-body-order is not used by mu-body-order gate models; use --body-order >= --k-max + 1.");
-			plain_to_gate_independent_radial = requested_two_layer_gate_shared_radial;
-			mtpr.UpgradePlainSHToTwoLayerGate(plain_to_gate_body_order,
-			                                  plain_to_gate_independent_radial,
-			                                  two_layer_gate_site_mode);
-			plain_to_gate_upgrade = true;
+		plain_to_gate_independent_radial = requested_two_layer_gate_shared_radial;
+		mtpr.UpgradePlainSHToTwoLayerGate(plain_to_gate_body_order,
+		                                  plain_to_gate_independent_radial,
+		                                  two_layer_gate_site_mode,
+		                                  two_layer_gate_mode);
+		plain_to_gate_upgrade = true;
 		plain_to_gate_disabled_controls = do_lin || do_lin_rescale || fine_tune;
 		do_lin = false;
-			do_lin_rescale = false;
-			fine_tune = false;
-		}
-			if (custom_two_layer_gate_tanh_amplitude) {
-				if (!mtpr.TwoLayerGateEnabled())
-					ERROR("--two-layer-gate-tanh-amplitude requires a two-layer gate model or --two-layer-gate");
-				mtpr.SetTwoLayerGateTanhAmplitude(two_layer_gate_tanh_amplitude);
-			}
-			if (custom_two_layer_gate_site_mode) {
-				if (!mtpr.TwoLayerGateEnabled())
-					ERROR("--two-layer-gate-site-mode requires a two-layer gate model or --two-layer-gate");
-				if (!plain_to_gate_upgrade
-				    && mtpr.TwoLayerGateSiteMode() != two_layer_gate_site_mode)
-					ERROR("--two-layer-gate-site-mode does not match the loaded two-layer gate model");
-			}
+		do_lin_rescale = false;
+		fine_tune = false;
+	}
+	if (custom_two_layer_gate_tanh_amplitude) {
+		if (!mtpr.TwoLayerGateEnabled())
+			ERROR("--two-layer-gate-tanh-amplitude requires a two-layer gate model or --two-layer-gate");
+		mtpr.SetTwoLayerGateTanhAmplitude(two_layer_gate_tanh_amplitude);
+	}
+	if (custom_two_layer_gate_site_mode) {
+		if (!mtpr.TwoLayerGateEnabled())
+			ERROR("--two-layer-gate-site-mode requires a two-layer gate model or --two-layer-gate");
+		if (!plain_to_gate_upgrade
+		    && mtpr.TwoLayerGateSiteMode() != two_layer_gate_site_mode)
+			ERROR("--two-layer-gate-site-mode does not match the loaded two-layer gate model");
+	}
+	if (custom_two_layer_gate_mode) {
+		if (!mtpr.TwoLayerGateEnabled())
+			ERROR("--two-layer-gate-mode requires a two-layer gate model or --two-layer-gate");
+		if (!plain_to_gate_upgrade
+		    && ((two_layer_gate_mode == "mu-body-linear-combo"
+		         && !mtpr.TwoLayerGateUsesBodyLinearCombo())
+		        || (two_layer_gate_mode == "mu-scalar-full"
+		            && !mtpr.TwoLayerGateUsesFullScalarWeights())))
+			ERROR("--two-layer-gate-mode does not match the loaded two-layer gate model");
+	}
 		if (fine_tune && !mtpr.HasCompleteParameters())
 			ERROR("--fine-tune requires a complete trained model with shift/scal/radial/linear coefficients.");
 	if (!fixed_atomic_energies.empty() &&
@@ -1262,10 +1288,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		std::cout << "scal-range override: " << scal_range.first << ", " << scal_range.second << std::endl;
 	if (prank == 0 && custom_s_range)
 		std::cout << "s-range override: " << s_range.first << ", " << s_range.second << std::endl;
-		if (prank == 0 && plain_to_gate_upgrade) {
-			std::cout << "SUS2-SH plain-to-gate upgrade enabled: "
-		          << "gate_body_order=mu-body-order"
-		          << " independent_gate_radial_coeffs="
+			if (prank == 0 && plain_to_gate_upgrade) {
+				std::cout << "SUS2-SH plain-to-gate upgrade enabled: "
+			          << "gate_mode="
+			          << (mtpr.TwoLayerGateUsesFullScalarWeights()
+			              ? "mu-scalar-full"
+			              : "mu-body-linear-combo")
+			          << " gate_body_order=k+1"
+			          << " independent_gate_radial_coeffs="
 		          << (plain_to_gate_independent_radial ? "true" : "false")
 		          << " gate_weight_count=" << mtpr.TwoLayerGateWeightCount()
 		          << " gate_radial_coeff_count=" << mtpr.TwoLayerGateRadialCoeffCount()
