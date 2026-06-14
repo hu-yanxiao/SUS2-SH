@@ -29,6 +29,20 @@ common_opts=(
 ./bin/mlp-sus2 init-sh "$gated" "${common_opts[@]}" \
   --two-layer-gate
 
+python3 - "$gated" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+text = open(path).read()
+match = re.search(r"two_layer_gate_weights = \{([^}]*)\}", text)
+if not match:
+    raise SystemExit("missing two_layer_gate_weights")
+weights = [float(x.strip()) for x in match.group(1).split(",") if x.strip()]
+replacement = "two_layer_gate_weights = {" + ", ".join("0.000000000000000e+00" for _ in weights) + "}"
+open(path, "w").write(text[:match.start()] + replacement + text[match.end():])
+PY
+
 ./bin/mlp-sus2 calc-efs "$plain" "$train" "$plain_pred" >/dev/null
 ./bin/mlp-sus2 calc-efs "$gated" "$train" "$gated_pred" >/dev/null
 

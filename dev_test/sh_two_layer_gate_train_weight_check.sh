@@ -42,7 +42,7 @@ if not match:
 weights = [float(x.strip()) for x in match.group(1).split(",") if x.strip()]
 if not weights:
     raise SystemExit("empty two_layer_gate_weights")
-max_abs = max(abs(x) for x in weights)
-if max_abs <= 1.0e-12:
-    raise SystemExit("two-layer gate weights did not move from zero")
+max_move = max(abs(x - 1.0) for x in weights)
+if max_move <= 1.0e-12:
+    raise SystemExit("two-layer gate weights did not move from one")
 PY

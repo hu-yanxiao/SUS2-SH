@@ -775,18 +775,17 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 		return;
 	}
 
-	const int local_offset = type_outer * radial_func_count;
-	const int coeff_offset = TwoLayerGateAdditiveCoeffOffset() + local_offset;
+	const int coeff_index = TwoLayerGateAdditiveCoeffIndex(type_outer, 0);
 	const bool use_regression_coeffs =
-		coeff_offset >= 0
-		&& coeff_offset + radial_func_count <= static_cast<int>(regression_coeffs.size());
+		coeff_index >= 0
+		&& coeff_index < static_cast<int>(regression_coeffs.size());
 	const bool use_saved_coeffs =
-		local_offset >= 0
-		&& local_offset + radial_func_count
-			<= static_cast<int>(two_layer_gate_additive_coeffs_.size());
-	const double* additive_src = use_regression_coeffs
-		? regression_coeffs.data() + coeff_offset
-		: (use_saved_coeffs ? two_layer_gate_additive_coeffs_.data() + local_offset : nullptr);
+		type_outer >= 0
+		&& type_outer < static_cast<int>(two_layer_gate_additive_coeffs_.size());
+	const double additive_coeff = use_regression_coeffs
+		? regression_coeffs[coeff_index]
+		: (use_saved_coeffs ? two_layer_gate_additive_coeffs_[type_outer]
+		                    : TwoLayerGateAdditiveCoeff(type_outer, 0));
 
 	const bool use_tanh_cache =
 		active_two_layer_gate_values_ != nullptr
@@ -823,9 +822,6 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 	for (int mu = 0; mu < radial_func_count; ++mu) {
 		const double gate_signal =
 			(gate_signal_by_mu == nullptr) ? 0.0 : gate_signal_by_mu[mu];
-		const double additive_coeff =
-			(additive_src == nullptr) ? TwoLayerGateAdditiveCoeff(type_outer, mu)
-			                          : additive_src[mu];
 		const double arg = additive_coeff * gate_signal;
 		const double tanh_arg = tanh_cache == nullptr
 			? (arg == 0.0 ? 0.0 : std::tanh(arg))
@@ -936,18 +932,17 @@ void MLMTPR::PrepareTwoLayerGateAtomMuBuffers(int atom_type,
 		return;
 	}
 
-	const int local_offset = atom_type * radial_func_count;
-	const int coeff_offset = TwoLayerGateAdditiveCoeffOffset() + local_offset;
+	const int coeff_index = TwoLayerGateAdditiveCoeffIndex(atom_type, 0);
 	const bool use_regression_coeffs =
-		coeff_offset >= 0
-		&& coeff_offset + radial_func_count <= static_cast<int>(regression_coeffs.size());
+		coeff_index >= 0
+		&& coeff_index < static_cast<int>(regression_coeffs.size());
 	const bool use_saved_coeffs =
-		local_offset >= 0
-		&& local_offset + radial_func_count
-			<= static_cast<int>(two_layer_gate_additive_coeffs_.size());
-	const double* additive_src = use_regression_coeffs
-		? regression_coeffs.data() + coeff_offset
-		: (use_saved_coeffs ? two_layer_gate_additive_coeffs_.data() + local_offset : nullptr);
+		atom_type >= 0
+		&& atom_type < static_cast<int>(two_layer_gate_additive_coeffs_.size());
+	const double additive_coeff = use_regression_coeffs
+		? regression_coeffs[coeff_index]
+		: (use_saved_coeffs ? two_layer_gate_additive_coeffs_[atom_type]
+		                    : TwoLayerGateAdditiveCoeff(atom_type, 0));
 
 	const bool use_tanh_cache =
 		active_two_layer_gate_values_ != nullptr
@@ -984,9 +979,6 @@ void MLMTPR::PrepareTwoLayerGateAtomMuBuffers(int atom_type,
 	for (int mu = 0; mu < radial_func_count; ++mu) {
 		const double gate_signal =
 			(gate_signal_by_mu == nullptr) ? 0.0 : gate_signal_by_mu[mu];
-		const double additive_coeff =
-			(additive_src == nullptr) ? TwoLayerGateAdditiveCoeff(atom_type, mu)
-			                          : additive_src[mu];
 		const double arg = additive_coeff * gate_signal;
 		const double tanh_arg = tanh_cache == nullptr
 			? (arg == 0.0 ? 0.0 : std::tanh(arg))
@@ -1535,12 +1527,12 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 		ERROR("SUS2-SH _lmp radial tables do not provide nonlinear parameter derivatives.");
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
 		ERROR("SUS2-SH evaluator currently supports sh_l_max in [0,6].");
-	if (TwoLayerGateWeightCount() > 0
+	if (TwoLayerGateScalarCount() > 0
 	    && (two_layer_gate_required_moments_.empty()
 	        || two_layer_gate_required_moment_indices_.empty()))
 		BuildTwoLayerGateProductProgram();
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
-	const int gate_count = TwoLayerGateWeightCount();
+	const int gate_count = TwoLayerGateScalarCount();
 	const int cached_gate_moment_count =
 		static_cast<int>(two_layer_gate_required_moment_indices_.size());
 	const bool prepare_gate_values_from_cache =
@@ -1883,8 +1875,6 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 					product.coeff * moment_vals[product.left]
 					* moment_vals[product.right];
 			}
-			std::vector<double> body_order_signals(
-				two_layer_gate_body_order_max_ + 1, 0.0);
 			double* cached_scalars = two_layer_gate_scalar_values_cache_.data()
 				+ static_cast<size_t>(ind) * gate_count;
 			double* cached_moments = two_layer_gate_moment_values_cache_.data()
@@ -1898,14 +1888,15 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 					ERROR("SUS2-SH two-layer gate scalar index is out of range");
 				const int moment = alpha_moment_mapping[scalar_index];
 				cached_scalars[q] = moment_vals[moment];
-				body_order_signals[two_layer_gate_scalar_body_orders_[q]] +=
-					TwoLayerGateWeight(q) * cached_scalars[q];
 			}
 			double* gate_values = two_layer_gate_values_.data()
 				+ static_cast<size_t>(ind) * radial_func_count;
-			for (int mu = 0; mu < radial_func_count; ++mu)
-				gate_values[mu] =
-					body_order_signals[two_layer_gate_mu_body_orders_[mu]];
+			for (int mu = 0; mu < radial_func_count; ++mu) {
+				double signal = 0.0;
+				for (int q = 0; q < gate_count; ++q)
+					signal += TwoLayerGateWeight(mu, q) * cached_scalars[q];
+				gate_values[mu] = signal;
+			}
 		}
 	}
 	if (prepare_gate_values_from_cache)
@@ -2618,8 +2609,8 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 			product.coeff * moment_vals[product.left] * moment_vals[product.right];
 	}
 
-	gate_scalar_values.assign(TwoLayerGateWeightCount(), 0.0);
-	for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+	gate_scalar_values.assign(TwoLayerGateScalarCount(), 0.0);
+	for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 		const int scalar_index = two_layer_gate_scalar_indices_[q];
 		gate_scalar_values[q] = moment_vals[alpha_moment_mapping[scalar_index]];
 	}
@@ -2648,7 +2639,7 @@ void MLMTPR::CalcTwoLayerGateScalarDers(
 	sh_gate_moment_ders_.assign(
 		static_cast<size_t>(nbh.count) * coord_stride, 0.0);
 	gate_scalar_ders.assign(
-		static_cast<size_t>(TwoLayerGateWeightCount()) * nbh.count * 3, 0.0);
+		static_cast<size_t>(TwoLayerGateScalarCount()) * nbh.count * 3, 0.0);
 
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
@@ -2744,7 +2735,7 @@ void MLMTPR::CalcTwoLayerGateScalarDers(
 		}
 	}
 
-	for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+	for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 		const int scalar_index = two_layer_gate_scalar_indices_[q];
 		const int moment = alpha_moment_mapping[scalar_index];
 		for (int j = 0; j < nbh.count; ++j) {
@@ -2772,16 +2763,20 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 
 	gate_scalar_ders.assign(
 		static_cast<size_t>(nbh.count), Vector3(0.0, 0.0, 0.0));
-	if (TwoLayerGateWeightCount() == 0)
+	if (TwoLayerGateScalarCount() == 0)
 		return;
 
 	bool has_weight = false;
-	for (int q = 0; q < TwoLayerGateWeightCount(); ++q)
-		if ((body_order_filter == 0
-		     || TwoLayerGateWeightBodyOrder(q) == body_order_filter)
-		    && TwoLayerGateWeight(q) != 0.0) {
-			has_weight = true;
-			break;
+	for (int q = 0; q < TwoLayerGateScalarCount(); ++q)
+		if (body_order_filter == 0
+		    || TwoLayerGateWeightBodyOrder(q) == body_order_filter) {
+			for (int mu = 0; mu < radial_func_count; ++mu)
+				if (TwoLayerGateWeight(mu, q) != 0.0) {
+					has_weight = true;
+					break;
+				}
+			if (has_weight)
+				break;
 		}
 	if (!has_weight)
 		return;
@@ -2815,11 +2810,13 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 		throw MlipException("Too few species count in the MTP potential!");
 
 	site_energy_ders_wrt_moments_.assign(alpha_moments_count, 0.0);
-	for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+	for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 		if (body_order_filter != 0
 		    && TwoLayerGateWeightBodyOrder(q) != body_order_filter)
 			continue;
-		const double weight = TwoLayerGateWeight(q);
+		double weight = 0.0;
+		for (int mu = 0; mu < radial_func_count; ++mu)
+			weight += TwoLayerGateWeight(mu, q);
 		if (weight == 0.0)
 			continue;
 		const int scalar_index = two_layer_gate_scalar_indices_[q];
@@ -2966,42 +2963,46 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForBodyOrderAdjoints(
 	int cache_atom_index,
 	const double* body_order_adjoints)
 {
+	if (body_order_adjoints == nullptr)
+		ERROR("SUS2-SH two-layer gate body-order adjoints are missing");
+	std::vector<double> scalar_seeds(TwoLayerGateScalarCount(), 0.0);
+	for (int q = 0; q < TwoLayerGateScalarCount(); ++q)
+		for (int mu = 0; mu < radial_func_count; ++mu) {
+			const int body_order = two_layer_gate_mu_body_orders_[mu];
+			scalar_seeds[q] += body_order_adjoints[body_order]
+				* TwoLayerGateWeight(mu, q);
+		}
+	CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
+		nbh, gate_scalar_ders, cache_atom_index, scalar_seeds.data());
+}
+
+void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
+	const Neighborhood& nbh,
+	std::vector<Vector3>& gate_scalar_ders,
+	int cache_atom_index,
+	const double* scalar_seeds)
+{
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
 		ERROR("SUS2-SH evaluator currently supports sh_l_max in [0,6].");
 	if (two_layer_gate_required_moments_.empty()
 	    || two_layer_gate_required_moment_indices_.empty())
 		BuildTwoLayerGateProductProgram();
-	if (body_order_adjoints == nullptr)
-		ERROR("SUS2-SH two-layer gate body-order adjoints are missing");
+	if (scalar_seeds == nullptr)
+		ERROR("SUS2-SH two-layer gate scalar seeds are missing");
 
 	gate_scalar_ders.assign(
 		static_cast<size_t>(nbh.count), Vector3(0.0, 0.0, 0.0));
-	const int gate_count = TwoLayerGateWeightCount();
+	const int gate_count = TwoLayerGateScalarCount();
 	if (gate_count == 0)
 		return;
-	if (static_cast<int>(two_layer_gate_scalar_body_orders_.size()) != gate_count
-	    || static_cast<int>(two_layer_gate_body_order_weight_indices_.size()) != gate_count
-	    || static_cast<int>(two_layer_gate_body_order_weight_offsets_.size())
-	        < two_layer_gate_body_order_max_ + 2)
-		BuildTwoLayerGateBodyOrderBuckets();
 
 	bool has_weighted_seed = false;
-	for (int body_order = 2; body_order <= two_layer_gate_body_order_max_; ++body_order) {
-		if (body_order_adjoints[body_order] == 0.0)
-			continue;
-		const int begin = two_layer_gate_body_order_weight_offsets_[body_order];
-		const int end = two_layer_gate_body_order_weight_offsets_[body_order + 1];
-		for (int pos = begin; pos < end; ++pos) {
-			const int q = two_layer_gate_body_order_weight_indices_[pos];
-			if (TwoLayerGateWeight(q) != 0.0) {
-				has_weighted_seed = true;
-				break;
-			}
-		}
-		if (has_weighted_seed)
+	for (int q = 0; q < gate_count; ++q)
+		if (scalar_seeds[q] != 0.0) {
+			has_weighted_seed = true;
 			break;
-	}
+		}
 	if (!has_weighted_seed)
 		return;
 
@@ -3034,21 +3035,12 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForBodyOrderAdjoints(
 		throw MlipException("Too few species count in the MTP potential!");
 
 	site_energy_ders_wrt_moments_.assign(alpha_moments_count, 0.0);
-	for (int body_order = 2; body_order <= two_layer_gate_body_order_max_; ++body_order) {
-		const double body_adjoint = body_order_adjoints[body_order];
-		if (body_adjoint == 0.0)
+	for (int q = 0; q < gate_count; ++q) {
+		const double seed = scalar_seeds[q];
+		if (seed == 0.0)
 			continue;
-		const int begin = two_layer_gate_body_order_weight_offsets_[body_order];
-		const int end = two_layer_gate_body_order_weight_offsets_[body_order + 1];
-		for (int pos = begin; pos < end; ++pos) {
-			const int q = two_layer_gate_body_order_weight_indices_[pos];
-			const double weight = TwoLayerGateWeight(q);
-			if (weight == 0.0)
-				continue;
-			const int scalar_index = two_layer_gate_scalar_indices_[q];
-			site_energy_ders_wrt_moments_[alpha_moment_mapping[scalar_index]] +=
-				body_adjoint * weight;
-		}
+		const int scalar_index = two_layer_gate_scalar_indices_[q];
+		site_energy_ders_wrt_moments_[alpha_moment_mapping[scalar_index]] += seed;
 	}
 
 	for (int p = static_cast<int>(two_layer_gate_required_product_indices_.size()) - 1;
@@ -3204,15 +3196,19 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 			}
 	}
 	if ((gate_adjoint == 0.0 && !has_der_weights)
-	    || TwoLayerGateWeightCount() == 0)
+	    || TwoLayerGateScalarCount() == 0)
 		return;
 	bool has_matching_weight = false;
-	for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
-		if ((body_order_filter == 0
-		     || TwoLayerGateWeightBodyOrder(q) == body_order_filter)
-		    && TwoLayerGateWeight(q) != 0.0) {
-			has_matching_weight = true;
-			break;
+	for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
+		if (body_order_filter == 0
+		    || TwoLayerGateWeightBodyOrder(q) == body_order_filter) {
+			for (int mu = 0; mu < radial_func_count; ++mu)
+				if (TwoLayerGateWeight(mu, q) != 0.0) {
+					has_matching_weight = true;
+					break;
+				}
+			if (has_matching_weight)
+				break;
 		}
 	}
 	if (!has_matching_weight)
@@ -3257,11 +3253,13 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 	site_energy_ders_wrt_moments_.assign(alpha_moments_count, 0.0);
 	grad_dloss_dsenders_.assign(alpha_moments_count, 0.0);
 	grad_dloss_dmom_.assign(alpha_moments_count, 0.0);
-	for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+	for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 		if (body_order_filter != 0
 		    && TwoLayerGateWeightBodyOrder(q) != body_order_filter)
 			continue;
-		const double weight = TwoLayerGateWeight(q);
+		double weight = 0.0;
+		for (int mu = 0; mu < radial_func_count; ++mu)
+			weight += TwoLayerGateWeight(mu, q);
 		if (weight == 0.0)
 			continue;
 		const int scalar_index = two_layer_gate_scalar_indices_[q];
@@ -3681,7 +3679,40 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForBodyOrderAdjoints(
 {
 	if (body_order_gate_adjoints == nullptr)
 		ERROR("SUS2-SH two-layer gate body-order adjoints are missing");
-	if (TwoLayerGateWeightCount() == 0)
+	std::vector<double> gate_scalar_seeds(TwoLayerGateScalarCount(), 0.0);
+	std::vector<double> energy_scalar_seeds(TwoLayerGateScalarCount(), 0.0);
+	for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
+		for (int mu = 0; mu < radial_func_count; ++mu) {
+			const int body_order = two_layer_gate_mu_body_orders_[mu];
+			const double weight = TwoLayerGateWeight(mu, q);
+			gate_scalar_seeds[q] += body_order_gate_adjoints[body_order] * weight;
+			if (body_order_energy_adjoints != nullptr)
+				energy_scalar_seeds[q] +=
+					body_order_energy_adjoints[body_order] * weight;
+		}
+	}
+	AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
+		nbh,
+		out_grad_accumulator,
+		gate_scalar_seeds.data(),
+		gate_der_weights,
+		cache_atom_index,
+		gate_moment_tangents,
+		body_order_energy_adjoints == nullptr ? nullptr : energy_scalar_seeds.data());
+}
+
+void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
+	const Neighborhood& nbh,
+	std::vector<double>& out_grad_accumulator,
+	const double* gate_scalar_seeds,
+	const Vector3* gate_der_weights,
+	int cache_atom_index,
+	const double* gate_moment_tangents,
+	const double* energy_scalar_seeds)
+{
+	if (gate_scalar_seeds == nullptr)
+		ERROR("SUS2-SH two-layer gate scalar seeds are missing");
+	if (TwoLayerGateScalarCount() == 0)
 		return;
 	if (SHUsesPrecomputedLmpTable(p_RadialBasis))
 		ERROR("SUS2-SH coefficient gradients require direct radial basis evaluation.");
@@ -3691,33 +3722,15 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForBodyOrderAdjoints(
 	    || two_layer_gate_required_moment_indices_.empty())
 		BuildTwoLayerGateProductProgram();
 
-	const int gate_count = TwoLayerGateWeightCount();
-	if (static_cast<int>(two_layer_gate_scalar_body_orders_.size()) != gate_count
-	    || static_cast<int>(two_layer_gate_body_order_weight_indices_.size()) != gate_count
-	    || static_cast<int>(two_layer_gate_body_order_weight_offsets_.size())
-	        < two_layer_gate_body_order_max_ + 2)
-		BuildTwoLayerGateBodyOrderBuckets();
+	const int gate_count = TwoLayerGateScalarCount();
 
 	bool has_gate_seed = false;
 	bool has_energy_seed = false;
-	for (int body_order = 2; body_order <= two_layer_gate_body_order_max_; ++body_order) {
-		const double gate_adjoint = body_order_gate_adjoints[body_order];
-		const double energy_adjoint =
-			(body_order_energy_adjoints == nullptr) ? 0.0 : body_order_energy_adjoints[body_order];
-		if (gate_adjoint == 0.0 && energy_adjoint == 0.0)
-			continue;
-		const int begin = two_layer_gate_body_order_weight_offsets_[body_order];
-		const int end = two_layer_gate_body_order_weight_offsets_[body_order + 1];
-		for (int pos = begin; pos < end; ++pos) {
-			const int q = two_layer_gate_body_order_weight_indices_[pos];
-			if (TwoLayerGateWeight(q) == 0.0)
-				continue;
-			if (gate_adjoint != 0.0)
-				has_gate_seed = true;
-			if (energy_adjoint != 0.0)
-				has_energy_seed = true;
-			break;
-		}
+	for (int q = 0; q < gate_count; ++q) {
+		if (gate_scalar_seeds[q] != 0.0)
+			has_gate_seed = true;
+		if (energy_scalar_seeds != nullptr && energy_scalar_seeds[q] != 0.0)
+			has_energy_seed = true;
 	}
 
 	bool has_der_weights = false;
@@ -3764,26 +3777,18 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForBodyOrderAdjoints(
 	sh_gate_energy_ders_wrt_moments_.assign(alpha_moments_count, 0.0);
 	grad_dloss_dsenders_.assign(alpha_moments_count, 0.0);
 	grad_dloss_dmom_.assign(alpha_moments_count, 0.0);
-	for (int body_order = 2; body_order <= two_layer_gate_body_order_max_; ++body_order) {
-		const double gate_adjoint = body_order_gate_adjoints[body_order];
+	for (int q = 0; q < gate_count; ++q) {
+		const double gate_adjoint = gate_scalar_seeds[q];
 		const double energy_adjoint =
-			(body_order_energy_adjoints == nullptr) ? 0.0 : body_order_energy_adjoints[body_order];
+			(energy_scalar_seeds == nullptr) ? 0.0 : energy_scalar_seeds[q];
 		if (gate_adjoint == 0.0 && (!has_der_weights || energy_adjoint == 0.0))
 			continue;
-		const int begin = two_layer_gate_body_order_weight_offsets_[body_order];
-		const int end = two_layer_gate_body_order_weight_offsets_[body_order + 1];
-		for (int pos = begin; pos < end; ++pos) {
-			const int q = two_layer_gate_body_order_weight_indices_[pos];
-			const double weight = TwoLayerGateWeight(q);
-			if (weight == 0.0)
-				continue;
-			const int scalar_index = two_layer_gate_scalar_indices_[q];
-			const int moment = alpha_moment_mapping[scalar_index];
-			if (gate_adjoint != 0.0)
-				site_energy_ders_wrt_moments_[moment] += gate_adjoint * weight;
-			if (has_der_weights && energy_adjoint != 0.0)
-				sh_gate_energy_ders_wrt_moments_[moment] += energy_adjoint * weight;
-		}
+		const int scalar_index = two_layer_gate_scalar_indices_[q];
+		const int moment = alpha_moment_mapping[scalar_index];
+		if (gate_adjoint != 0.0)
+			site_energy_ders_wrt_moments_[moment] += gate_adjoint;
+		if (has_der_weights && energy_adjoint != 0.0)
+			sh_gate_energy_ders_wrt_moments_[moment] += energy_adjoint;
 	}
 
 	for (int p = static_cast<int>(two_layer_gate_required_product_indices_.size()) - 1;
@@ -4615,8 +4620,8 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 		gate_moment_tangents->assign(
 			grad_dloss_dsenders_.begin(), grad_dloss_dsenders_.end());
 
-	gate_scalar_tangents.assign(TwoLayerGateWeightCount(), 0.0);
-	for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+	gate_scalar_tangents.assign(TwoLayerGateScalarCount(), 0.0);
+	for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 		const int scalar_index = two_layer_gate_scalar_indices_[q];
 		gate_scalar_tangents[q] =
 			grad_dloss_dsenders_[alpha_moment_mapping[scalar_index]];

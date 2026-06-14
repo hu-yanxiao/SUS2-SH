@@ -895,7 +895,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				}
 				ofs << "}\n";
 			}
-			const int gate_additive_count = species_count * kmax * (lmax + 1);
+			const int radial_func_count = kmax * (lmax + 1);
+			const int gate_additive_count = species_count;
 			ofs << "two_layer_gate_additive_coeff_count = "
 			    << gate_additive_count << "\n";
 			ofs << "two_layer_gate_additive_coeffs = {";
@@ -905,7 +906,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				ofs << 1.0;
 			}
 			ofs << "}\n";
-			ofs << "two_layer_gate_weight_count = " << gate_scalar_indices.size() << "\n";
+			const int gate_weight_count =
+				radial_func_count * static_cast<int>(gate_scalar_indices.size());
+			ofs << "two_layer_gate_weight_count = " << gate_weight_count << "\n";
 			ofs << "two_layer_gate_scalar_indices = {";
 		for (size_t i = 0; i < gate_scalar_indices.size(); ++i) {
 			if (i != 0)
@@ -914,10 +917,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		}
 		ofs << "}\n";
 		ofs << "two_layer_gate_weights = {";
-		for (size_t i = 0; i < gate_scalar_indices.size(); ++i) {
+		for (int i = 0; i < gate_weight_count; ++i) {
 			if (i != 0)
 				ofs << ", ";
-			ofs << 0.0;
+			ofs << 1.0;
 		}
 		ofs << "}\n";
 		if (two_layer_residual) {

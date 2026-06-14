@@ -217,6 +217,11 @@ protected:
 		std::vector<Vector3>& gate_scalar_ders,
 		int cache_atom_index,
 		const double* body_order_adjoints);
+	void CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
+		const Neighborhood& nbh,
+		std::vector<Vector3>& gate_scalar_ders,
+		int cache_atom_index,
+		const double* scalar_seeds);
 	void AccumulateTwoLayerGateScalarParamGrad(
 		const Neighborhood& nbh,
 		std::vector<double>& out_grad_accumulator,
@@ -234,6 +239,14 @@ protected:
 		int cache_atom_index,
 		const double* gate_moment_tangents,
 		const double* body_order_energy_adjoints);
+	void AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
+		const Neighborhood& nbh,
+		std::vector<double>& out_grad_accumulator,
+		const double* gate_scalar_seeds,
+		const Vector3* gate_der_weights,
+		int cache_atom_index,
+		const double* gate_moment_tangents,
+		const double* energy_scalar_seeds);
 	void CalcSHBasisGateDers(const Neighborhood& nbh,
 	                         std::vector<double>& gate_basis_ders);
 	void CalcTwoLayerGateScalarDirectionalDerivatives(
@@ -532,6 +545,7 @@ public:
 		int TwoLayerGateRadialCoeffOffset() const;
 		int TwoLayerGateAdditiveCoeffCount() const;
 		int TwoLayerGateAdditiveCoeffOffset() const;
+		int TwoLayerGateScalarCount() const;
 		int TwoLayerGateWeightCount() const;
 		int TwoLayerGateWeightOffset() const;
 		int TwoLayerResidualE0CoeffCount() const;
@@ -543,6 +557,8 @@ public:
 		double TwoLayerGateRadialCoeff(int mu, int xi) const;
 		int TwoLayerGateAdditiveCoeffIndex(int type_outer, int mu) const;
 		double TwoLayerGateAdditiveCoeff(int type_outer, int mu) const;
+		int TwoLayerGateWeightIndex(int mu, int scalar_weight_index) const;
+		double TwoLayerGateWeight(int mu, int scalar_weight_index) const;
 		double TwoLayerGateWeight(int weight_index) const;
 		double TwoLayerResidualE0Coeff(int scalar_index) const;
 		void InitializeTwoLayerGateRadialCoeffsFromBase();

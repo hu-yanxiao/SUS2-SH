@@ -514,11 +514,11 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   PairSUS2MTP::settings(
       base_narg, base_args);    // This also calls read_file which parses and loads the arrays in host
 
-  if (!host_flag && two_layer_gate_enabled) {
+  if (two_layer_gate_enabled) {
     if (!is_sh_model)
       error->all(FLERR, "Pair sus2mtp/kk/device two-layer gate support requires a SUS2-SH model.");
     error->all(FLERR,
-               "Pair sus2mtp/kk/device does not implement SUS2-SH mu-body-order two-layer gate; use the CPU pair style for this branch.");
+               "Pair sus2mtp/kk does not implement SUS2-SH mu-linear-combo two-layer gate; use the CPU pair style for this branch.");
   }
 
   // Store SUS2-MLIP parameters from base class (CPU version already calculated these)

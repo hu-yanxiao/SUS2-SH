@@ -119,8 +119,12 @@ for order in range(2, 6):
 count_match = re.search(r"two_layer_gate_weight_count = (\d+)", text)
 if not count_match:
     raise SystemExit("missing two_layer_gate_weight_count")
-if int(count_match.group(1)) != len(indices):
-    raise SystemExit("gate weight count does not match scalar index count")
+radial_match = re.search(r"radial_funcs_count = (\d+)", text)
+if not radial_match:
+    raise SystemExit("missing radial_funcs_count")
+expected_weight_count = int(radial_match.group(1)) * len(indices)
+if int(count_match.group(1)) != expected_weight_count:
+    raise SystemExit("gate weight count does not match radial_funcs_count * scalar index count")
 PY
 
 ./bin/mlp-sus2 check-two-layer-gate-mu-body-order-dev "$model" "$train" \

@@ -329,7 +329,7 @@ public:
 		std::vector<double> fast_values;
 		std::vector<double> fast_derivatives;
 		std::vector<Vector3> fast_weighted_derivatives;
-		std::vector<double> full_values(TwoLayerGateWeightCount(), 0.0);
+		std::vector<double> full_values(TwoLayerGateScalarCount(), 0.0);
 		std::vector<double> full_derivatives;
 		std::vector<Vector3> full_weighted_derivatives;
 
@@ -347,12 +347,12 @@ public:
 				const Neighborhood& nbh = neighborhoods[atom_index];
 
 				CalcSHBasisFuncs(nbh, basis_vals);
-				for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+				for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 					const int scalar_index = two_layer_gate_scalar_indices_[q];
 					full_values[q] = basis_vals[1 + scalar_index];
 				}
 				CalcTwoLayerGateScalarValuesOnly(nbh, fast_values);
-				for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+				for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 					const double old_abs = result.worst_value_abs_err;
 					UpdateWorst(full_values[q], fast_values[q],
 					            result.worst_value_abs_err,
@@ -369,13 +369,15 @@ public:
 
 				CalcSHBasisFuncsDers(nbh);
 				full_derivatives.assign(
-					static_cast<size_t>(TwoLayerGateWeightCount()) * nbh.count * 3,
+					static_cast<size_t>(TwoLayerGateScalarCount()) * nbh.count * 3,
 					0.0);
 				full_weighted_derivatives.assign(
 					static_cast<size_t>(nbh.count), Vector3(0.0, 0.0, 0.0));
-				for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+				for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 					const int scalar_index = two_layer_gate_scalar_indices_[q];
-					const double weight = TwoLayerGateWeight(q);
+					double weight = 0.0;
+					for (int mu = 0; mu < radial_func_count; ++mu)
+						weight += TwoLayerGateWeight(mu, q);
 					for (int j = 0; j < nbh.count; ++j) {
 						for (int a = 0; a < 3; ++a) {
 							const double full_der = basis_ders(1 + scalar_index, j, a);
@@ -388,7 +390,7 @@ public:
 
 				CalcTwoLayerGateScalarDers(nbh, fast_derivatives);
 				CalcTwoLayerGateWeightedScalarDers(nbh, fast_weighted_derivatives);
-				for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+				for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 					for (int j = 0; j < nbh.count; ++j) {
 						for (int a = 0; a < 3; ++a) {
 							const size_t index =
@@ -448,7 +450,7 @@ public:
 			two_layer_gate_body_order_max_ + 1, -1);
 		std::vector<double> probe_weight_abs_by_body_order(
 			two_layer_gate_body_order_max_ + 1, 0.0);
-		for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+		for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 			const int body_order = TwoLayerGateWeightBodyOrder(q);
 			if (body_order >= 2 && body_order <= two_layer_gate_body_order_max_
 			    && probe_weight_by_body_order[body_order] < 0)
@@ -471,7 +473,7 @@ public:
 			for (int atom_index = 0; atom_index < atom_limit; ++atom_index) {
 				CalcTwoLayerGateScalarValuesOnly(neighborhoods[atom_index],
 				                                  scalar_values);
-				for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
+				for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
 					const int body_order = TwoLayerGateWeightBodyOrder(q);
 					const double abs_value = std::abs(scalar_values[q]);
 					if (abs_value > probe_weight_abs_by_body_order[body_order]) {
@@ -498,14 +500,23 @@ public:
 			const int q_probe = probe_weight_by_body_order[body_order];
 			std::fill(two_layer_gate_weights_.begin(),
 			          two_layer_gate_weights_.end(), 0.0);
-			two_layer_gate_weights_[q_probe] = probe_weight;
 			for (int q = 0; q < TwoLayerGateWeightCount(); ++q) {
 				const int coeff_index = TwoLayerGateWeightOffset() + q;
 				if (coeff_index < 0
 				    || coeff_index >= static_cast<int>(regression_coeffs.size()))
 					ERROR("SUS2-SH two-layer gate regression coefficient index is out of range");
-				regression_coeffs[coeff_index] =
-					(q == q_probe) ? probe_weight : 0.0;
+				regression_coeffs[coeff_index] = 0.0;
+			}
+			for (int mu = 0; mu < radial_func_count; ++mu) {
+				if (TwoLayerGateMuBodyOrder(mu) != body_order)
+					continue;
+				const int local_index = mu * TwoLayerGateScalarCount() + q_probe;
+				two_layer_gate_weights_[local_index] = probe_weight;
+				const int coeff_index = TwoLayerGateWeightIndex(mu, q_probe);
+				if (coeff_index < 0
+				    || coeff_index >= static_cast<int>(regression_coeffs.size()))
+					ERROR("SUS2-SH two-layer gate regression coefficient index is out of range");
+				regression_coeffs[coeff_index] = probe_weight;
 			}
 			two_layer_gate_values_from_edge_cache_ready_ = false;
 

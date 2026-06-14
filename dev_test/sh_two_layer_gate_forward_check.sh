@@ -37,10 +37,13 @@ if not match:
 weights = [float(x.strip()) for x in match.group(1).split(",") if x.strip()]
 if not weights:
     raise SystemExit("empty two_layer_gate_weights")
-weights[0] = 0.25
-replacement = "two_layer_gate_weights = {" + ", ".join(f"{x:.15e}" for x in weights) + "}"
-text = text[:match.start()] + replacement + text[match.end():]
-open(target, "w").write(text)
+zero = [0.0 for _ in weights]
+nonzero = zero[:]
+nonzero[0] = 0.25
+zero_replacement = "two_layer_gate_weights = {" + ", ".join(f"{x:.15e}" for x in zero) + "}"
+nonzero_replacement = "two_layer_gate_weights = {" + ", ".join(f"{x:.15e}" for x in nonzero) + "}"
+open(source, "w").write(text[:match.start()] + zero_replacement + text[match.end():])
+open(target, "w").write(text[:match.start()] + nonzero_replacement + text[match.end():])
 PY
 
 ./bin/mlp-sus2 calc-efs "$zero_model" "$train" "$zero_pred" >/dev/null

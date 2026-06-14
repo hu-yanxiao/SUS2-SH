@@ -31,6 +31,20 @@ common_opts=(
 ./bin/mlp-sus2 init-sh "$shared" "${common_opts[@]}" \
   --two-layer-gate-shared-radial
 
+python3 - "$plain" "$shared" <<'PY'
+import re
+import sys
+
+for path in sys.argv[1:]:
+    text = open(path).read()
+    match = re.search(r"two_layer_gate_weights = \{([^}]*)\}", text)
+    if not match:
+        raise SystemExit(f"missing two_layer_gate_weights in {path}")
+    weights = [float(x.strip()) for x in match.group(1).split(",") if x.strip()]
+    replacement = "two_layer_gate_weights = {" + ", ".join("0.000000000000000e+00" for _ in weights) + "}"
+    open(path, "w").write(text[:match.start()] + replacement + text[match.end():])
+PY
+
 grep -q "two_layer_gate_radial_mode = shared-radial" "$shared"
 grep -q "two_layer_gate_radial_coeff_count = 24" "$shared"
 grep -q "two_layer_gate_radial_coeffs" "$shared"
