@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 MLP_BIN="${MLP_BIN:-./bin/mlp-sus2}"
 LAMMPS_BIN="${LAMMPS_BIN:-/work/phy-weigw/apps/lammps-10Dec2025/src/lmp_ml_sus2_avx2_noipo}"
 MPI_RUN="${MPI_RUN:-mpirun}"
+GATE_MODE="${GATE_MODE:-mu-body-linear-combo}"
 GATE_SITE_MODE="${GATE_SITE_MODE:-neighbor}"
 
 if [ "$GATE_SITE_MODE" != "neighbor" ] && [ "$GATE_SITE_MODE" != "double" ]; then
@@ -13,7 +14,7 @@ if [ "$GATE_SITE_MODE" != "neighbor" ] && [ "$GATE_SITE_MODE" != "double" ]; the
   exit 2
 fi
 
-tmp_dir=".codex_tmp/lammps_two_layer_gate_additive_mlp_check_${GATE_SITE_MODE}"
+tmp_dir=".codex_tmp/lammps_two_layer_gate_additive_mlp_check_${GATE_SITE_MODE}_${GATE_MODE}"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 
@@ -33,6 +34,7 @@ mlp_pred="$tmp_dir/mlp_pred.cfg"
   --cutoff=5.0 \
   --write-sh-scalar-info \
   --two-layer-gate \
+  --two-layer-gate-mode="$GATE_MODE" \
   --two-layer-gate-site-mode="$GATE_SITE_MODE" \
   --two-layer-gate-shared-radial >/dev/null
 
@@ -44,7 +46,6 @@ base, direct, lmp = sys.argv[1:]
 text = open(base).read()
 
 species_count = int(re.search(r"species_count\s*=\s*(\d+)", text).group(1))
-radial_func_count = int(re.search(r"radial_funcs_count\s*=\s*(\d+)", text).group(1))
 alpha_scalar_count = int(re.search(r"alpha_scalar_moments\s*=\s*(\d+)", text).group(1))
 
 def number_list(line_body):
@@ -90,11 +91,10 @@ for i in range(len(gate_radial)):
 
 additive = []
 for species in range(species_count):
-    for mu in range(radial_func_count):
-        if species == 0:
-            additive.append(0.35 + 0.04 * mu)
-        else:
-            additive.append(1.55 - 0.05 * mu)
+    if species == 0:
+        additive.append(0.35)
+    else:
+        additive.append(1.55)
 
 species_coeffs = [0.12, -0.08][:species_count]
 moment_coeffs = [0.0] * alpha_scalar_count

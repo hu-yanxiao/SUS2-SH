@@ -578,6 +578,8 @@ public:
 			                                    double* body_values) const;
 			void ComputeTwoLayerGateMuSignals(const double* body_values,
 			                                  double* mu_values) const;
+			const double* TwoLayerGateFullWeightMatrixData() const;
+			void ComputeTwoLayerGateFullMuSignalsForAtoms(int atom_count);
 			void AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
 				const double* mu_adjoints,
 				double* scalar_seeds,

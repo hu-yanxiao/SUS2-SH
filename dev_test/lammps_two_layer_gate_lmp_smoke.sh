@@ -6,8 +6,9 @@ cd "$(dirname "$0")/.."
 MLP_BIN="${MLP_BIN:-./bin/mlp-sus2}"
 LAMMPS_BIN="${LAMMPS_BIN:-/work/phy-weigw/apps/lammps-10Dec2025/src/lmp_ml_sus2_avx2}"
 MPI_RUN="${MPI_RUN:-mpirun}"
+GATE_MODE="${GATE_MODE:-mu-body-linear-combo}"
 
-tmp_dir=".codex_tmp/lammps_two_layer_gate_lmp_smoke"
+tmp_dir=".codex_tmp/lammps_two_layer_gate_lmp_smoke_${GATE_MODE}"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 
@@ -25,6 +26,7 @@ lmp_model="$tmp_dir/gated_nonzero_lmp.mtp"
   --cutoff=5.0 \
   --write-sh-scalar-info \
   --two-layer-gate \
+  --two-layer-gate-mode="$GATE_MODE" \
   --two-layer-gate-shared-radial >/dev/null
 
 python3 - "$base_model" "$direct_model" "$lmp_model" <<'PY'

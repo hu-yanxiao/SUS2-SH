@@ -1903,17 +1903,14 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 					ComputeTwoLayerGateBodySignals(cached_scalars, body_values);
 					ComputeTwoLayerGateMuSignals(body_values, gate_values);
 				} else if (TwoLayerGateUsesFullScalarWeights()) {
-					for (int mu = 0; mu < radial_func_count; ++mu) {
-						double signal = 0.0;
-						for (int q = 0; q < gate_count; ++q)
-							signal += TwoLayerGateWeight(mu, q) * cached_scalars[q];
-						gate_values[mu] = signal;
-					}
+					(void)gate_values;
 				} else {
 					ERROR("SUS2-SH two-layer gate model has an unknown mode: " + two_layer_gate_mode_);
 				}
 			}
 		}
+	if (prepare_gate_values_from_cache && TwoLayerGateUsesFullScalarWeights())
+		ComputeTwoLayerGateFullMuSignalsForAtoms(atom_count);
 	if (prepare_gate_values_from_cache)
 		two_layer_gate_values_from_edge_cache_ready_ = true;
 

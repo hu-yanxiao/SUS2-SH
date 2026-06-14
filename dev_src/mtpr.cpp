@@ -961,6 +961,50 @@ void MLMTPR::ComputeTwoLayerGateMuSignals(const double* body_values,
 	}
 }
 
+const double* MLMTPR::TwoLayerGateFullWeightMatrixData() const
+{
+	if (!TwoLayerGateUsesFullScalarWeights())
+		ERROR("SUS2-SH full gate weight matrix is only defined for mu-scalar-full mode");
+	const int weight_count = TwoLayerGateWeightCount();
+	const int coeff_offset = TwoLayerGateWeightOffset();
+	if (coeff_offset >= 0
+	    && coeff_offset + weight_count <= static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs.data() + coeff_offset;
+	if (weight_count <= static_cast<int>(two_layer_gate_weights_.size()))
+		return two_layer_gate_weights_.data();
+	ERROR("SUS2-SH full gate weight storage is inconsistent");
+	return nullptr;
+}
+
+void MLMTPR::ComputeTwoLayerGateFullMuSignalsForAtoms(int atom_count)
+{
+	if (!TwoLayerGateUsesFullScalarWeights())
+		ERROR("SUS2-SH full gate mu signals are only defined for mu-scalar-full mode");
+	const int gate_count = TwoLayerGateScalarCount();
+	if (atom_count <= 0 || gate_count <= 0 || radial_func_count <= 0)
+		return;
+	const size_t scalar_size = static_cast<size_t>(atom_count) * gate_count;
+	const size_t gate_size = static_cast<size_t>(atom_count) * radial_func_count;
+	if (two_layer_gate_scalar_values_cache_.size() != scalar_size
+	    || two_layer_gate_values_.size() != gate_size)
+		ERROR("SUS2-SH full gate projection cache has inconsistent sizes");
+	const double* weights = TwoLayerGateFullWeightMatrixData();
+	cblas_dgemm(CblasRowMajor,
+	            CblasNoTrans,
+	            CblasTrans,
+	            atom_count,
+	            radial_func_count,
+	            gate_count,
+	            1.0,
+	            two_layer_gate_scalar_values_cache_.data(),
+	            gate_count,
+	            weights,
+	            gate_count,
+	            0.0,
+	            two_layer_gate_values_.data(),
+	            radial_func_count);
+}
+
 void MLMTPR::AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
 	const double* mu_adjoints,
 	double* scalar_seeds,
@@ -987,13 +1031,18 @@ void MLMTPR::AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
 		return;
 	}
 	if (TwoLayerGateUsesFullScalarWeights()) {
-		for (int mu = 0; mu < radial_func_count; ++mu) {
-			const double adjoint = mu_adjoints[mu];
-			if (adjoint == 0.0)
-				continue;
-			for (int q = 0; q < gate_count; ++q)
-				scalar_seeds[q] += adjoint * TwoLayerGateWeight(mu, q);
-		}
+		cblas_dgemv(CblasRowMajor,
+		            CblasTrans,
+		            radial_func_count,
+		            gate_count,
+		            1.0,
+		            TwoLayerGateFullWeightMatrixData(),
+		            gate_count,
+		            mu_adjoints,
+		            1,
+		            0.0,
+		            scalar_seeds,
+		            1);
 		return;
 	}
 	ERROR("SUS2-SH two-layer gate model has an unknown mode: " + two_layer_gate_mode_);
@@ -2967,16 +3016,13 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 			ComputeTwoLayerGateBodySignals(cached_scalars, cached_body_values);
 			ComputeTwoLayerGateMuSignals(cached_body_values, cached_gate_values);
 		} else if (TwoLayerGateUsesFullScalarWeights()) {
-			for (int mu = 0; mu < radial_func_count; ++mu) {
-				double signal = 0.0;
-				for (int q = 0; q < gate_count; ++q)
-					signal += TwoLayerGateWeight(mu, q) * cached_scalars[q];
-				cached_gate_values[mu] = signal;
-			}
+			(void)cached_gate_values;
 		} else {
 			ERROR("SUS2-SH two-layer gate model has an unknown mode: " + two_layer_gate_mode_);
 		}
 	}
+	if (TwoLayerGateUsesFullScalarWeights())
+		ComputeTwoLayerGateFullMuSignalsForAtoms(cfg.size());
 	active_two_layer_gate_values_ = saved_gate_values;
 }
 
@@ -3063,6 +3109,31 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 
 	std::vector<double> scalar_seeds(TwoLayerGateScalarCount(), 0.0);
 	std::vector<double> body_seed_scratch;
+	std::vector<double> full_scalar_seed_cache;
+	const int gate_count = TwoLayerGateScalarCount();
+	const bool full_seed_blas =
+		TwoLayerGateUsesFullScalarWeights()
+		&& gate_count > 0
+		&& two_layer_gate_adjoints_.size()
+			== static_cast<size_t>(cfg.size()) * radial_func_count;
+	if (full_seed_blas) {
+		full_scalar_seed_cache.assign(
+			static_cast<size_t>(cfg.size()) * gate_count, 0.0);
+		cblas_dgemm(CblasRowMajor,
+		            CblasNoTrans,
+		            CblasNoTrans,
+		            cfg.size(),
+		            gate_count,
+		            radial_func_count,
+		            1.0,
+		            two_layer_gate_adjoints_.data(),
+		            radial_func_count,
+		            TwoLayerGateFullWeightMatrixData(),
+		            gate_count,
+		            0.0,
+		            full_scalar_seed_cache.data(),
+		            gate_count);
+	}
 	for (int ind = 0; ind < cfg.size(); ++ind) {
 		const double* gate_adjoints = two_layer_gate_adjoints_.data()
 			+ static_cast<size_t>(ind) * radial_func_count;
@@ -3075,11 +3146,17 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 		}
 		if (!has_adjoint)
 			continue;
-		AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
-			gate_adjoints, scalar_seeds.data(), body_seed_scratch);
+		const double* scalar_seed_values = scalar_seeds.data();
+		if (full_seed_blas) {
+			scalar_seed_values = full_scalar_seed_cache.data()
+				+ static_cast<size_t>(ind) * gate_count;
+		} else {
+			AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
+				gate_adjoints, scalar_seeds.data(), body_seed_scratch);
+		}
 		const Neighborhood& nbh = neighborhoods[ind];
 		CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
-			nbh, sh_gate_component_ders_, ind, scalar_seeds.data());
+			nbh, sh_gate_component_ders_, ind, scalar_seed_values);
 		for (int j = 0; j < nbh.count; ++j) {
 			const Vector3& gate_der = sh_gate_component_ders_[j];
 			cfg.force(ind) += gate_der;
@@ -3658,18 +3735,30 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 								adjoint * tangent;
 					}
 				} else if (TwoLayerGateUsesFullScalarWeights()) {
-					for (int mu = 0; mu < radial_func_count; ++mu) {
-						double directional = 0.0;
-						const double energy_adjoint = energy_gate_adjoint_by_mu[mu];
-						for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
-							const double tangent = gate_scalar_tangents[q];
-							directional += TwoLayerGateWeight(mu, q) * tangent;
-							if (energy_adjoint != 0.0)
-								out_grads_accumulator[TwoLayerGateWeightIndex(mu, q)] +=
-									energy_adjoint * tangent;
-						}
-						directional_by_mu[mu] = directional;
-					}
+					const int gate_count = TwoLayerGateScalarCount();
+					cblas_dgemv(CblasRowMajor,
+					            CblasNoTrans,
+					            radial_func_count,
+					            gate_count,
+					            1.0,
+					            TwoLayerGateFullWeightMatrixData(),
+					            gate_count,
+					            gate_scalar_tangents.data(),
+					            1,
+					            0.0,
+					            directional_by_mu,
+					            1);
+					if (has_energy_gate_adjoint)
+						cblas_dger(CblasRowMajor,
+						           radial_func_count,
+						           gate_count,
+						           1.0,
+						           energy_gate_adjoint_by_mu,
+						           1,
+						           gate_scalar_tangents.data(),
+						           1,
+						           out_grads_accumulator.data() + TwoLayerGateWeightOffset(),
+						           gate_count);
 				} else {
 					ERROR("SUS2-SH two-layer gate model has an unknown mode: " + two_layer_gate_mode_);
 				}
@@ -3732,32 +3821,56 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
 	std::vector<double> gate_body_values_scratch(TwoLayerGateBodyOrderCount(), 0.0);
 	std::vector<double> gate_body_adjoint_scratch(TwoLayerGateBodyOrderCount(), 0.0);
-	for (int ind = 0; ind < cfg.size(); ++ind) {
-		const double* gate_adjoints_by_mu = two_layer_gate_adjoints_.data()
-			+ static_cast<size_t>(ind) * radial_func_count;
-		bool has_gate_adjoint = false;
-		for (int mu = 0; mu < radial_func_count; ++mu) {
-			const double adjoint = gate_adjoints_by_mu[mu];
-			if (adjoint == 0.0)
+	const int gate_count_for_weights = TwoLayerGateScalarCount();
+	const bool full_gate_weight_blas =
+		TwoLayerGateUsesFullScalarWeights()
+		&& gate_count_for_weights > 0
+		&& two_layer_gate_adjoints_.size()
+			== static_cast<size_t>(cfg.size()) * radial_func_count
+		&& two_layer_gate_scalar_values_cache_.size()
+			== static_cast<size_t>(cfg.size()) * gate_count_for_weights;
+	if (full_gate_weight_blas) {
+		cblas_dgemm(CblasRowMajor,
+		            CblasTrans,
+		            CblasNoTrans,
+		            radial_func_count,
+		            gate_count_for_weights,
+		            cfg.size(),
+		            1.0,
+		            two_layer_gate_adjoints_.data(),
+		            radial_func_count,
+		            two_layer_gate_scalar_values_cache_.data(),
+		            gate_count_for_weights,
+		            1.0,
+		            out_grads_accumulator.data() + TwoLayerGateWeightOffset(),
+		            gate_count_for_weights);
+	} else {
+		for (int ind = 0; ind < cfg.size(); ++ind) {
+			const double* gate_adjoints_by_mu = two_layer_gate_adjoints_.data()
+				+ static_cast<size_t>(ind) * radial_func_count;
+			bool has_gate_adjoint = false;
+			for (int mu = 0; mu < radial_func_count; ++mu) {
+				const double adjoint = gate_adjoints_by_mu[mu];
+				if (adjoint == 0.0)
+					continue;
+				has_gate_adjoint = true;
+			}
+			if (!has_gate_adjoint)
 				continue;
-			has_gate_adjoint = true;
-		}
-		if (!has_gate_adjoint)
-			continue;
-		const int gate_count = TwoLayerGateScalarCount();
-		const double* cached_scalars = nullptr;
-		if (gate_count > 0 &&
-			two_layer_gate_scalar_values_cache_.size() ==
-				static_cast<size_t>(cfg.size()) * gate_count) {
-			cached_scalars = two_layer_gate_scalar_values_cache_.data()
-				+ static_cast<size_t>(ind) * gate_count;
-		}
-		if (cached_scalars == nullptr)
-			CalcTwoLayerGateScalarValuesOnly(neighborhoods[ind],
-			                                  sh_gate_scalar_values_,
-			                                  ind);
-		const double* scalar_values =
-			(cached_scalars == nullptr) ? sh_gate_scalar_values_.data() : cached_scalars;
+			const int gate_count = TwoLayerGateScalarCount();
+			const double* cached_scalars = nullptr;
+			if (gate_count > 0 &&
+				two_layer_gate_scalar_values_cache_.size() ==
+					static_cast<size_t>(cfg.size()) * gate_count) {
+				cached_scalars = two_layer_gate_scalar_values_cache_.data()
+					+ static_cast<size_t>(ind) * gate_count;
+			}
+			if (cached_scalars == nullptr)
+				CalcTwoLayerGateScalarValuesOnly(neighborhoods[ind],
+				                                  sh_gate_scalar_values_,
+				                                  ind);
+			const double* scalar_values =
+				(cached_scalars == nullptr) ? sh_gate_scalar_values_.data() : cached_scalars;
 			if (TwoLayerGateUsesBodyLinearCombo()) {
 				const double* cached_body_values = nullptr;
 				if (two_layer_gate_body_values_cache_.size() ==
@@ -3809,6 +3922,7 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 				ERROR("SUS2-SH two-layer gate model has an unknown mode: " + two_layer_gate_mode_);
 			}
 		}
+	}
 	const double profile_after_gate_weight =
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
 
@@ -3819,37 +3933,101 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 			std::vector<double> scalar_gate_seeds(TwoLayerGateScalarCount(), 0.0);
 			std::vector<double> scalar_energy_seeds(TwoLayerGateScalarCount(), 0.0);
 			std::vector<double> scalar_seed_body_scratch;
-			for (int ind = 0; ind < cfg.size(); ++ind) {
-				const double* gate_adjoints_by_mu = two_layer_gate_adjoints_.data()
-					+ static_cast<size_t>(ind) * radial_func_count;
-				AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
-					gate_adjoints_by_mu,
-					scalar_gate_seeds.data(),
-					scalar_seed_body_scratch);
+			std::vector<double> full_scalar_gate_seed_cache;
+			std::vector<double> full_scalar_energy_seed_cache;
+			const int gate_count = TwoLayerGateScalarCount();
+			const bool full_seed_blas =
+				TwoLayerGateUsesFullScalarWeights()
+				&& gate_count > 0
+				&& two_layer_gate_adjoints_.size()
+					== static_cast<size_t>(cfg.size()) * radial_func_count;
+			if (full_seed_blas) {
+				full_scalar_gate_seed_cache.assign(
+					static_cast<size_t>(cfg.size()) * gate_count, 0.0);
+				cblas_dgemm(CblasRowMajor,
+				            CblasNoTrans,
+				            CblasNoTrans,
+				            cfg.size(),
+				            gate_count,
+				            radial_func_count,
+				            1.0,
+				            two_layer_gate_adjoints_.data(),
+				            radial_func_count,
+				            TwoLayerGateFullWeightMatrixData(),
+				            gate_count,
+				            0.0,
+				            full_scalar_gate_seed_cache.data(),
+				            gate_count);
 				if (!energy_gate_adjoints.empty()) {
-					const double* energy_gate_adjoints_by_mu =
-						energy_gate_adjoints.data()
+					full_scalar_energy_seed_cache.assign(
+						static_cast<size_t>(cfg.size()) * gate_count, 0.0);
+					cblas_dgemm(CblasRowMajor,
+					            CblasNoTrans,
+					            CblasNoTrans,
+					            cfg.size(),
+					            gate_count,
+					            radial_func_count,
+					            1.0,
+					            energy_gate_adjoints.data(),
+					            radial_func_count,
+					            TwoLayerGateFullWeightMatrixData(),
+					            gate_count,
+					            0.0,
+					            full_scalar_energy_seed_cache.data(),
+					            gate_count);
+				}
+			}
+			for (int ind = 0; ind < cfg.size(); ++ind) {
+				const double* scalar_gate_seed_values = scalar_gate_seeds.data();
+				const double* scalar_energy_seed_values = nullptr;
+				if (full_seed_blas) {
+					scalar_gate_seed_values =
+						full_scalar_gate_seed_cache.data()
+						+ static_cast<size_t>(ind) * gate_count;
+					if (!full_scalar_energy_seed_cache.empty())
+						scalar_energy_seed_values =
+							full_scalar_energy_seed_cache.data()
+							+ static_cast<size_t>(ind) * gate_count;
+				} else {
+					const double* gate_adjoints_by_mu = two_layer_gate_adjoints_.data()
 						+ static_cast<size_t>(ind) * radial_func_count;
 					AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
-						energy_gate_adjoints_by_mu,
-						scalar_energy_seeds.data(),
+						gate_adjoints_by_mu,
+						scalar_gate_seeds.data(),
 						scalar_seed_body_scratch);
-				} else {
-					std::fill(scalar_energy_seeds.begin(),
-					          scalar_energy_seeds.end(),
-					          0.0);
+					if (!energy_gate_adjoints.empty()) {
+						const double* energy_gate_adjoints_by_mu =
+							energy_gate_adjoints.data()
+							+ static_cast<size_t>(ind) * radial_func_count;
+						AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
+							energy_gate_adjoints_by_mu,
+							scalar_energy_seeds.data(),
+							scalar_seed_body_scratch);
+						scalar_energy_seed_values = scalar_energy_seeds.data();
+					} else {
+						std::fill(scalar_energy_seeds.begin(),
+						          scalar_energy_seeds.end(),
+						          0.0);
+					}
 				}
-			const Neighborhood& nbh = neighborhoods[ind];
-			const Vector3* gate_der_weights_ptr = nullptr;
-			bool has_energy_gate_adjoint = false;
-			for (double seed : scalar_energy_seeds)
-				if (seed != 0.0) {
-					has_energy_gate_adjoint = true;
-					break;
+				if (!full_seed_blas && !energy_gate_adjoints.empty()) {
+					scalar_energy_seed_values = scalar_energy_seeds.data();
 				}
-			if (has_energy_gate_adjoint) {
-				gate_der_weights.resize(nbh.count);
-				FillWithZero(gate_der_weights);
+				if (!full_seed_blas && energy_gate_adjoints.empty()) {
+					scalar_energy_seed_values = nullptr;
+				}
+				const Neighborhood& nbh = neighborhoods[ind];
+				const Vector3* gate_der_weights_ptr = nullptr;
+				bool has_energy_gate_adjoint = false;
+				if (scalar_energy_seed_values != nullptr)
+					for (int q = 0; q < gate_count; ++q)
+						if (scalar_energy_seed_values[q] != 0.0) {
+							has_energy_gate_adjoint = true;
+							break;
+						}
+				if (has_energy_gate_adjoint) {
+					gate_der_weights.resize(nbh.count);
+					FillWithZero(gate_der_weights);
 				bool has_der_weight = false;
 				for (int j = 0; j < nbh.count; ++j) {
 					gate_der_weights[j] += frc_weights[ind];
@@ -3876,16 +4054,16 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 					gate_directional_moment_tangent_cache.data()
 					+ static_cast<size_t>(ind) * alpha_moments_count;
 			}
-			AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
-				nbh,
-				out_grads_accumulator,
-				scalar_gate_seeds.data(),
-				gate_der_weights_ptr,
-				ind,
-				gate_moment_tangents_ptr,
-				energy_gate_adjoints.empty() ? nullptr : scalar_energy_seeds.data());
+				AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
+					nbh,
+					out_grads_accumulator,
+					scalar_gate_seed_values,
+					gate_der_weights_ptr,
+					ind,
+					gate_moment_tangents_ptr,
+					scalar_energy_seed_values);
+			}
 		}
-	}
 	const double profile_after_scalar_param =
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
 

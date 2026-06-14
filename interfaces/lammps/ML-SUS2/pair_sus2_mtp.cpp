@@ -1670,6 +1670,8 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const int gate_body_stride = two_layer_gate_body_order_max - 1;
   std::vector<double> gate_body_values(gate_body_stride, 0.0);
   std::vector<double> gate_body_adjoints(gate_body_stride, 0.0);
+  std::vector<double> gate_moment_cache(
+      static_cast<size_t>(inum) * alpha_moment_count, 0.0);
   std::fill(two_layer_gate_values,
             two_layer_gate_values + static_cast<size_t>(nall) * radial_func_count,
             0.0);
@@ -1747,17 +1749,26 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       two_layer_gate_edge_dz.push_back(r[2]);
       two_layer_gate_edge_dist.push_back(dist);
       two_layer_gate_edge_table_fracs.push_back(table_frac);
-      two_layer_gate_edge_deriv_x.insert(two_layer_gate_edge_deriv_x.end(),
-                                         gate_scalar_stride, 0.0);
-      two_layer_gate_edge_deriv_y.insert(two_layer_gate_edge_deriv_y.end(),
-                                         gate_scalar_stride, 0.0);
-      two_layer_gate_edge_deriv_z.insert(two_layer_gate_edge_deriv_z.end(),
-                                         gate_scalar_stride, 0.0);
       calc_pair_radial_values(itype, jtype, dist, two_layer_gate_shared_radial,
                               nullptr, false, -1, table_index, table_bin,
                               table_frac);
       accumulate_sh_basic_edge(first_layer_active_local_count, r, dist, 1.0,
                                false, 0, false);
+      const size_t jac_offset =
+          static_cast<size_t>(first_layer_active_local_count) *
+          alpha_index_basic_count;
+      two_layer_gate_edge_deriv_x.insert(
+          two_layer_gate_edge_deriv_x.end(),
+          moment_jacobian_x + jac_offset,
+          moment_jacobian_x + jac_offset + alpha_index_basic_count);
+      two_layer_gate_edge_deriv_y.insert(
+          two_layer_gate_edge_deriv_y.end(),
+          moment_jacobian_y + jac_offset,
+          moment_jacobian_y + jac_offset + alpha_index_basic_count);
+      two_layer_gate_edge_deriv_z.insert(
+          two_layer_gate_edge_deriv_z.end(),
+          moment_jacobian_z + jac_offset,
+          moment_jacobian_z + jac_offset + alpha_index_basic_count);
       first_layer_active_local_count++;
     }
     const size_t active_end = two_layer_gate_edge_neighbors.size();
@@ -1779,6 +1790,10 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
           alpha_times_coeff[k] * moment_tensor_vals[alpha_times_a0[k]] *
           moment_tensor_vals[alpha_times_a1[k]];
     }
+    std::copy(moment_tensor_vals,
+              moment_tensor_vals + alpha_moment_count,
+              gate_moment_cache.data()
+                  + static_cast<size_t>(ii) * alpha_moment_count);
     two_layer_gate_body_order_scratch.assign(gate_scalar_stride, 0.0);
     std::fill(gate_body_values.begin(), gate_body_values.end(), 0.0);
     for (int q = 0; q < two_layer_gate_scalar_count; q++) {
@@ -1824,34 +1839,6 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       continue;
     }
 
-    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
-      std::fill(nbh_energy_ders_wrt_moments,
-                nbh_energy_ders_wrt_moments + alpha_moment_count, 0.0);
-      const int scalar_index = two_layer_gate_scalar_indices[q];
-      nbh_energy_ders_wrt_moments[alpha_moment_mapping[scalar_index]] = 1.0;
-      backprop_sh_products();
-      for (size_t active_idx = active_begin; active_idx < active_end; active_idx++) {
-        const int first_local = static_cast<int>(active_idx - active_begin);
-        double gx = 0.0, gy = 0.0, gz = 0.0;
-        const size_t jac_offset =
-            static_cast<size_t>(first_local) * alpha_index_basic_count;
-        const double *__restrict jac_x = moment_jacobian_x + jac_offset;
-        const double *__restrict jac_y = moment_jacobian_y + jac_offset;
-        const double *__restrict jac_z = moment_jacobian_z + jac_offset;
-        #pragma omp simd reduction(+:gx,gy,gz)
-        for (int k = 0; k < alpha_index_basic_count; k++) {
-          const double pref = nbh_energy_ders_wrt_moments[k];
-          gx += pref * jac_x[k];
-          gy += pref * jac_y[k];
-          gz += pref * jac_z[k];
-        }
-        const size_t deriv_offset =
-            active_idx * static_cast<size_t>(gate_scalar_stride) + q;
-        two_layer_gate_edge_deriv_x[deriv_offset] = gx;
-        two_layer_gate_edge_deriv_y[deriv_offset] = gy;
-        two_layer_gate_edge_deriv_z[deriv_offset] = gz;
-      }
-    }
   }
 
   comm->forward_comm(this);
@@ -2081,6 +2068,21 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
     }
     const size_t active_begin = two_layer_gate_edge_offsets[ii];
     const size_t active_end = two_layer_gate_edge_offsets[ii + 1];
+    std::copy(gate_moment_cache.data()
+                  + static_cast<size_t>(ii) * alpha_moment_count,
+              gate_moment_cache.data()
+                  + static_cast<size_t>(ii + 1) * alpha_moment_count,
+              moment_tensor_vals);
+    std::fill(nbh_energy_ders_wrt_moments,
+              nbh_energy_ders_wrt_moments + alpha_moment_count, 0.0);
+    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+      const double adjoint = two_layer_gate_body_order_scratch[q];
+      if (adjoint == 0.0) continue;
+      const int scalar_index = two_layer_gate_scalar_indices[q];
+      nbh_energy_ders_wrt_moments[alpha_moment_mapping[scalar_index]] +=
+          adjoint;
+    }
+    backprop_sh_products();
 
     for (size_t active_idx = active_begin; active_idx < active_end; active_idx++) {
       const int j = two_layer_gate_edge_neighbors[active_idx];
@@ -2088,13 +2090,19 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       double fy = 0.0;
       double fz = 0.0;
       const size_t deriv_base =
-          active_idx * static_cast<size_t>(gate_scalar_stride);
-      for (int q = 0; q < two_layer_gate_scalar_count; q++) {
-        const double adjoint = two_layer_gate_body_order_scratch[q];
-        if (adjoint == 0.0) continue;
-        fx += adjoint * two_layer_gate_edge_deriv_x[deriv_base + q];
-        fy += adjoint * two_layer_gate_edge_deriv_y[deriv_base + q];
-        fz += adjoint * two_layer_gate_edge_deriv_z[deriv_base + q];
+          active_idx * static_cast<size_t>(alpha_index_basic_count);
+      const double *__restrict jac_x =
+          two_layer_gate_edge_deriv_x.data() + deriv_base;
+      const double *__restrict jac_y =
+          two_layer_gate_edge_deriv_y.data() + deriv_base;
+      const double *__restrict jac_z =
+          two_layer_gate_edge_deriv_z.data() + deriv_base;
+      #pragma omp simd reduction(+:fx,fy,fz)
+      for (int k = 0; k < alpha_index_basic_count; k++) {
+        const double adjoint = nbh_energy_ders_wrt_moments[k];
+        fx += adjoint * jac_x[k];
+        fy += adjoint * jac_y[k];
+        fz += adjoint * jac_z[k];
       }
 
       f[i][0] += fx;

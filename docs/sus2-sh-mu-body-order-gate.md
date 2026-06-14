@@ -147,7 +147,7 @@ gradient.
 - New gate models write:
 
   ```text
-  two_layer_gate_mode = mu-body-linear-combo
+  two_layer_gate_mode = mu-body-linear-combo|mu-scalar-full
   two_layer_gate_site_mode = neighbor|double
   ```
 
@@ -164,12 +164,21 @@ gradient.
 - Gate adjoints are also per atom times mu. During reverse mode, adjoints first
   accumulate into body-order buckets and then into the shared \(c_q\) scalar
   weights and scalar-value chain.
+- The optional `mu-scalar-full` mode keeps one independent gate coefficient per
+  \((\mu,q)\) pair while reusing the same scalar basis values \(s_q\). Its
+  forward signal, force-chain scalar seeds, directional derivative, and gate
+  weight gradient are batched through BLAS matrix/vector products instead of
+  nested \(\mu,q\) loops.
 - The existing tanh cache, edge cache, site derivative cache, and shared-radial
   gate paths are preserved.
-- CPU LAMMPS reads `two_layer_gate_mode = mu-body-linear-combo` and
-  `two_layer_gate_site_mode`, builds the same exact body-order buckets,
-  communicates per-atom per-mu gate values and adjoints, applies the same
-  neighbor or double-site gate factor, and rejects legacy gate fields.
+- CPU LAMMPS reads `two_layer_gate_mode` and `two_layer_gate_site_mode`,
+  supports both `mu-body-linear-combo` and `mu-scalar-full`, communicates
+  per-atom per-mu gate values and adjoints, applies the same neighbor or
+  double-site gate factor, and rejects legacy gate fields.
+- CPU LAMMPS now propagates gate force-chain derivatives by caching first-layer
+  basic moment Jacobians per active edge and doing one combined scalar-product
+  reverse pass per center atom, avoiding the old edge-by-scalar derivative
+  materialization.
 - Kokkos device gate evaluation is explicitly rejected for this branch rather
   than silently using the old scalar-gate kernels.
 
@@ -192,7 +201,7 @@ Final synchronized server binary:
 Final binary SHA-256:
 
 ```text
-34aa439bff8a7333f8f4fb99b140494ec45cbd2c70da42f555a294fb37f520a6
+0f6bce2b6a15d97c1c848d4e1b247940fb0e961f1d104e4c661a35f7d595f315
 ```
 
 Independent CPU LAMMPS binary for this branch:
@@ -200,12 +209,13 @@ Independent CPU LAMMPS binary for this branch:
 ```text
 /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2
 /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/bin/lmp.sus2_sh_cpu_avx2_mu_body_gate_opt_20260612
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
 ```
 
 LAMMPS binary SHA-256:
 
 ```text
-377948d06dca557e89accdeea86f96d762d2a4b851d785b9eea23bc68276ab5b
+a87ed4eaa2f8ec3b7b948b96fc783c02d14a3d9cce0ac23a0aead1815b47ffe2
 ```
 
 Final build and smoke evidence on the server:
@@ -278,6 +288,39 @@ sh_two_layer_gate_loss_gradient_check.sh: PASS
 sh_two_layer_gate_force_fd_check.sh: PASS
 LAMMPS neighbor additive smoke: PASS, max_abs=8.694700e-05
 LAMMPS double additive smoke: PASS, max_abs=8.695400e-05
+LAMMPS 1-rank vs 2-rank: PASS, max_abs=0
+```
+
+## Full-Mode And LAMMPS Efficiency Update
+
+The retained `mu-scalar-full` mode is no longer a legacy fallback. It uses the
+same scalar basis cache as `mu-body-linear-combo`, but stores an independent
+flattened weight matrix over \((\mu,q)\). The hot training paths use BLAS for
+the full weight projection, scalar-seed projection, directional derivative,
+outer-product gate-weight gradient, and scalar-parameter seed accumulation.
+
+Matched smoke-profile logs in `/work/phy-weigw/hyx/xxx-b/test`:
+
+| Mode | Runtime | Forward total | Prepare gate | Main forward | Force chain |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `mu-body-linear-combo` | `262 s` | `165.620 ms` | `83.691 ms` | `58.805 ms` | `23.124 ms` |
+| `mu-scalar-full` | `283 s` | `148.455 ms` | `78.817 ms` | `58.670 ms` | `10.968 ms` |
+
+Fresh server verification after rebuilding current source:
+
+```text
+mlp-sus2 build: PASS, SHA-256 0f6bce2b6a15d97c1c848d4e1b247940fb0e961f1d104e4c661a35f7d595f315
+CPU LAMMPS no-IPO build: PASS, SHA-256 a87ed4eaa2f8ec3b7b948b96fc783c02d14a3d9cce0ac23a0aead1815b47ffe2
+sh_two_layer_gate_mu_scalar_full_init_check.sh: PASS
+sh_two_layer_gate_mu_scalar_full_loss_gradient_check.sh: PASS
+sh_two_layer_gate_loss_gradient_check.sh: PASS
+sh_two_layer_gate_force_fd_check.sh: PASS
+LAMMPS mu-body-linear-combo smoke: PASS, max_abs=0
+LAMMPS mu-body-linear-combo neighbor additive: PASS, max_abs=8.790000e-05
+LAMMPS mu-body-linear-combo double additive: PASS, max_abs=8.788400e-05
+LAMMPS mu-scalar-full smoke: PASS, max_abs=0
+LAMMPS mu-scalar-full neighbor additive: PASS, max_abs=8.694700e-05
+LAMMPS mu-scalar-full double additive: PASS, max_abs=8.695400e-05
 LAMMPS 1-rank vs 2-rank: PASS, max_abs=0
 ```
 
