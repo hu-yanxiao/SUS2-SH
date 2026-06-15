@@ -713,6 +713,81 @@ the previous branch binary. The remaining `mu-scalar-full` gap is still
 communication dominated because this mode exactly carries 20 independent
 per-\(\mu\) gate signals and adjoints for the l4k4 model.
 
+### Direct Derivative-Flow LAMMPS Update 2026-06-15
+
+The current retained CPU LAMMPS branch source adds another exact memory-flow
+cleanup on top of the raw-edge/comm-direct build:
+
+- The first-layer gate SH pass writes the raw edge derivative planes directly
+  into the gate derivative cache, instead of first writing the ordinary
+  `moment_jacobian_{x,y,z}` slabs and then copying them.
+- The first-layer gate moment buffer is cleared only through the gate scalar
+  dependency width, not the full model moment width.
+- The late gate-force scalar seed is accumulated directly into
+  `nbh_energy_ders_wrt_moments`; the temporary scalar scratch vector is removed.
+
+Retained independent CPU LAMMPS binary:
+
+```text
+binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.directfill_seed_trial
+binary SHA-256: 08b53882086b4e99eabfbbed60a84f5b00932d0ac33a9a878d1d3a754c3ac0f8
+source code commit: 826415d4dcc64ee0a38ba445c2302d6f7aa0d5ec
+source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+SUS2-SH server mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
+pair_sus2_mtp.cpp SHA-256: 6f80c0d1a1df873806050e02bf7f2c9c9d0e16b73d19abf288d76b4b5a2ae375
+pair_sus2_mtp.h SHA-256: db75fb2da94ef56eed5d19e9260fddd589f39d1e8402fae74c878ddc582ea810
+```
+
+Current login-node parity against the previous `e2f8` canonical branch binary:
+
+```text
+script: /work/phy-weigw/20260321_Test/run_directfill_seed_login_parity.sh
+combo abs_dE=0.000000e+00, max_force_diff=0.000000e+00, rms_force_diff=0.000000e+00
+full  abs_dE=0.000000e+00, max_force_diff=0.000000e+00, rms_force_diff=0.000000e+00
+```
+
+Current login-node short profile against the previous `e2f8` canonical branch
+binary:
+
+```text
+script: /work/phy-weigw/20260321_Test/run_directfill_seed_login_profile.sh
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/directfill_seed_login_profile
+```
+
+| Mode/binary | total | first | fcomm | main | rcomm | gate_force |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e2f8` `mu-body-linear-combo` | `0.083261775` | `0.029778039` | `0.000018864` | `0.038592064` | `0.000013142` | `0.014833429` |
+| retained `mu-body-linear-combo` | `0.079464204` | `0.025972551` | `0.000019252` | `0.038679035` | `0.000014232` | `0.014754995` |
+| `e2f8` `mu-scalar-full` | `0.088467262` | `0.031465805` | `0.000089547` | `0.037235977` | `0.000054461` | `0.019555161` |
+| retained `mu-scalar-full` | `0.082831310` | `0.026925359` | `0.000088189` | `0.036981662` | `0.000055227` | `0.018714115` |
+
+The login-node profile is only a hot-path direction check; the real LAMMPS
+speed comparison remains the submitted 40-rank/96-rank B-system jobs in the same
+test directory. At the time this note was written, the pending jobs were:
+
+```text
+40-rank short profile: 3800991
+40-rank speed:         3801017
+96-rank speed:         3801039
+```
+
+Rejected exact fast-dispatch candidate:
+
+```text
+trial binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.fastdispatch_trial
+trial SHA-256: 67b4c698d963eec3f9e1f48542bd067eb5c82530615d8d0a9a1dc2de204d6e34
+login parity: combo/full zero energy and force differences against the retained binary
+login profile: combo total 0.079477085 -> 0.079802535, full total 0.083516155 -> 0.083533995
+decision: rejected; exact but no measured speed gain.
+```
+
+The benchmark models were also checked for exact structural compression
+opportunities. The trained `mu-body-linear-combo` body-mix rows and
+`mu-scalar-full` rows are numerically close to each other, but they are not
+exactly duplicate rows. Therefore the communication width cannot be reduced
+without changing the mathematical model or using approximation, which is out of
+scope for this branch.
+
 ## Verification Checklist
 
 Local serial checks:
