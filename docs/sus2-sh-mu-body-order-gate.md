@@ -144,6 +144,24 @@ not need to sum exactly to the total. The actionable signal is that full mode
 still spends more in gate-force adjoint work, while communication is already a
 large fraction of the 40-rank short-run profile.
 
+Rejected exact LAMMPS signal-derivative-cache candidate:
+
+```text
+candidate binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.signalderiv_trial
+candidate SHA-256 after alias fix: ba05caca66e9690b15b189acc6c63449aa1db4df8e5e114526e10cc0cd4c3c34
+login parity: combo max_force_diff=1.0e-20, full max_force_diff=1.3878e-16
+login profile combo mean_total=0.087373956 s
+login profile full mean_total=0.219957343 s
+decision: rejected; exact but much slower than e2f8 due 4/20-RHS product-graph reverse work moved into the first layer
+```
+
+This candidate precomputed \(\partial h_{i,s}/\partial r_{ij}\) for every gate
+signal \(s\) and edge, reducing the late gate-force cache from
+`alpha_index_basic_count` entries per edge to `gate_signal_stride` entries per
+edge. The math is exact after explicitly handling product-graph square terms
+where `a0 == a1`, but the extra multi-RHS scalar-product reverse pass dominates
+the saved memory traffic on the tested model. Do not promote this candidate.
+
 Do not use this historical directory as the current main reference:
 
 ```text
