@@ -66,6 +66,76 @@ worktree and GitHub branch as the source authority, then sync confirmed files to
 the server mirror before compiling. Documentation-only commits made after the
 binary code commit do not imply that the binary must be rebuilt.
 
+Current optimized LAMMPS mu-body gate binary:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+```
+
+Source relationship as of 2026-06-16 03:00 CST:
+
+```text
+local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.codex_tmp/sus2-sh-developer-tanh
+local branch: codex/mu-body-order-gate
+GitHub/code commit: a8ec8a98b41e99f12821567d61f5cd8b602c4221
+server SUS2-SH source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/interfaces/lammps/ML-SUS2
+server LAMMPS build src: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+LAMMPS binary SHA-256: e77ee6eaa74ef6eb9ad8b4723dc649be907856deb881ef734981cd77cd864054
+pair_sus2_mtp.cpp SHA-256: 51a09e0d403af744b2e05770a45021b4adc9cbc508ddb245c9ff3041b67fea80
+pair_sus2_mtp.h SHA-256: 6bc7a1624aae0b0f162f02bb4fcc77f983a8700a4960f81f78ad1f040918bd55
+```
+
+The stable binary above is the same file content as:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.no_center_branchless_trial
+```
+
+Final exact LAMMPS optimization status:
+
+```text
+test directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial
+main LAMMPS baseline binary: /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
+40-rank parity job for final SHA-256 e77...4054: 3801127, DONE
+40-rank performance job for final SHA-256 e77...4054: 3801128, DONE
+```
+
+Verified 40-rank parity for the final binary:
+
+```text
+combo abs_dE=0, max_force_diff=0
+full abs_dE=0, max_force_diff=0
+```
+
+Final 40-rank LAMMPS speed comparison:
+
+```text
+summary: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/no_center_branchless_perf40_summary.txt
+host: b07u32a
+replicate: 2 2 2
+run steps: 5000
+atoms after replicate: 384
+```
+
+| Case | Mean Loop Time | Relative To Main |
+| --- | ---: | ---: |
+| main old gate | `14.760067 s` | `1.0000x` |
+| mu-body linear-combo | `16.754067 s` | `1.1351x` |
+| mu-scalar full | `17.457800 s` | `1.1828x` |
+
+Both active mu gate modes are within the target `1.2x` main-branch LAMMPS
+speed envelope on this benchmark. The exact optimizations promoted in the
+final binary are:
+
+- mode-specific gate-force cache strategy: body-linear-combo uses cached basic
+  Jacobians; mu-scalar-full caches radial values/derivatives and recomputes the
+  compact SH Jacobian on demand;
+- grouped \(\mu\)-major SH Jacobian contraction for the on-demand full mode;
+- direct stride-4 body-linear-combo gate-signal and adjoint contractions;
+- branchless full-mode on-demand contraction over grouped SH basic terms;
+- single-gate no-center main-layer force/adjoint path, leaving the double-gate
+  center path separate.
+
 Current LAMMPS mu-body gate trial binary for exact gate performance work:
 
 ```text
