@@ -557,6 +557,66 @@ path already sends contiguous signal blocks. Reducing the full-mode width below
 20 would require an exact low-rank/sparse identity in the trained weight matrix
 or a change in the mathematical model; no approximate compression is used.
 
+### Raw Edge/Comm Direct LAMMPS Update 2026-06-15
+
+The current accepted CPU LAMMPS branch binary adds exact data-layout and hot-loop
+optimizations on top of the no-zero build:
+
+- Gate edge staging uses LAMMPS-managed raw contiguous buffers instead of
+  per-step `std::vector` clear/reserve/push/resize traffic.
+- The common l4k4 `mu-body-linear-combo` path specializes the four body-channel
+  signal and adjoint maps while keeping the same per-\(\mu\) accumulation order.
+- Forward and reverse gate communication add fixed-width stride 4 and stride 20
+  pack/unpack paths. The communicated values and adjoint sums are unchanged.
+
+Accepted independent CPU LAMMPS binary:
+
+```text
+binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+binary SHA-256: 89e29919ddf899990f5f8e4e1e0a55be5ce0a31bc6bc04c0acb038bc795714ad
+source code commit: f479b13f1281cc5f5a2f00d360b96a7ef13356ba
+previous backup: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.pre_raw_edge_comm_direct_pack_20260615_1900
+trial binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.raw_edge_comm_direct_pack_trial
+source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+SUS2-SH server mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
+```
+
+Numerical parity against the previous canonical branch binary:
+
+```text
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial
+job: 3800591
+combo abs_dE=0.000000e+00, max_force_diff=0.000000e+00, rms_force_diff=0.000000e+00
+full  abs_dE=0.000000e+00, max_force_diff=0.000000e+00, rms_force_diff=0.000000e+00
+```
+
+Real B-system LAMMPS speed comparison in one matched 96-rank job:
+
+```text
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial
+job: 3800594
+node: be1u39a
+data: first structure from /work/phy-weigw/hyx/xxx-b/test/train.cfg
+LAMMPS cell: replicate 2 2 2, 384 B atoms
+run: 5000 steps, tabstep 0.0005, trained *_lmp models
+```
+
+| Model/mode | Mean loop time | Relative to main | Relative to previous branch binary |
+| --- | ---: | ---: | ---: |
+| main old gate | `4.336693 s` | `1.0000x` | n/a |
+| previous `mu-body-linear-combo` | `5.574307 s` | `1.2854x` | `1.0000x` |
+| accepted raw-edge/comm-direct `mu-body-linear-combo` | `5.321253 s` | `1.2270x` | `0.9546x` |
+| previous `mu-scalar-full` | `6.871523 s` | `1.5845x` | `1.0000x` |
+| accepted raw-edge/comm-direct `mu-scalar-full` | `6.809597 s` | `1.5702x` | `0.9910x` |
+
+An earlier same-node full-speed run for the direct version without the
+forward-pack specialization gave `mu-body-linear-combo = 5.313430 s`
+(`1.1989x` relative to that job's main run) and `mu-scalar-full = 6.914083 s`.
+Across the matched jobs, the accepted code gives a repeatable improvement over
+the previous branch binary. The remaining `mu-scalar-full` gap is still
+communication dominated because this mode exactly carries 20 independent
+per-\(\mu\) gate signals and adjoints for the l4k4 model.
+
 ## Verification Checklist
 
 Local serial checks:

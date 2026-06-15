@@ -175,18 +175,20 @@ class PairSUS2MTP : public Pair {
   std::vector<double> two_layer_gate_additive_ratios;
   std::vector<unsigned char> two_layer_gate_additive_ratio_valid;
   std::vector<size_t> two_layer_gate_edge_offsets;
-  std::vector<int> two_layer_gate_edge_neighbors;
-  std::vector<int> two_layer_gate_edge_types;
-  std::vector<int> two_layer_gate_edge_table_indices;
-  std::vector<int> two_layer_gate_edge_table_bins;
-  std::vector<double> two_layer_gate_edge_dx;
-  std::vector<double> two_layer_gate_edge_dy;
-  std::vector<double> two_layer_gate_edge_dz;
-  std::vector<double> two_layer_gate_edge_dist;
-  std::vector<double> two_layer_gate_edge_table_fracs;
-  std::vector<double> two_layer_gate_edge_deriv_x;
-  std::vector<double> two_layer_gate_edge_deriv_y;
-  std::vector<double> two_layer_gate_edge_deriv_z;
+  int *two_layer_gate_edge_neighbors_raw = nullptr;
+  int *two_layer_gate_edge_types_raw = nullptr;
+  int *two_layer_gate_edge_table_indices_raw = nullptr;
+  int *two_layer_gate_edge_table_bins_raw = nullptr;
+  double *two_layer_gate_edge_dx_raw = nullptr;
+  double *two_layer_gate_edge_dy_raw = nullptr;
+  double *two_layer_gate_edge_dz_raw = nullptr;
+  double *two_layer_gate_edge_dist_raw = nullptr;
+  double *two_layer_gate_edge_table_fracs_raw = nullptr;
+  double *two_layer_gate_edge_deriv_x_raw = nullptr;
+  double *two_layer_gate_edge_deriv_y_raw = nullptr;
+  double *two_layer_gate_edge_deriv_z_raw = nullptr;
+  size_t two_layer_gate_edge_capacity = 0;
+  size_t two_layer_gate_edge_deriv_capacity = 0;
   int alpha_moment_count, alpha_index_basic_count, alpha_index_times_count, alpha_scalar_count,
       max_alpha_index_basic;    // Counts of various alpha indicies
   int **alpha_index_basic;      // Indicies how to construct elementary moments from coords and dist
