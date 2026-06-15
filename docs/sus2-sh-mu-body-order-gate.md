@@ -57,13 +57,14 @@ Source relationship:
 server source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
 local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.codex_tmp/sus2-sh-developer-tanh
 GitHub branch: codex/mu-body-order-gate
-commit: a827a02c13978fd7f06be757497d6b1cdb5bff9c
+binary code commit: a827a02c13978fd7f06be757497d6b1cdb5bff9c
 binary SHA-256: 0f6bce2b6a15d97c1c848d4e1b247940fb0e961f1d104e4c661a35f7d595f315
 ```
 
 The server mu-body gate source mirror is not a git checkout. Treat the local
 worktree and GitHub branch as the source authority, then sync confirmed files to
-the server mirror before compiling.
+the server mirror before compiling. Documentation-only commits made after the
+binary code commit do not imply that the binary must be rebuilt.
 
 Do not use this historical directory as the current main reference:
 
