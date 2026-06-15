@@ -191,10 +191,13 @@ class PairSUS2MTP : public Pair {
   double *two_layer_gate_edge_dz_raw = nullptr;
   double *two_layer_gate_edge_dist_raw = nullptr;
   double *two_layer_gate_edge_table_fracs_raw = nullptr;
+  double *two_layer_gate_edge_radial_vals_raw = nullptr;
+  double *two_layer_gate_edge_radial_ders_raw = nullptr;
   double *two_layer_gate_edge_deriv_x_raw = nullptr;
   double *two_layer_gate_edge_deriv_y_raw = nullptr;
   double *two_layer_gate_edge_deriv_z_raw = nullptr;
   size_t two_layer_gate_edge_capacity = 0;
+  size_t two_layer_gate_edge_radial_capacity = 0;
   size_t two_layer_gate_edge_deriv_capacity = 0;
   int alpha_moment_count, alpha_index_basic_count, alpha_index_times_count, alpha_scalar_count,
       max_alpha_index_basic;    // Counts of various alpha indicies
@@ -304,6 +307,10 @@ class PairSUS2MTP : public Pair {
                                 bool = false, bool = false,
                                 double * = nullptr, double * = nullptr,
                                 double * = nullptr);
+  void dot_sh_basic_edge_jacobian(int, int, const double *, double, int, int,
+                                  double, const double *, double &, double &,
+                                  double &, const double * = nullptr,
+                                  const double * = nullptr);
   bool is_static_fixed_type(int) const;
   bool static_fixed_cache_tag_matches(const tagint *, int) const;
   void configure_static_fixed_types();
@@ -322,6 +329,7 @@ class PairSUS2MTP : public Pair {
   void apply_static_fixed_gate_main_cache_adjoints(int);
   void forward_sh_products();
   void backprop_sh_products();
+  void backprop_sh_products_from(const double *, int);
   void ensure_two_layer_atom_buffers();
   void ensure_two_layer_edge_buffer(int);
 };
