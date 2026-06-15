@@ -26,6 +26,55 @@ The target smoke/test case directory is:
 /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/
 ```
 
+## Server Binary Source Map
+
+Current SUS2-SH main/developer reference binary for branch speed comparisons:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-work-codex/bin/mlp-sus2
+```
+
+Source relationship:
+
+```text
+server source tree: /work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+server checkout branch name: developer
+GitHub repository: git@github.com:hu-yanxiao/SUS2-SH.git
+GitHub branches at this commit: main, developer
+commit: dd3010572b8d34fc53e7c371ea93ecc2104f74c1
+binary SHA-256: aca08ae4d763c155af18dfa2c6a51b4c39379eef7712c29179d787ac4f499659
+```
+
+Current mu-body-order gate test binary:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/bin/mlp-sus2
+```
+
+Source relationship:
+
+```text
+server source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
+local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.codex_tmp/sus2-sh-developer-tanh
+GitHub branch: codex/mu-body-order-gate
+commit: a827a02c13978fd7f06be757497d6b1cdb5bff9c
+binary SHA-256: 0f6bce2b6a15d97c1c848d4e1b247940fb0e961f1d104e4c661a35f7d595f315
+```
+
+The server mu-body gate source mirror is not a git checkout. Treat the local
+worktree and GitHub branch as the source authority, then sync confirmed files to
+the server mirror before compiling.
+
+Do not use this historical directory as the current main reference:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-origin-main-speed-bench-codex
+```
+
+It was observed at detached commit `6a5ca72dd5a31766c0e0da0711a44682d8fa461c`,
+older than the current main/developer reference, and produced an invalid speed
+comparison because it rejected `RBLaguerre_log1p` during `init-sh`.
+
 Submitted neighbor-site full test job in that directory:
 
 ```text
