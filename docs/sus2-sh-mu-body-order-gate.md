@@ -241,8 +241,9 @@ gradient.
   gate paths are preserved.
 - CPU LAMMPS reads `two_layer_gate_mode` and `two_layer_gate_site_mode`,
   supports both `mu-body-linear-combo` and `mu-scalar-full`, communicates
-  per-atom per-mu gate values and adjoints, applies the same neighbor or
-  double-site gate factor, and rejects legacy gate fields.
+  compact per-body-order gate signals/adjoints for `mu-body-linear-combo`,
+  communicates per-mu signals/adjoints for exact `mu-scalar-full`, applies the
+  same neighbor or double-site gate factor, and rejects legacy gate fields.
 - CPU LAMMPS now propagates gate force-chain derivatives by caching first-layer
   basic moment Jacobians per active edge and doing one combined scalar-product
   reverse pass per center atom, avoiding the old edge-by-scalar derivative
@@ -283,7 +284,7 @@ Independent CPU LAMMPS binary for this branch:
 LAMMPS binary SHA-256:
 
 ```text
-a87ed4eaa2f8ec3b7b948b96fc783c02d14a3d9cce0ac23a0aead1815b47ffe2
+7c54d7ec5ee765d9ddf5fa2569628a84c004aac47ffbf161b6bc4b8e329ae4c7
 ```
 
 Final build and smoke evidence on the server:
@@ -378,7 +379,7 @@ Fresh server verification after rebuilding current source:
 
 ```text
 mlp-sus2 build: PASS, SHA-256 0f6bce2b6a15d97c1c848d4e1b247940fb0e961f1d104e4c661a35f7d595f315
-CPU LAMMPS no-IPO build: PASS, SHA-256 a87ed4eaa2f8ec3b7b948b96fc783c02d14a3d9cce0ac23a0aead1815b47ffe2
+CPU LAMMPS no-IPO build: PASS, SHA-256 7c54d7ec5ee765d9ddf5fa2569628a84c004aac47ffbf161b6bc4b8e329ae4c7
 sh_two_layer_gate_mu_scalar_full_init_check.sh: PASS
 sh_two_layer_gate_mu_scalar_full_loss_gradient_check.sh: PASS
 sh_two_layer_gate_loss_gradient_check.sh: PASS
@@ -391,6 +392,92 @@ LAMMPS mu-scalar-full neighbor additive: PASS, max_abs=8.694700e-05
 LAMMPS mu-scalar-full double additive: PASS, max_abs=8.695400e-05
 LAMMPS 1-rank vs 2-rank: PASS, max_abs=0
 ```
+
+## LAMMPS Gate-Mode Efficiency Update 2026-06-15
+
+The independent CPU LAMMPS branch binary was rebuilt from the current
+`codex/mu-body-order-gate` source after optimizing the exact gate dataflow:
+
+```text
+source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+binary SHA-256: 7c54d7ec5ee765d9ddf5fa2569628a84c004aac47ffbf161b6bc4b8e329ae4c7
+pre-optimization backup: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.pre_body_comm_20260615_1237
+```
+
+Implementation notes:
+
+- `mu-body-linear-combo` stores and communicates only the body-channel signals
+  \(H_b\) and body-channel adjoints. Each receiving rank reconstructs
+  \(h_\mu=\sum_b c_{\mu b}H_b\) locally before the tanh gate. During reverse
+  communication, each per-mu gate adjoint is contracted back to
+  \(dE/dH_b=\sum_\mu c_{\mu b}\,dE/dh_\mu\). This is algebraically exact and
+  reduces the l4k4 communication width from 20 doubles to 4 doubles per atom.
+- `mu-scalar-full` remains exact and still communicates the 20 per-mu
+  \(h_\mu\) values/adjoints. The scalar basis is shared, and a scalar-major
+  transposed weight view is used for the full-mode gate-force reverse
+  contraction.
+- The first-layer edge derivative cache now reserves once and writes by offset
+  instead of appending large derivative slices with repeated vector `insert()`.
+- LAMMPS gate communication pack/unpack uses exact block copies for contiguous
+  gate-signal buffers; reverse unpack still accumulates per entry because LAMMPS
+  reverse communication returns contributions to owned atoms.
+
+Real B-system LAMMPS benchmark:
+
+```text
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_130313
+data: first structure from /work/phy-weigw/hyx/xxx-b/test/train.cfg
+LAMMPS cell: replicate 2 2 2, 384 B atoms
+queue/cores: 1t88c, 96 MPI ranks
+run: 5000 steps, tabstep 0.0005, trained models converted to *_lmp radial basis
+main binary: /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
+new-branch binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+```
+
+| Model/mode | Mean loop time | Relative to main |
+| --- | ---: | ---: |
+| main old gate | `4.339053 s` | `1.0000x` |
+| `mu-body-linear-combo` | `5.337373 s` | `1.2301x` |
+| `mu-scalar-full` | `6.796363 s` | `1.5663x` |
+
+The first body-channel communication build on the same benchmark gave
+`mu-body-linear-combo = 5.396523 s` (`1.2254x` against that run's main
+baseline) and `mu-scalar-full = 6.999947 s` (`1.5894x`). The final build keeps
+the full-mode scalar-major reverse optimization because it improves the full
+absolute loop time, while the combo absolute time remains in the same range.
+
+Numerical parity against the pre-body-channel-communication binary:
+
+```text
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_125051
+job: 3798420
+combo abs_dE=0.000000e+00, max_force_diff=8.600000e-19, rms_force_diff=2.533799e-20
+full  abs_dE=0.000000e+00, max_force_diff=3.903132e-15, rms_force_diff=6.774959e-16
+```
+
+Short 200-step profile on the same B 2x2x2 setup:
+
+```text
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_125051
+job: 3798421
+```
+
+| Mode | total | first | fcomm | main | rcomm | gate_force |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `mu-body-linear-combo` | `0.00116393` | `0.00028527` | `0.00034180` | `0.00043722` | `0.00046945` | `0.00016602` |
+| `mu-scalar-full` | `0.00269330` | `0.00032071` | `0.00110001` | `0.00042119` | `0.00117981` | `0.00021778` |
+
+The remaining `mu-scalar-full` gap is dominated by exact per-mu forward and
+reverse communication. With arbitrary independent \(w_{\mu q}\), communicating
+20 per-mu \(h_\mu\) values/adjoints is the compact exact representation; the
+alternative of communicating all scalar basis values would be much larger.
+Approximate low-rank compression is intentionally not used. The tested B-model
+full weight matrix is numerically close to low-rank, but not exactly low-rank:
+rank-1 SVD reconstruction leaves about `1e-4` max absolute residual and rank-7
+still leaves about `3e-10`. The body-mix matrix is also only numerically close
+to rank-1, with about `1.7e-10` rank-1 residual. These are approximation
+opportunities, not exact algorithmic reductions, and are therefore out of scope.
 
 ## Verification Checklist
 

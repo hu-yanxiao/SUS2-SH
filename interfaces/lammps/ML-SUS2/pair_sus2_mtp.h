@@ -168,6 +168,7 @@ class PairSUS2MTP : public Pair {
   std::vector<int> two_layer_gate_mu_body_order;
   std::vector<int> two_layer_gate_scalar_indices;
   std::vector<double> two_layer_gate_weights;
+  std::vector<double> two_layer_gate_full_weights_by_scalar;
   std::vector<double> two_layer_gate_body_mix_weights;
   std::vector<double> two_layer_gate_radial_coeffs;
   std::vector<double> two_layer_gate_additive_coeffs;
@@ -253,6 +254,7 @@ class PairSUS2MTP : public Pair {
   int two_layer_radial_cache_size = 0;
   int static_fixed_gate_cache_atom_size = 0;
   int static_fixed_gate_cache_alpha_size = 0;
+  int static_fixed_gate_cache_signal_size = 0;
   int static_fixed_gate_main_cache_atom_size = 0;
   int static_fixed_gate_main_cache_alpha_size = 0;
   double *moment_jacobian_x = nullptr;    // SoA layout for x-component
@@ -270,6 +272,10 @@ class PairSUS2MTP : public Pair {
 
   bool has_nonzero_two_layer_gate_weights() const;
   bool requires_two_layer_gate_sh() const;
+  int two_layer_gate_signal_stride() const;
+  double two_layer_gate_mu_signal(const double *, int) const;
+  void accumulate_two_layer_gate_signal_adjoints(double *, const double *) const;
+  void prepare_two_layer_gate_weight_layouts();
   int gate_body_order_for_mu(int) const;
   void prepare_two_layer_gate_additive_ratios();
   void compute_two_layer_gate_sh(int, int);
