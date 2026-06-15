@@ -66,6 +66,83 @@ worktree and GitHub branch as the source authority, then sync confirmed files to
 the server mirror before compiling. Documentation-only commits made after the
 binary code commit do not imply that the binary must be rebuilt.
 
+Current LAMMPS mu-body gate trial binary for exact gate performance work:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.fulldedupe_trial
+```
+
+Source relationship as of 2026-06-15 21:16 CST:
+
+```text
+local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.codex_tmp/sus2-sh-developer-tanh
+local branch: codex/mu-body-order-gate
+server SUS2-SH source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/interfaces/lammps/ML-SUS2
+server LAMMPS build src: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+LAMMPS trial binary SHA-256: e2f8f2d6e23eed2196f28c207fd2b2da9ef96022943853dcdcc7555dae42c270
+pair_sus2_mtp.cpp SHA-256: b5ed9f68d797655d581d1e969390e29ce1f925bef0f2bcdafac1f8a32db06872
+pair_sus2_mtp.h SHA-256: 8d8e1c3e68b545f3e211e6accdbc2aaf29356cbf66333afc3467675680809ebd
+```
+
+The interface source hashes above were checked to match between the local
+worktree, the server SUS2-SH source mirror, and the LAMMPS build source tree.
+
+Current exact LAMMPS optimization status for this trial:
+
+```text
+test directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial
+main LAMMPS baseline binary: /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
+40-rank parity job for trial SHA-256 e2f8...c270: 3800824, DONE
+40-rank speed job for trial SHA-256 e2f8...c270: 3800825, DONE
+96-rank parity job for trial SHA-256 e2f8...c270: 3800826, submitted
+96-rank speed job for trial SHA-256 e2f8...c270: 3800827, submitted
+```
+
+Verified login-node and 40-rank parity for the current trial:
+
+```text
+combo abs_dE=0, max_force_diff=0
+full login max_force_diff=6.634440e-15
+full 40-rank max_force_diff=6.689640e-15
+```
+
+Clean 40-rank LAMMPS speed comparison for trial SHA-256 `e2f8...c270`:
+
+```text
+summary: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/speed_fulldedupe_speed40_summary.txt
+host: b08u22a
+replicate: 2 2 2
+run steps: 5000
+atoms after replicate: 384
+```
+
+| Case | Mean Loop Time | Relative To Main | Relative To Accepted |
+| --- | ---: | ---: | ---: |
+| main old gate | `11.872133 s` | `1.0000x` | - |
+| accepted mu-body linear-combo | `17.081967 s` | `1.4388x` | `1.0000x` |
+| e2f8 mu-body linear-combo | `16.299800 s` | `1.3729x` | `0.9542x` |
+| accepted mu-scalar full | `18.118667 s` | `1.5262x` | `1.0000x` |
+| e2f8 mu-scalar full | `17.290133 s` | `1.4564x` | `0.9543x` |
+
+Short 40-rank profile for trial SHA-256 `e2f8...c270`:
+
+```text
+job id: 3800839
+summary: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/profile40_e2f8_summary.txt
+host: b08u03a
+profile steps: 20
+```
+
+| Mode | Mean Total | First Layer | Forward Comm | Main Layer | Reverse Comm | Gate Force |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| mu-body linear-combo | `0.003324401 s` | `0.001049122 s` | `0.000482758 s` | `0.001607793 s` | `0.000611042 s` | `0.000525844 s` |
+| mu-scalar full | `0.003486166 s` | `0.001122569 s` | `0.000550462 s` | `0.001393776 s` | `0.000564622 s` | `0.000735240 s` |
+
+The stage timings are reduced by MPI max per stage, so the component means do
+not need to sum exactly to the total. The actionable signal is that full mode
+still spends more in gate-force adjoint work, while communication is already a
+large fraction of the 40-rank short-run profile.
+
 Do not use this historical directory as the current main reference:
 
 ```text

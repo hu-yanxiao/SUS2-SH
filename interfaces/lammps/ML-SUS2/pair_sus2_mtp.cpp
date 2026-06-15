@@ -561,6 +561,8 @@ int PairSUS2MTP::two_layer_gate_signal_stride() const
   if (!two_layer_gate_enabled) return 0;
   if (two_layer_gate_body_linear_combo)
     return two_layer_gate_body_order_max - 1;
+  if (two_layer_gate_full_signal_count > 0)
+    return two_layer_gate_full_signal_count;
   return radial_func_count;
 }
 
@@ -570,7 +572,17 @@ double PairSUS2MTP::two_layer_gate_mu_signal(const double *gate_signal,
   if (gate_signal == nullptr) return 0.0;
   if (mu < 0 || mu >= radial_func_count)
     error->one(FLERR, "SUS2-SH two-layer gate mu index is out of range.");
-  if (!two_layer_gate_body_linear_combo) return gate_signal[mu];
+  if (!two_layer_gate_body_linear_combo) {
+    if (two_layer_gate_full_identity_signal) return gate_signal[mu];
+    if (static_cast<int>(two_layer_gate_full_signal_group_for_mu.size()) ==
+        radial_func_count) {
+      const int group = two_layer_gate_full_signal_group_for_mu[mu];
+      if (group < 0 || group >= two_layer_gate_signal_stride())
+        error->one(FLERR, "SUS2-SH full gate signal group is out of range.");
+      return gate_signal[group];
+    }
+    return gate_signal[mu];
+  }
 
   const int gate_body_stride = two_layer_gate_body_order_max - 1;
   if (gate_body_stride <= 0)
@@ -596,9 +608,33 @@ void PairSUS2MTP::accumulate_two_layer_gate_signal_adjoints(
 {
   if (gate_signal_adjoints == nullptr || gate_adjoint_by_mu == nullptr) return;
   if (!two_layer_gate_body_linear_combo) {
-    #pragma omp simd
-    for (int mu = 0; mu < radial_func_count; mu++)
-      gate_signal_adjoints[mu] += gate_adjoint_by_mu[mu];
+    if (two_layer_gate_full_identity_signal) {
+      #pragma omp simd
+      for (int mu = 0; mu < radial_func_count; mu++)
+        gate_signal_adjoints[mu] += gate_adjoint_by_mu[mu];
+    } else if (static_cast<int>(two_layer_gate_full_signal_group_for_mu.size()) ==
+        radial_func_count) {
+      const int group_count = two_layer_gate_signal_stride();
+      if (group_count == radial_func_count) {
+        #pragma omp simd
+        for (int mu = 0; mu < radial_func_count; mu++)
+          gate_signal_adjoints[mu] += gate_adjoint_by_mu[mu];
+      } else if (group_count == 1) {
+        double adjoint = 0.0;
+        #pragma omp simd reduction(+:adjoint)
+        for (int mu = 0; mu < radial_func_count; mu++)
+          adjoint += gate_adjoint_by_mu[mu];
+        gate_signal_adjoints[0] += adjoint;
+      } else {
+        for (int mu = 0; mu < radial_func_count; mu++)
+          gate_signal_adjoints[two_layer_gate_full_signal_group_for_mu[mu]] +=
+              gate_adjoint_by_mu[mu];
+      }
+    } else {
+      #pragma omp simd
+      for (int mu = 0; mu < radial_func_count; mu++)
+        gate_signal_adjoints[mu] += gate_adjoint_by_mu[mu];
+    }
     return;
   }
 
@@ -637,22 +673,143 @@ void PairSUS2MTP::accumulate_two_layer_gate_signal_adjoints(
 void PairSUS2MTP::prepare_two_layer_gate_weight_layouts()
 {
   two_layer_gate_full_weights_by_scalar.clear();
-  if (!two_layer_gate_enabled || !two_layer_gate_full_scalar_weights) return;
+  two_layer_gate_scalar_body_bucket.clear();
+  two_layer_gate_scalar_moment_indices.clear();
+  two_layer_gate_full_signal_group_for_mu.clear();
+  two_layer_gate_full_signal_count = 0;
+  two_layer_gate_full_identity_signal = false;
+  if (!two_layer_gate_enabled) return;
+  if (two_layer_gate_scalar_count > 0) {
+    if (static_cast<int>(two_layer_gate_scalar_indices.size()) !=
+        two_layer_gate_scalar_count ||
+        static_cast<int>(two_layer_gate_scalar_body_order.size()) !=
+            two_layer_gate_scalar_count)
+      error->all(FLERR, "SUS2-SH two-layer gate scalar metadata is inconsistent.");
+    two_layer_gate_scalar_body_bucket.resize(two_layer_gate_scalar_count);
+    two_layer_gate_scalar_moment_indices.resize(two_layer_gate_scalar_count);
+    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+      const int scalar_index = two_layer_gate_scalar_indices[q];
+      if (scalar_index < 0 || scalar_index >= alpha_scalar_count)
+        error->all(FLERR, "SUS2-SH two-layer gate scalar index is out of range.");
+      const int moment_index = alpha_moment_mapping[scalar_index];
+      if (moment_index < 0 || moment_index >= alpha_moment_count)
+        error->all(FLERR, "SUS2-SH two-layer gate moment index is out of range.");
+      const int body_bucket = two_layer_gate_scalar_body_order[q] - 2;
+      if (body_bucket < 0 ||
+          body_bucket >= std::max(0, two_layer_gate_body_order_max - 1))
+        error->all(FLERR, "SUS2-SH two-layer gate scalar body bucket is out of range.");
+      two_layer_gate_scalar_moment_indices[q] = moment_index;
+      two_layer_gate_scalar_body_bucket[q] = body_bucket;
+    }
+  }
+
+  if (!two_layer_gate_full_scalar_weights) return;
   if (radial_func_count <= 0 || two_layer_gate_scalar_count <= 0) return;
   if (static_cast<int>(two_layer_gate_weights.size()) !=
       radial_func_count * two_layer_gate_scalar_count)
     return;
 
-  two_layer_gate_full_weights_by_scalar.assign(
-      static_cast<size_t>(two_layer_gate_scalar_count) * radial_func_count, 0.0);
+  std::vector<int> representative_mu;
+  two_layer_gate_full_signal_group_for_mu.assign(radial_func_count, -1);
+  representative_mu.reserve(radial_func_count);
   for (int mu = 0; mu < radial_func_count; mu++) {
-    const size_t src_offset = static_cast<size_t>(mu) * two_layer_gate_scalar_count;
+    int group = -1;
+    const size_t row_offset =
+        static_cast<size_t>(mu) * two_layer_gate_scalar_count;
+    for (int g = 0; g < static_cast<int>(representative_mu.size()); g++) {
+      const size_t rep_offset =
+          static_cast<size_t>(representative_mu[g]) * two_layer_gate_scalar_count;
+      bool same = true;
+      for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+        if (two_layer_gate_weights[row_offset + q] !=
+            two_layer_gate_weights[rep_offset + q]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) {
+        group = g;
+        break;
+      }
+    }
+    if (group < 0) {
+      group = static_cast<int>(representative_mu.size());
+      representative_mu.push_back(mu);
+    }
+    two_layer_gate_full_signal_group_for_mu[mu] = group;
+  }
+  two_layer_gate_full_signal_count =
+      static_cast<int>(representative_mu.size());
+  two_layer_gate_full_identity_signal =
+      two_layer_gate_full_signal_count == radial_func_count;
+  if (two_layer_gate_full_identity_signal) {
+    for (int mu = 0; mu < radial_func_count; mu++) {
+      if (two_layer_gate_full_signal_group_for_mu[mu] != mu) {
+        two_layer_gate_full_identity_signal = false;
+        break;
+      }
+    }
+  }
+
+  two_layer_gate_full_weights_by_scalar.assign(
+      static_cast<size_t>(two_layer_gate_scalar_count) *
+          two_layer_gate_full_signal_count,
+      0.0);
+  for (int group = 0; group < two_layer_gate_full_signal_count; group++) {
+    const int mu = representative_mu[group];
+    const size_t src_offset =
+        static_cast<size_t>(mu) * two_layer_gate_scalar_count;
     for (int q = 0; q < two_layer_gate_scalar_count; q++) {
       two_layer_gate_full_weights_by_scalar[
-          static_cast<size_t>(q) * radial_func_count + mu] =
+          static_cast<size_t>(q) * two_layer_gate_full_signal_count + group] =
           two_layer_gate_weights[src_offset + q];
     }
   }
+}
+
+void PairSUS2MTP::prepare_two_layer_gate_product_layout()
+{
+  two_layer_gate_product_limit = alpha_index_times_count;
+  two_layer_gate_moment_cache_width = alpha_moment_count;
+  if (!two_layer_gate_enabled || two_layer_gate_scalar_count <= 0 ||
+      alpha_moment_count <= 0)
+    return;
+  if (static_cast<int>(two_layer_gate_scalar_moment_indices.size()) !=
+      two_layer_gate_scalar_count)
+    return;
+  if (two_layer_gate_scalar_count >= alpha_scalar_count) return;
+
+  std::vector<unsigned char> needed(alpha_moment_count, 0);
+  for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+    const int moment_index = two_layer_gate_scalar_moment_indices[q];
+    if (moment_index < 0 || moment_index >= alpha_moment_count)
+      error->all(FLERR, "SUS2-SH two-layer gate moment index is out of range.");
+    needed[moment_index] = 1;
+  }
+
+  int product_limit = 0;
+  for (int k = alpha_index_times_count - 1; k >= 0; k--) {
+    const int out = alpha_times_out[k];
+    if (!needed[out]) continue;
+    needed[alpha_times_a0[k]] = 1;
+    needed[alpha_times_a1[k]] = 1;
+    if (product_limit == 0) product_limit = k + 1;
+  }
+
+  int cache_width = alpha_index_basic_count;
+  for (int q = 0; q < two_layer_gate_scalar_count; q++)
+    cache_width =
+        std::max(cache_width, two_layer_gate_scalar_moment_indices[q] + 1);
+  for (int k = 0; k < product_limit; k++) {
+    cache_width = std::max(cache_width, alpha_times_a0[k] + 1);
+    cache_width = std::max(cache_width, alpha_times_a1[k] + 1);
+    cache_width = std::max(cache_width, alpha_times_out[k] + 1);
+  }
+  if (cache_width < 0 || cache_width > alpha_moment_count)
+    error->all(FLERR, "SUS2-SH two-layer gate product cache width is invalid.");
+
+  two_layer_gate_product_limit = product_limit;
+  two_layer_gate_moment_cache_width = cache_width;
 }
 
 int PairSUS2MTP::gate_body_order_for_mu(int mu) const
@@ -1043,16 +1200,13 @@ void PairSUS2MTP::ensure_two_layer_gate_mu_cache_for_atom(int jtype,
       !two_layer_gate_additive_ratio_valid[jtype])
     error->one(FLERR, "SUS2-SH static fixed gate main cache requires additive gate ratios.");
 
-  const size_t ratio_offset = static_cast<size_t>(jtype) * radial_func_count;
-  const double *__restrict ratios =
-      two_layer_gate_additive_ratios.data() + ratio_offset;
+  const double additive_coeff = two_layer_gate_additive_coeffs[jtype];
   double *__restrict mult = two_layer_gate_multiplier_mu_cache +
       static_cast<size_t>(atom_index) * radial_func_count;
   double *__restrict deriv = two_layer_gate_deriv_mu_cache +
       static_cast<size_t>(atom_index) * radial_func_count;
   #pragma omp simd
   for (int mu = 0; mu < radial_func_count; mu++) {
-    const double additive_coeff = ratios[mu];
     const double gate_signal = two_layer_gate_mu_signal(gate_signal_by_mu, mu);
     const double arg = additive_coeff * gate_signal;
     const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
@@ -1299,9 +1453,7 @@ bool PairSUS2MTP::calc_gate_additive_table_radial_values(int jtype,
   const double *__restrict base_next_row = radial_list[table_index][r_next];
   const double *__restrict base_der_row = radial_der_list[table_index][r_list];
   const double *__restrict base_der_next_row = radial_der_list[table_index][r_next];
-  const size_t ratio_offset = static_cast<size_t>(jtype) * radial_func_count;
-  const double *__restrict ratios =
-      two_layer_gate_additive_ratios.data() + ratio_offset;
+  const double additive_coeff = two_layer_gate_additive_coeffs[jtype];
 
   if (gate_multiplier_cache == nullptr) {
     #pragma omp simd
@@ -1310,7 +1462,6 @@ bool PairSUS2MTP::calc_gate_additive_table_radial_values(int jtype,
           base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
       const double base_der =
           base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
-      const double additive_coeff = ratios[mu];
       const double gate_signal = two_layer_gate_mu_signal(gate_signal_by_mu, mu);
       const double arg = additive_coeff * gate_signal;
       const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
@@ -1330,7 +1481,6 @@ bool PairSUS2MTP::calc_gate_additive_table_radial_values(int jtype,
           base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
       const double base_der =
           base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
-      const double additive_coeff = ratios[mu];
       const double gate_signal = two_layer_gate_mu_signal(gate_signal_by_mu, mu);
       const double arg = additive_coeff * gate_signal;
       const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
@@ -1417,7 +1567,7 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
           double *base_next_row = radial_list[table_index][r_next];
           double *base_der_row = radial_der_list[table_index][r_list];
           double *base_der_next_row = radial_der_list[table_index][r_next];
-          const size_t ratio_offset = static_cast<size_t>(jtype) * radial_func_count;
+          const double additive_coeff = two_layer_gate_additive_coeffs[jtype];
           for (int mu = 0; mu < radial_func_count; mu++) {
             const double base_val =
                 base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
@@ -1426,7 +1576,6 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
             double gate_multiplier;
             double gate_deriv;
             if (gate_multiplier_cache == nullptr) {
-              const double additive_coeff = two_layer_gate_additive_ratios[ratio_offset + mu];
               const double gate_signal = two_layer_gate_mu_signal(gate_signal_by_mu, mu);
               const double arg = additive_coeff * gate_signal;
               const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
@@ -1434,7 +1583,6 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
               gate_multiplier = 1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
               gate_deriv = two_layer_gate_tanh_amplitude * additive_coeff * sech2;
             } else if (fill_gate_mu_cache) {
-              const double additive_coeff = two_layer_gate_additive_ratios[ratio_offset + mu];
               const double gate_signal = two_layer_gate_mu_signal(gate_signal_by_mu, mu);
               const double arg = additive_coeff * gate_signal;
               const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
@@ -1520,6 +1668,8 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
   if (use_gate_additive &&
       static_cast<int>(two_layer_gate_additive_coeffs.size()) != species_count)
     error->one(FLERR, "SUS2-SH two-layer gate additive coefficient storage is inconsistent.");
+  const double gate_additive_coeff =
+      use_gate_additive ? two_layer_gate_additive_coeffs[jtype] : 0.0;
   for (int mu = 0; mu < radial_func_count; mu++) {
     const int k_ = mu_to_K[mu];
     const int radial_cache_index = per_mu_sigma ? mu : k_;
@@ -1533,7 +1683,7 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
       double gate_multiplier;
       double gate_deriv;
       if (gate_multiplier_cache == nullptr) {
-        const double additive_coeff = two_layer_gate_additive_coeff(jtype, mu);
+        const double additive_coeff = gate_additive_coeff;
         const double gate_signal = two_layer_gate_mu_signal(gate_signal_by_mu, mu);
         const double arg = additive_coeff * gate_signal;
         const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
@@ -1541,7 +1691,7 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
         gate_multiplier = 1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
         gate_deriv = two_layer_gate_tanh_amplitude * additive_coeff * sech2;
       } else if (fill_gate_mu_cache) {
-        const double additive_coeff = two_layer_gate_additive_coeff(jtype, mu);
+        const double additive_coeff = gate_additive_coeff;
         const double gate_signal = two_layer_gate_mu_signal(gate_signal_by_mu, mu);
         const double arg = additive_coeff * gate_signal;
         const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
@@ -1698,6 +1848,11 @@ int PairSUS2MTP::pack_forward_comm(int n, int *list, double *buf, int, int *)
 {
   int m = 0;
   const int gate_signal_stride = two_layer_gate_signal_stride();
+  if (gate_signal_stride == 1) {
+    for (int i = 0; i < n; i++)
+      buf[i] = two_layer_gate_values[list[i]];
+    return n;
+  }
   if (gate_signal_stride == 4) {
     for (int i = 0; i < n; i++) {
       const double *src =
@@ -1715,8 +1870,26 @@ int PairSUS2MTP::pack_forward_comm(int n, int *list, double *buf, int, int *)
       const double *__restrict src =
           two_layer_gate_values + static_cast<size_t>(list[i]) * 20;
       double *__restrict dst = buf + m;
-      #pragma omp simd
-      for (int k = 0; k < 20; k++) dst[k] = src[k];
+      dst[0] = src[0];
+      dst[1] = src[1];
+      dst[2] = src[2];
+      dst[3] = src[3];
+      dst[4] = src[4];
+      dst[5] = src[5];
+      dst[6] = src[6];
+      dst[7] = src[7];
+      dst[8] = src[8];
+      dst[9] = src[9];
+      dst[10] = src[10];
+      dst[11] = src[11];
+      dst[12] = src[12];
+      dst[13] = src[13];
+      dst[14] = src[14];
+      dst[15] = src[15];
+      dst[16] = src[16];
+      dst[17] = src[17];
+      dst[18] = src[18];
+      dst[19] = src[19];
       m += 20;
     }
     return m;
@@ -1734,6 +1907,11 @@ int PairSUS2MTP::pack_forward_comm(int n, int *list, double *buf, int, int *)
 void PairSUS2MTP::unpack_forward_comm(int n, int first, double *buf)
 {
   const int gate_signal_stride = two_layer_gate_signal_stride();
+  if (gate_signal_stride == 1) {
+    std::memcpy(two_layer_gate_values + first, buf,
+                static_cast<size_t>(n) * sizeof(double));
+    return;
+  }
   const size_t count = static_cast<size_t>(n) * gate_signal_stride;
   double *dst =
       two_layer_gate_values + static_cast<size_t>(first) * gate_signal_stride;
@@ -1743,6 +1921,11 @@ void PairSUS2MTP::unpack_forward_comm(int n, int first, double *buf)
 int PairSUS2MTP::pack_reverse_comm(int n, int first, double *buf)
 {
   const int gate_signal_stride = two_layer_gate_signal_stride();
+  if (gate_signal_stride == 1) {
+    std::memcpy(buf, two_layer_gate_adjoints + first,
+                static_cast<size_t>(n) * sizeof(double));
+    return n;
+  }
   const size_t count = static_cast<size_t>(n) * gate_signal_stride;
   const double *src =
       two_layer_gate_adjoints + static_cast<size_t>(first) * gate_signal_stride;
@@ -1754,6 +1937,11 @@ void PairSUS2MTP::unpack_reverse_comm(int n, int *list, double *buf)
 {
   int m = 0;
   const int gate_signal_stride = two_layer_gate_signal_stride();
+  if (gate_signal_stride == 1) {
+    for (int i = 0; i < n; i++)
+      two_layer_gate_adjoints[list[i]] += buf[i];
+    return;
+  }
   if (gate_signal_stride == 4) {
     for (int i = 0; i < n; i++) {
       double *dst =
@@ -1771,8 +1959,26 @@ void PairSUS2MTP::unpack_reverse_comm(int n, int *list, double *buf)
       double *__restrict dst =
           two_layer_gate_adjoints + static_cast<size_t>(list[i]) * 20;
       const double *__restrict src = buf + m;
-      #pragma omp simd
-      for (int k = 0; k < 20; k++) dst[k] += src[k];
+      dst[0] += src[0];
+      dst[1] += src[1];
+      dst[2] += src[2];
+      dst[3] += src[3];
+      dst[4] += src[4];
+      dst[5] += src[5];
+      dst[6] += src[6];
+      dst[7] += src[7];
+      dst[8] += src[8];
+      dst[9] += src[9];
+      dst[10] += src[10];
+      dst[11] += src[11];
+      dst[12] += src[12];
+      dst[13] += src[13];
+      dst[14] += src[14];
+      dst[15] += src[15];
+      dst[16] += src[16];
+      dst[17] += src[17];
+      dst[18] += src[18];
+      dst[19] += src[19];
       m += 20;
     }
     return;
@@ -1804,12 +2010,18 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const int expected_gate_body_mix_count = two_layer_gate_body_linear_combo
       ? radial_func_count * (two_layer_gate_body_order_max - 1)
       : 0;
+  const int gate_signal_stride = two_layer_gate_signal_stride();
   if (two_layer_gate_scalar_count != static_cast<int>(two_layer_gate_scalar_indices.size()) ||
       two_layer_gate_weight_count != expected_gate_weight_count ||
       two_layer_gate_weight_count != static_cast<int>(two_layer_gate_weights.size()) ||
       two_layer_gate_body_mix_weight_count != expected_gate_body_mix_count ||
       two_layer_gate_body_mix_weight_count !=
-          static_cast<int>(two_layer_gate_body_mix_weights.size()))
+          static_cast<int>(two_layer_gate_body_mix_weights.size()) ||
+      two_layer_gate_scalar_count !=
+          static_cast<int>(two_layer_gate_scalar_moment_indices.size()) ||
+      two_layer_gate_scalar_count !=
+          static_cast<int>(two_layer_gate_scalar_body_bucket.size()) ||
+      gate_signal_stride <= 0)
     error->all(FLERR, "SUS2-SH two-layer gate metadata has inconsistent sizes.");
 
   double **x = atom->x;
@@ -1820,37 +2032,27 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   int *numneigh = list->numneigh;
   int **firstneigh = list->firstneigh;
 
-  int gate_product_limit = alpha_index_times_count;
-  if (two_layer_gate_scalar_count > 0 &&
-      two_layer_gate_scalar_count < alpha_scalar_count) {
-    std::vector<unsigned char> needed(alpha_moment_count, 0);
-    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
-      const int scalar_index = two_layer_gate_scalar_indices[q];
-      if (scalar_index < 0 || scalar_index >= alpha_scalar_count)
-        error->all(FLERR, "SUS2-SH two-layer gate scalar index is out of range.");
-      needed[alpha_moment_mapping[scalar_index]] = 1;
-    }
-    gate_product_limit = 0;
-    for (int k = alpha_index_times_count - 1; k >= 0; k--) {
-      const int out = alpha_times_out[k];
-      if (!needed[out]) continue;
-      needed[alpha_times_a0[k]] = 1;
-      needed[alpha_times_a1[k]] = 1;
-      if (gate_product_limit == 0) gate_product_limit = k + 1;
-    }
-  }
+  const int gate_product_limit = two_layer_gate_product_limit;
+  const int gate_moment_cache_width = two_layer_gate_moment_cache_width;
+  if (gate_product_limit < 0 || gate_product_limit > alpha_index_times_count ||
+      gate_moment_cache_width <= 0 ||
+      gate_moment_cache_width > alpha_moment_count)
+    error->all(FLERR, "SUS2-SH two-layer gate product layout is inconsistent.");
 
   ensure_two_layer_atom_buffers();
   const int nall = atom->nlocal + atom->nghost;
   const int gate_scalar_stride = two_layer_gate_scalar_count;
   const int gate_body_stride = two_layer_gate_body_order_max - 1;
-  const int gate_signal_stride = two_layer_gate_signal_stride();
   const bool direct_body_combo_gate_adjoints =
       two_layer_gate_body_linear_combo && gate_body_stride == 4 &&
       !two_layer_gate_center_enabled && sh_basic_mu_grouped;
+  const bool direct_full_gate_adjoints =
+      !two_layer_gate_body_linear_combo &&
+      !two_layer_gate_center_enabled && sh_basic_mu_grouped &&
+      gate_signal_stride == radial_func_count;
   std::vector<double> gate_body_values(gate_body_stride, 0.0);
   two_layer_gate_moment_cache.resize(
-      static_cast<size_t>(inum) * alpha_moment_count);
+      static_cast<size_t>(inum) * gate_moment_cache_width);
   if (static_cast<int>(two_layer_gate_body_order_scratch.size()) <
       gate_scalar_stride)
     two_layer_gate_body_order_scratch.resize(gate_scalar_stride);
@@ -1995,39 +2197,88 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
           moment_tensor_vals[alpha_times_a1[k]];
     }
     std::copy(moment_tensor_vals,
-              moment_tensor_vals + alpha_moment_count,
+              moment_tensor_vals + gate_moment_cache_width,
               two_layer_gate_moment_cache.data()
-                  + static_cast<size_t>(ii) * alpha_moment_count);
-    std::fill(gate_body_values.begin(), gate_body_values.end(), 0.0);
-    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
-      const int scalar_index = two_layer_gate_scalar_indices[q];
-      if (scalar_index < 0 || scalar_index >= alpha_scalar_count)
-        error->all(FLERR, "SUS2-SH two-layer gate scalar index is out of range.");
-      two_layer_gate_body_order_scratch[q] =
-          moment_tensor_vals[alpha_moment_mapping[scalar_index]];
-      if (two_layer_gate_body_linear_combo) {
-        const int body_order = two_layer_gate_scalar_body_order[q];
-        gate_body_values[body_order - 2] +=
-            two_layer_gate_weights[q] * two_layer_gate_body_order_scratch[q];
-      }
-    }
+                  + static_cast<size_t>(ii) * gate_moment_cache_width);
     double *gate_values_i =
         two_layer_gate_values + static_cast<size_t>(i) * gate_signal_stride;
     if (two_layer_gate_body_linear_combo) {
+      std::fill(gate_body_values.begin(), gate_body_values.end(), 0.0);
+      for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+        const double scalar_value =
+            moment_tensor_vals[two_layer_gate_scalar_moment_indices[q]];
+        gate_body_values[two_layer_gate_scalar_body_bucket[q]] +=
+            two_layer_gate_weights[q] * scalar_value;
+      }
       std::copy(gate_body_values.begin(), gate_body_values.end(), gate_values_i);
     } else {
       if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
-          two_layer_gate_scalar_count * radial_func_count)
+          two_layer_gate_scalar_count * gate_signal_stride)
         error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
-      std::fill(gate_values_i, gate_values_i + radial_func_count, 0.0);
-      for (int q = 0; q < two_layer_gate_scalar_count; q++) {
-        const double scalar_value = two_layer_gate_body_order_scratch[q];
-        const double *__restrict weights_by_mu =
-            two_layer_gate_full_weights_by_scalar.data() +
-            static_cast<size_t>(q) * radial_func_count;
-        #pragma omp simd
-        for (int mu = 0; mu < radial_func_count; mu++)
-          gate_values_i[mu] += scalar_value * weights_by_mu[mu];
+      if (gate_signal_stride == 20) {
+        double g0 = 0.0, g1 = 0.0, g2 = 0.0, g3 = 0.0, g4 = 0.0;
+        double g5 = 0.0, g6 = 0.0, g7 = 0.0, g8 = 0.0, g9 = 0.0;
+        double g10 = 0.0, g11 = 0.0, g12 = 0.0, g13 = 0.0, g14 = 0.0;
+        double g15 = 0.0, g16 = 0.0, g17 = 0.0, g18 = 0.0, g19 = 0.0;
+        for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+          const double scalar_value =
+              moment_tensor_vals[two_layer_gate_scalar_moment_indices[q]];
+          const double *__restrict weights_by_mu =
+              two_layer_gate_full_weights_by_scalar.data() +
+              static_cast<size_t>(q) * 20;
+          g0 += scalar_value * weights_by_mu[0];
+          g1 += scalar_value * weights_by_mu[1];
+          g2 += scalar_value * weights_by_mu[2];
+          g3 += scalar_value * weights_by_mu[3];
+          g4 += scalar_value * weights_by_mu[4];
+          g5 += scalar_value * weights_by_mu[5];
+          g6 += scalar_value * weights_by_mu[6];
+          g7 += scalar_value * weights_by_mu[7];
+          g8 += scalar_value * weights_by_mu[8];
+          g9 += scalar_value * weights_by_mu[9];
+          g10 += scalar_value * weights_by_mu[10];
+          g11 += scalar_value * weights_by_mu[11];
+          g12 += scalar_value * weights_by_mu[12];
+          g13 += scalar_value * weights_by_mu[13];
+          g14 += scalar_value * weights_by_mu[14];
+          g15 += scalar_value * weights_by_mu[15];
+          g16 += scalar_value * weights_by_mu[16];
+          g17 += scalar_value * weights_by_mu[17];
+          g18 += scalar_value * weights_by_mu[18];
+          g19 += scalar_value * weights_by_mu[19];
+        }
+        gate_values_i[0] = g0;
+        gate_values_i[1] = g1;
+        gate_values_i[2] = g2;
+        gate_values_i[3] = g3;
+        gate_values_i[4] = g4;
+        gate_values_i[5] = g5;
+        gate_values_i[6] = g6;
+        gate_values_i[7] = g7;
+        gate_values_i[8] = g8;
+        gate_values_i[9] = g9;
+        gate_values_i[10] = g10;
+        gate_values_i[11] = g11;
+        gate_values_i[12] = g12;
+        gate_values_i[13] = g13;
+        gate_values_i[14] = g14;
+        gate_values_i[15] = g15;
+        gate_values_i[16] = g16;
+        gate_values_i[17] = g17;
+        gate_values_i[18] = g18;
+        gate_values_i[19] = g19;
+      } else {
+        std::fill(gate_values_i, gate_values_i + gate_signal_stride, 0.0);
+        for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+          const double scalar_value =
+              moment_tensor_vals[two_layer_gate_scalar_moment_indices[q]];
+          const double *__restrict weights_by_mu =
+              two_layer_gate_full_weights_by_scalar.data() +
+              static_cast<size_t>(q) * gate_signal_stride;
+          #pragma omp simd
+          for (int g = 0; g < gate_signal_stride; g++)
+            gate_values_i[g] += scalar_value * weights_by_mu[g];
+        }
       }
     }
     if (use_static_fixed_gate_cache &&
@@ -2161,11 +2412,19 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
           is_static_fixed_type(two_layer_gate_edge_types_raw[active_idx]))
         continue;
       double fx = 0.0, fy = 0.0, fz = 0.0;
+      double *gate_adjoints_by_mu =
+          two_layer_gate_adjoints + static_cast<size_t>(j) * gate_signal_stride;
+      double *center_gate_adjoints_by_mu =
+          two_layer_gate_center_enabled
+          ? two_layer_gate_adjoints + static_cast<size_t>(i) * gate_signal_stride
+          : nullptr;
+      const bool direct_gate_adjoint_accumulation =
+          direct_body_combo_gate_adjoints || direct_full_gate_adjoints;
       double *__restrict gate_adjoint_by_mu =
-          direct_body_combo_gate_adjoints ? nullptr : two_layer_gate_adjoint_scratch;
+          direct_gate_adjoint_accumulation ? nullptr : two_layer_gate_adjoint_scratch;
       double *__restrict center_gate_adjoint_by_mu =
           two_layer_gate_center_adjoint_scratch;
-      if (!direct_body_combo_gate_adjoints)
+      if (!direct_gate_adjoint_accumulation)
         std::fill(gate_adjoint_by_mu,
                   gate_adjoint_by_mu + radial_func_count, 0.0);
       if (two_layer_gate_center_enabled)
@@ -2210,6 +2469,8 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
               gate_adj2 += gate_adjoint_mu * weights[2];
               gate_adj3 += gate_adjoint_mu * weights[3];
             }
+          } else if (direct_full_gate_adjoints) {
+            gate_adjoints_by_mu[mu] += gate_adjoint_mu;
           } else {
             gate_adjoint_by_mu[mu] += gate_adjoint_mu;
           }
@@ -2239,18 +2500,12 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
             center_gate_adjoint_by_mu[mu] += pref * center_raw[k];
         }
       }
-      double *gate_adjoints_by_mu =
-          two_layer_gate_adjoints + static_cast<size_t>(j) * gate_signal_stride;
-      double *center_gate_adjoints_by_mu =
-          two_layer_gate_center_enabled
-          ? two_layer_gate_adjoints + static_cast<size_t>(i) * gate_signal_stride
-          : nullptr;
       if (direct_body_combo_gate_adjoints) {
         gate_adjoints_by_mu[0] += gate_adj0;
         gate_adjoints_by_mu[1] += gate_adj1;
         gate_adjoints_by_mu[2] += gate_adj2;
         gate_adjoints_by_mu[3] += gate_adj3;
-      } else {
+      } else if (!direct_full_gate_adjoints) {
         accumulate_two_layer_gate_signal_adjoints(gate_adjoints_by_mu,
                                                   gate_adjoint_by_mu);
       }
@@ -2313,17 +2568,16 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       }
       if (!has_gate_adjoint_center) continue;
       for (int q = 0; q < two_layer_gate_scalar_count; q++) {
-        const int body_order = two_layer_gate_scalar_body_order[q];
         two_layer_gate_body_order_scratch[q] =
-            gate_adjoint_center_by_mu[body_order - 2] *
+            gate_adjoint_center_by_mu[two_layer_gate_scalar_body_bucket[q]] *
             two_layer_gate_weights[q];
       }
     } else {
       if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
-          two_layer_gate_scalar_count * radial_func_count)
+          two_layer_gate_scalar_count * gate_signal_stride)
         error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
-      for (int mu = 0; mu < radial_func_count; mu++) {
-        if (gate_adjoint_center_by_mu[mu] != 0.0) {
+      for (int g = 0; g < gate_signal_stride; g++) {
+        if (gate_adjoint_center_by_mu[g] != 0.0) {
           has_gate_adjoint_center = true;
           break;
         }
@@ -2332,31 +2586,62 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       for (int q = 0; q < two_layer_gate_scalar_count; q++) {
         const double *__restrict weights_by_mu =
             two_layer_gate_full_weights_by_scalar.data() +
-            static_cast<size_t>(q) * radial_func_count;
+            static_cast<size_t>(q) * gate_signal_stride;
         double adjoint = 0.0;
-        #pragma omp simd reduction(+:adjoint)
-        for (int mu = 0; mu < radial_func_count; mu++)
-          adjoint += gate_adjoint_center_by_mu[mu] * weights_by_mu[mu];
+        if (gate_signal_stride == 20) {
+          adjoint =
+              gate_adjoint_center_by_mu[0] * weights_by_mu[0] +
+              gate_adjoint_center_by_mu[1] * weights_by_mu[1] +
+              gate_adjoint_center_by_mu[2] * weights_by_mu[2] +
+              gate_adjoint_center_by_mu[3] * weights_by_mu[3] +
+              gate_adjoint_center_by_mu[4] * weights_by_mu[4] +
+              gate_adjoint_center_by_mu[5] * weights_by_mu[5] +
+              gate_adjoint_center_by_mu[6] * weights_by_mu[6] +
+              gate_adjoint_center_by_mu[7] * weights_by_mu[7] +
+              gate_adjoint_center_by_mu[8] * weights_by_mu[8] +
+              gate_adjoint_center_by_mu[9] * weights_by_mu[9] +
+              gate_adjoint_center_by_mu[10] * weights_by_mu[10] +
+              gate_adjoint_center_by_mu[11] * weights_by_mu[11] +
+              gate_adjoint_center_by_mu[12] * weights_by_mu[12] +
+              gate_adjoint_center_by_mu[13] * weights_by_mu[13] +
+              gate_adjoint_center_by_mu[14] * weights_by_mu[14] +
+              gate_adjoint_center_by_mu[15] * weights_by_mu[15] +
+              gate_adjoint_center_by_mu[16] * weights_by_mu[16] +
+              gate_adjoint_center_by_mu[17] * weights_by_mu[17] +
+              gate_adjoint_center_by_mu[18] * weights_by_mu[18] +
+              gate_adjoint_center_by_mu[19] * weights_by_mu[19];
+        } else {
+          #pragma omp simd reduction(+:adjoint)
+          for (int g = 0; g < gate_signal_stride; g++)
+            adjoint += gate_adjoint_center_by_mu[g] * weights_by_mu[g];
+        }
         two_layer_gate_body_order_scratch[q] = adjoint;
       }
     }
     const size_t active_begin = two_layer_gate_edge_offsets[ii];
     const size_t active_end = two_layer_gate_edge_offsets[ii + 1];
     std::copy(two_layer_gate_moment_cache.data()
-                  + static_cast<size_t>(ii) * alpha_moment_count,
+                  + static_cast<size_t>(ii) * gate_moment_cache_width,
               two_layer_gate_moment_cache.data()
-                  + static_cast<size_t>(ii + 1) * alpha_moment_count,
+                  + static_cast<size_t>(ii + 1) * gate_moment_cache_width,
               moment_tensor_vals);
     std::fill(nbh_energy_ders_wrt_moments,
               nbh_energy_ders_wrt_moments + alpha_moment_count, 0.0);
     for (int q = 0; q < two_layer_gate_scalar_count; q++) {
       const double adjoint = two_layer_gate_body_order_scratch[q];
       if (adjoint == 0.0) continue;
-      const int scalar_index = two_layer_gate_scalar_indices[q];
-      nbh_energy_ders_wrt_moments[alpha_moment_mapping[scalar_index]] +=
+      nbh_energy_ders_wrt_moments[two_layer_gate_scalar_moment_indices[q]] +=
           adjoint;
     }
-    backprop_sh_products();
+    for (int k = gate_product_limit - 1; k >= 0; k--) {
+      const int a0 = alpha_times_a0[k];
+      const int a1 = alpha_times_a1[k];
+      const int out = alpha_times_out[k];
+      const double coeff = alpha_times_coeff[k];
+      const double adj = nbh_energy_ders_wrt_moments[out];
+      nbh_energy_ders_wrt_moments[a1] += adj * coeff * moment_tensor_vals[a0];
+      nbh_energy_ders_wrt_moments[a0] += adj * coeff * moment_tensor_vals[a1];
+    }
 
     for (size_t active_idx = active_begin; active_idx < active_end; active_idx++) {
       const int j = two_layer_gate_edge_neighbors_raw[active_idx];
@@ -3249,10 +3534,17 @@ access to the buffer size that is not provided in PFR.
   two_layer_gate_scalar_count = 0;
   two_layer_gate_weight_count = 0;
   two_layer_gate_body_mix_weight_count = 0;
+  two_layer_gate_product_limit = 0;
+  two_layer_gate_moment_cache_width = 0;
   two_layer_gate_scalar_body_order.clear();
+  two_layer_gate_scalar_body_bucket.clear();
+  two_layer_gate_scalar_moment_indices.clear();
   two_layer_gate_mu_body_order.clear();
   two_layer_gate_scalar_indices.clear();
   two_layer_gate_weights.clear();
+  two_layer_gate_full_signal_count = 0;
+  two_layer_gate_full_identity_signal = false;
+  two_layer_gate_full_signal_group_for_mu.clear();
   two_layer_gate_full_weights_by_scalar.clear();
   two_layer_gate_body_mix_weights.clear();
   two_layer_gate_radial_coeffs.clear();
@@ -4585,7 +4877,6 @@ access to the buffer size that is not provided in PFR.
         error->all(FLERR, "SUS2-SH mu-body-order gate has an invalid mu body order.");
       two_layer_gate_mu_body_order[mu] = body_order;
     }
-    prepare_two_layer_gate_weight_layouts();
   }
   if (two_layer_gate_radial_count > 0)
     MPI_Bcast(two_layer_gate_radial_coeffs.data(), two_layer_gate_radial_count,
@@ -4758,6 +5049,8 @@ access to the buffer size that is not provided in PFR.
     MPI_Bcast(alpha_times_coeff, alpha_index_times_count, MPI_DOUBLE, 0, world);
   }
   MPI_Bcast(alpha_moment_mapping, alpha_scalar_count, MPI_INT, 0, world);
+  if (two_layer_gate_enabled)
+    prepare_two_layer_gate_weight_layouts();
   for (int i = 0; i < alpha_index_basic_count; i++) {
     alpha_basic_mu[i] = alpha_index_basic[i][0];
     alpha_basic_a0[i] = alpha_index_basic[i][1];
@@ -4794,6 +5087,8 @@ access to the buffer size that is not provided in PFR.
     if (!is_sh_model) alpha_times_coeff[i] = static_cast<double>(alpha_times_multiplier[i]);
     alpha_times_out[i] = alpha_index_times[i][3];
   }
+  if (two_layer_gate_enabled)
+    prepare_two_layer_gate_product_layout();
 
   //Working buffers
   //Preassign constant values for dist powers and coord powers. Other buffers can be uninited.
