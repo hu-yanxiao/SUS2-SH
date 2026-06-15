@@ -500,7 +500,7 @@ Accepted independent CPU LAMMPS binary:
 ```text
 binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
 binary SHA-256: 9e89565433abd450bf49ecb85e702b84f6bf290614c6b499d3ec353e9cae83d9
-source code commit: 560558dee1f1f2bb38b7b815039256d669d1984e
+source code commit: f8a098f643eecfdfe9b9b2e0fc144d8046518083
 previous backup: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.pre_nozero_values_20260615_1515
 trial binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.nozero_values_trial
 source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
@@ -574,7 +574,7 @@ Accepted independent CPU LAMMPS binary:
 ```text
 binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
 binary SHA-256: 89e29919ddf899990f5f8e4e1e0a55be5ce0a31bc6bc04c0acb038bc795714ad
-source code commit: f479b13f1281cc5f5a2f00d360b96a7ef13356ba
+source code commit: 560558dee1f1f2bb38b7b815039256d669d1984e
 previous backup: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.pre_raw_edge_comm_direct_pack_20260615_1900
 trial binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.raw_edge_comm_direct_pack_trial
 source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
