@@ -479,6 +479,83 @@ still leaves about `3e-10`. The body-mix matrix is also only numerically close
 to rank-1, with about `1.7e-10` rank-1 residual. These are approximation
 opportunities, not exact algorithmic reductions, and are therefore out of scope.
 
+### No-Zero Gate-Value LAMMPS Update 2026-06-15
+
+The current accepted CPU LAMMPS branch binary adds two exact dataflow
+optimizations on top of the body-channel communication build:
+
+- The first-layer gate moment cache is reused as a member buffer instead of
+  reallocated every step, and the scalar scratch buffer is resized once.
+- `mu-scalar-full` accumulates the full gate projection through a scalar-major
+  transposed weight view so each scalar value is loaded once and the 20
+  \(\mu\)-weights are contiguous.
+- `two_layer_gate_values` is no longer pre-zeroed over all local and ghost atoms
+  before the gate forward pass. Each local atom's gate signal is fully written by
+  the first-layer pass, static fixed atoms are copied from their cache, and ghost
+  signals are fully written by LAMMPS forward communication. The adjoint buffer
+  is still zeroed because reverse communication accumulates into it.
+
+Accepted independent CPU LAMMPS binary:
+
+```text
+binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+binary SHA-256: 9e89565433abd450bf49ecb85e702b84f6bf290614c6b499d3ec353e9cae83d9
+previous backup: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.pre_nozero_values_20260615_1515
+trial binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.nozero_values_trial
+source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+SUS2-SH server mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
+```
+
+Numerical parity against the previous canonical branch binary:
+
+```text
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_gate_nozero_values_20260615_1515
+job: 3798701
+combo abs_dE=0.000000e+00, max_force_diff=0.000000e+00, rms_force_diff=0.000000e+00
+full  abs_dE=0.000000e+00, max_force_diff=5.922340e-15, rms_force_diff=1.163142e-15
+```
+
+Real B-system LAMMPS speed comparison in one matched 96-rank job:
+
+```text
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_gate_nozero_values_20260615_1515
+job: 3798702
+data: first structure from /work/phy-weigw/hyx/xxx-b/test/train.cfg
+LAMMPS cell: replicate 2 2 2, 384 B atoms
+run: 5000 steps, tabstep 0.0005, trained *_lmp models
+```
+
+| Model/mode | Mean loop time | Relative to main |
+| --- | ---: | ---: |
+| main old gate | `4.514740 s` | `1.0000x` |
+| canonical `mu-body-linear-combo` before this update | `5.518320 s` | `1.2223x` |
+| cache/scalar-major `mu-body-linear-combo` trial | `5.479610 s` | `1.2137x` |
+| accepted no-zero `mu-body-linear-combo` | `5.434567 s` | `1.2037x` |
+| canonical `mu-scalar-full` before this update | `6.908270 s` | `1.5302x` |
+| cache/scalar-major `mu-scalar-full` trial | `6.894727 s` | `1.5272x` |
+| accepted no-zero `mu-scalar-full` | `6.755803 s` | `1.4964x` |
+
+Short 200-step profile with the accepted binary:
+
+```text
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_gate_nozero_values_20260615_1515
+job: 3798812
+```
+
+| Mode | total | first | fcomm | main | rcomm | gate_force |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `mu-body-linear-combo` | `0.00122208` | `0.00027351` | `0.00034509` | `0.00042426` | `0.00056258` | `0.00015259` |
+| `mu-scalar-full` | `0.00310239` | `0.00037310` | `0.00140737` | `0.00045936` | `0.00150011` | `0.00023858` |
+
+The no-zero update gives a small exact improvement, but the same conclusion
+holds: on this very small 384-atom/96-rank benchmark, the remaining full-mode
+gap is communication dominated. `mu-body-linear-combo` must communicate 4
+body-channel signals/adjoints for the l4k4 model; `mu-scalar-full` must
+communicate 20 independent per-\(\mu\) signals/adjoints. The LAMMPS pack/unpack
+path already sends contiguous signal blocks. Reducing the full-mode width below
+20 would require an exact low-rank/sparse identity in the trained weight matrix
+or a change in the mathematical model; no approximate compression is used.
+
 ## Verification Checklist
 
 Local serial checks:

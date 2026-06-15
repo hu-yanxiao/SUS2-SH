@@ -234,6 +234,7 @@ class PairSUS2MTP : public Pair {
   unsigned char *two_layer_gate_mu_cache_valid = nullptr;
   double *two_layer_radial_cache_vals = nullptr;
   double *two_layer_radial_cache_ders = nullptr;
+  std::vector<double> two_layer_gate_moment_cache;
   std::vector<double> two_layer_gate_body_order_scratch;
   double *static_fixed_gate_basic_cache = nullptr;
   unsigned char *static_fixed_gate_basic_cache_valid = nullptr;
