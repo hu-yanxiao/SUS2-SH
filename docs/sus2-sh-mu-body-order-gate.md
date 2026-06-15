@@ -76,6 +76,24 @@ It was observed at detached commit `6a5ca72dd5a31766c0e0da0711a44682d8fa461c`,
 older than the current main/developer reference, and produced an invalid speed
 comparison because it rejected `RBLaguerre_log1p` during `init-sh`.
 
+Fresh 40-rank CPU speed comparison on 2026-06-15:
+
+```text
+job id: 3797952
+summary: /work/phy-weigw/hyx/xxx-b/test/cmp_20260615_093351_main_combo_full_summary.txt
+train cfg: /work/phy-weigw/hyx/xxx-b/test/train.cfg
+max-iter: 30
+radial basis: RBLaguerre_log1p
+```
+
+| Case | Binary | Gate option | Runtime | Relative to main |
+| --- | --- | --- | ---: | ---: |
+| main/developer old gate | `SUS2-SH-work-codex/bin/mlp-sus2` | `--two-layer-gate-body-order=5` | `462 s` | `1.00x` |
+| mu-body linear-combo | `SUS2-SH-mu-body-gate-work-codex/bin/mlp-sus2` | `--two-layer-gate-mode=mu-body-linear-combo` | `654 s` | `1.42x` |
+| mu-scalar full | `SUS2-SH-mu-body-gate-work-codex/bin/mlp-sus2` | `--two-layer-gate-mode=mu-scalar-full` | `603 s` | `1.31x` |
+
+All three runs exited with code 0.
+
 Submitted neighbor-site full test job in that directory:
 
 ```text
