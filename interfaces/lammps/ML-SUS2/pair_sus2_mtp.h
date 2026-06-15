@@ -244,7 +244,6 @@ class PairSUS2MTP : public Pair {
   double *two_layer_radial_cache_vals = nullptr;
   double *two_layer_radial_cache_ders = nullptr;
   std::vector<double> two_layer_gate_moment_cache;
-  std::vector<double> two_layer_gate_body_order_scratch;
   double *static_fixed_gate_basic_cache = nullptr;
   unsigned char *static_fixed_gate_basic_cache_valid = nullptr;
   double *static_fixed_gate_value_cache = nullptr;
@@ -301,7 +300,10 @@ class PairSUS2MTP : public Pair {
   void calc_pair_radial_values(int, int, double, bool, const double * = nullptr,
                                bool = false, int = -1, int = -2, int = 0,
                                double = 0.0);
-	  void accumulate_sh_basic_edge(int, const double *, double, double, bool, int, bool = false, bool = false);
+  void accumulate_sh_basic_edge(int, const double *, double, double, bool, int,
+                                bool = false, bool = false,
+                                double * = nullptr, double * = nullptr,
+                                double * = nullptr);
   bool is_static_fixed_type(int) const;
   bool static_fixed_cache_tag_matches(const tagint *, int) const;
   void configure_static_fixed_types();
