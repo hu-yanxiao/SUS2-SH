@@ -763,12 +763,51 @@ directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_202606
 
 The login-node profile is only a hot-path direction check; the real LAMMPS
 speed comparison remains the submitted 40-rank/96-rank B-system jobs in the same
-test directory. At the time this note was written, the pending jobs were:
+test directory.
+
+Completed 40-rank short profile on the B-system 2x2x2 LAMMPS case:
 
 ```text
-40-rank short profile: 3800991
-40-rank speed:         3801017
-96-rank speed:         3801039
+job: 3800991
+node: b07u38a
+summary: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/seed_profile40_summary.txt
+```
+
+| Mode/binary | total | first | fcomm | main | rcomm | gate_force |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e2f8` `mu-body-linear-combo` | `0.003463722` | `0.001082097` | `0.000418600` | `0.001682915` | `0.000592926` | `0.000633548` |
+| retained `mu-body-linear-combo` | `0.003338736` | `0.000965856` | `0.000370418` | `0.001693265` | `0.000599926` | `0.000610887` |
+| `e2f8` `mu-scalar-full` | `0.003881440` | `0.001175615` | `0.000508676` | `0.001652033` | `0.000620843` | `0.000888017` |
+| retained `mu-scalar-full` | `0.003810493` | `0.001045825` | `0.000467634` | `0.001706453` | `0.000669589` | `0.000885084` |
+
+Completed 40-rank real LAMMPS speed comparison on the B-system 2x2x2 case:
+
+```text
+job: 3801017
+node: b07u38a
+summary: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/speed_seed_ipo40_summary.txt
+run: 5000 steps, 384 B atoms, trained *_lmp models
+```
+
+| Model/mode | Mean loop time | Relative to main | Relative to e2f8 |
+| --- | ---: | ---: | ---: |
+| main old gate | `14.571533 s` | `1.0000x` | n/a |
+| `e2f8` `mu-body-linear-combo` | `17.898400 s` | `1.2283x` | `1.0000x` |
+| retained no-IPO `mu-body-linear-combo` | `17.440233 s` | `1.1969x` | `0.9744x` |
+| retained IPO `mu-body-linear-combo` | `17.425167 s` | `1.1958x` | `0.9736x` |
+| `e2f8` `mu-scalar-full` | `19.782833 s` | `1.3576x` | `1.0000x` |
+| retained no-IPO `mu-scalar-full` | `19.227633 s` | `1.3195x` | `0.9719x` |
+| retained IPO `mu-scalar-full` | `19.432767 s` | `1.3336x` | `0.9823x` |
+
+The retained no-IPO build is the best full-mode result in this matched job, and
+IPO is neutral/slightly better only for combo. The direct derivative-flow
+cleanup therefore remains useful but not sufficient to make either new gate
+mode reach the old main gate speed on this small 40-rank B benchmark.
+
+At the time this note was updated, the remaining pending job was:
+
+```text
+96-rank speed: 3801039
 ```
 
 Rejected exact fast-dispatch candidate:
