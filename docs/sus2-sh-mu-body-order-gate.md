@@ -97,12 +97,24 @@ Final exact LAMMPS optimization status:
 test directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial
 main LAMMPS baseline binary: /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
 40-rank parity job for final SHA-256 e77...4054: 3801127, DONE
+40-rank direct parity job final vs group_contract reference: 3801130, DONE
 40-rank performance job for final SHA-256 e77...4054: 3801128, DONE
 ```
 
-Verified 40-rank parity for the final binary:
+Verified 40-rank parity for the final binary against the immediately previous
+branchless exact candidate:
 
 ```text
+combo abs_dE=0, max_force_diff=0
+full abs_dE=0, max_force_diff=0
+```
+
+Verified 40-rank direct parity for the final stable binary against the accepted
+grouped-contraction reference:
+
+```text
+reference binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.group_contract_trial
+final binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
 combo abs_dE=0, max_force_diff=0
 full abs_dE=0, max_force_diff=0
 ```
