@@ -77,6 +77,7 @@ Source relationship as of 2026-06-15 21:16 CST:
 ```text
 local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.codex_tmp/sus2-sh-developer-tanh
 local branch: codex/mu-body-order-gate
+GitHub commit: c28fe23
 server SUS2-SH source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/interfaces/lammps/ML-SUS2
 server LAMMPS build src: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
 LAMMPS trial binary SHA-256: e2f8f2d6e23eed2196f28c207fd2b2da9ef96022943853dcdcc7555dae42c270
