@@ -909,6 +909,125 @@ exactly duplicate rows. Therefore the communication width cannot be reduced
 without changing the mathematical model or using approximation, which is out of
 scope for this branch.
 
+### Full-Matrix Optimization Policy 2026-06-16
+
+LAMMPS optimization candidates are now evaluated as model-family backends, not
+as single-case fixes. Each exact candidate must be benchmarked over the full
+representative matrix before it is promoted:
+
+```text
+l/k: l2k2, l2k3, l3k3, l4k4
+factor pruning: legacy, q_total
+gate weight mode: mu-body-linear-combo, mu-scalar-full
+LAMMPS model form: trained model converted to *_lmp read-table radial basis
+LAMMPS cell: B-system first training structure, replicate 6 6 6
+baseline: current SUS2-SH main/developer LAMMPS binary
+branch binary: independent mu-body-order-gate LAMMPS binary
+```
+
+The goal remains a mathematically exact implementation. If one backend is
+consistently best across the matrix, it becomes the default path. If different
+model sizes or pruning modes favor different exact kernels, model loading should
+dispatch by stable model metadata such as \(l_{\max}\), \(k_{\max}\),
+`alpha_index_basic` size, gate mode, signal stride, and scalar count. A
+candidate that only improves one corner case is retained only as a specialized
+dispatch path when the full matrix shows that it does not regress the other
+cases.
+
+The current candidate-matrix harness records both raw loop times and
+main-relative ratios for all cases, so backend selection can be based on the
+observed matrix rather than on one l4k4 benchmark.
+
+Each new LAMMPS optimization version must be treated as a candidate backend and
+run over the whole matrix above before promotion. The decision record must keep:
+
+- source commit or source file hashes for the candidate;
+- binary path and SHA-256;
+- full matrix output directory;
+- median and mean ratio against the same-case main binary;
+- worst-case ratio, number of cases above `1.20x`, and the best backend per
+  case.
+
+This avoids overfitting the implementation to one model size. If a candidate
+improves only a subset such as large `l4k4` models or only
+`mu-body-linear-combo`, it can be retained only behind a model-load dispatch
+path whose predicate is based on stable model metadata. If no single exact
+backend covers all representative cases, the dispatch table should be derived
+from the full matrix and revalidated whenever the backend code changes.
+
+### Promoted LAMMPS Product-Array Backend 2026-06-17
+
+The retained single-gate LAMMPS backend is the product-array implementation in
+code commit:
+
+```text
+047490880ddcc2f5eb90c48007edbc28dceeb97d
+```
+
+Server/source relationship:
+
+```text
+branch: codex/mu-body-order-gate
+LAMMPS source tree: /work/phy-weigw/apps/lammps-10Dec2025/src
+candidate binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2.compactcache_noipo_trial
+binary SHA-256: 3804c2ff4dc2f8d2dea9dc98ef518f9f62cd4d65a4d02895880926f013a94340
+pair_sus2_mtp.cpp SHA-256: 99607417815d5ff7581a94b00a5fd4d0ea22a3ba8f9543724e8ab49f89a7b796
+pair_sus2_mtp.h SHA-256: 7bcc504efe60e2eb96c4392b96bca1efd4853b47cd7af02bdd60f8d2084dea0f
+```
+
+Parity verification:
+
+```text
+job: 3802892
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_compactcache_parity_20260617_052612
+result: 12 cases PASS, max_abs_energy=0, max_abs_force=0, rms_force=0
+```
+
+Full 40-rank large-cell speed verification:
+
+```text
+job: 3802925
+directory: /work/phy-weigw/hyx/xxx-b/test/codex_productarrays_full_matrix_40_20260617_062357
+main binary: /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
+main SHA-256: 46a2096aebdcb8d05030c3f7164227c402986334f942c558042d569888e9344a
+run_steps: 800
+replicate: 6 6 6
+pruning: q_total
+gate site mode: single gate
+```
+
+Median LAMMPS loop-time ratios against the current main/developer LAMMPS
+binary:
+
+| l/k | Gate weight mode | Main median | Product-array median | Ratio |
+| --- | --- | ---: | ---: | ---: |
+| l2k2 | `mu-body-linear-combo` | `6.643130 s` | `7.890470 s` | `1.1878x` |
+| l2k2 | `mu-scalar-full` | `6.527200 s` | `7.654530 s` | `1.1727x` |
+| l2k3 | `mu-body-linear-combo` | `11.007000 s` | `12.487000 s` | `1.1345x` |
+| l2k3 | `mu-scalar-full` | `11.146700 s` | `12.763800 s` | `1.1451x` |
+| l3k3 | `mu-body-linear-combo` | `16.323700 s` | `19.458500 s` | `1.1920x` |
+| l3k3 | `mu-scalar-full` | `16.319300 s` | `19.572900 s` | `1.1994x` |
+| l4k4 | `mu-body-linear-combo` | `50.756900 s` | `53.271400 s` | `1.0495x` |
+| l4k4 | `mu-scalar-full` | `50.667400 s` | `60.127400 s` | `1.1867x` |
+
+Decision: promote this product-array backend as the current exact LAMMPS
+implementation for single-gate `q_total` models with \(l \le 4\), \(k \le 4\).
+All measured representative cases are at or below the `1.20x` target. The
+tightest case is `l3k3` `mu-scalar-full` at `1.1994x`, so future changes should
+rerun this matrix before promotion.
+
+Rejected exact candidates during this optimization round:
+
+- `stride2` direct body-adjoint specialization preserved parity but slowed the
+  l2k2 hot case (`1.2823x` vs main in
+  `/work/phy-weigw/hyx/xxx-b/test/codex_stride2_l2k2_body_speed_40_20260617_061120`);
+  it was reverted and is not present in the promoted source.
+- `SUS2_LAMMPS_GATE_MU_INDEXED_BASIC=1` preserved the mathematical path but
+  increased l2k2 `mu-body-linear-combo` median to `11.258000 s`
+  (`1.6477x` vs main) in
+  `/work/phy-weigw/hyx/xxx-b/test/codex_mu_indexed_basic_l2k2_speed_40_20260617`;
+  it remains off and is not promoted.
+
 ## Verification Checklist
 
 Local serial checks:
