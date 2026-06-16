@@ -162,13 +162,30 @@ class PairSUS2MTP : public Pair {
   int two_layer_gate_body_order_max = 0;
   int two_layer_gate_scalar_count = 0;
   int two_layer_gate_weight_count = 0;
-  int two_layer_gate_body_mix_weight_count = 0;
-  int two_layer_gate_product_limit = 0;
-  int two_layer_gate_moment_cache_width = 0;
-  std::vector<int> sh_scalar_body_order;
+	  int two_layer_gate_body_mix_weight_count = 0;
+	  int two_layer_gate_product_limit = 0;
+	  int two_layer_gate_moment_cache_width = 0;
+	  std::vector<int> two_layer_gate_product_indices;
+	  std::vector<int> two_layer_gate_product_a0_indices;
+	  std::vector<int> two_layer_gate_product_a1_indices;
+	  std::vector<int> two_layer_gate_product_out_indices;
+	  std::vector<int> two_layer_gate_product_compact_a0_indices;
+	  std::vector<int> two_layer_gate_product_compact_a1_indices;
+	  std::vector<double> two_layer_gate_product_coeffs;
+	  std::vector<unsigned char> two_layer_gate_required_moments;
+	  std::vector<int> two_layer_gate_required_moment_indices;
+	  std::vector<int> two_layer_gate_required_moment_compact_index;
+	  std::vector<int> two_layer_gate_required_basic_indices;
+	  std::vector<int> two_layer_gate_required_basic_mu_offsets;
+	  std::vector<int> two_layer_gate_required_basic_mu_indices;
+	  std::vector<int> sh_scalar_body_order;
   std::vector<int> two_layer_gate_scalar_body_order;
   std::vector<int> two_layer_gate_scalar_body_bucket;
   std::vector<int> two_layer_gate_scalar_moment_indices;
+  std::vector<int> two_layer_gate_body_bucket_offsets;
+  std::vector<int> two_layer_gate_body_bucket_scalar_indices;
+  std::vector<int> two_layer_gate_body_signal_buckets;
+  std::vector<double> two_layer_gate_body_signal_mix_weights;
   std::vector<int> two_layer_gate_mu_body_order;
   std::vector<int> two_layer_gate_scalar_indices;
   std::vector<double> two_layer_gate_weights;
@@ -193,12 +210,23 @@ class PairSUS2MTP : public Pair {
   double *two_layer_gate_edge_table_fracs_raw = nullptr;
   double *two_layer_gate_edge_radial_vals_raw = nullptr;
   double *two_layer_gate_edge_radial_ders_raw = nullptr;
+  double *two_layer_gate_edge_sh_values_raw = nullptr;
+  double *two_layer_gate_edge_sh_ders_raw = nullptr;
+  double *two_layer_gate_edge_main_sh_values_raw = nullptr;
+  double *two_layer_gate_edge_residual_radial_vals_raw = nullptr;
   double *two_layer_gate_edge_deriv_x_raw = nullptr;
   double *two_layer_gate_edge_deriv_y_raw = nullptr;
   double *two_layer_gate_edge_deriv_z_raw = nullptr;
+  double *two_layer_gate_edge_signal_deriv_x_raw = nullptr;
+  double *two_layer_gate_edge_signal_deriv_y_raw = nullptr;
+  double *two_layer_gate_edge_signal_deriv_z_raw = nullptr;
   size_t two_layer_gate_edge_capacity = 0;
   size_t two_layer_gate_edge_radial_capacity = 0;
+  size_t two_layer_gate_edge_sh_capacity = 0;
+  size_t two_layer_gate_edge_main_sh_capacity = 0;
+  size_t two_layer_gate_edge_residual_radial_capacity = 0;
   size_t two_layer_gate_edge_deriv_capacity = 0;
+  size_t two_layer_gate_edge_signal_deriv_capacity = 0;
   int alpha_moment_count, alpha_index_basic_count, alpha_index_times_count, alpha_scalar_count,
       max_alpha_index_basic;    // Counts of various alpha indicies
   int **alpha_index_basic;      // Indicies how to construct elementary moments from coords and dist
@@ -210,8 +238,13 @@ class PairSUS2MTP : public Pair {
   int *alpha_basic_a2;          // Cached z exponent for each basic alpha
   int *alpha_basic_norm_rank;   // Cached a0+a1+a2 for each basic alpha
   int *alpha_basic_sh_index;    // Cached real-SH flat index for SUS2-SH basic alpha
-  std::vector<int> sh_basic_mu_offsets;  // Contiguous SUS2-SH basic groups by mu
+  std::vector<int> sh_basic_mu_offsets;  // SUS2-SH basic groups by mu
+  std::vector<int> sh_basic_mu_indices;  // Non-contiguous group index list
+  std::vector<int> sh_basic_mu_adjoint_offsets;
+  std::vector<int> sh_basic_mu_adjoint_indices;
   bool sh_basic_mu_grouped = false;
+  bool sh_basic_mu_indexed = false;
+  bool sh_basic_mu_adjoint_indexed = false;
   int *alpha_times_a0;          // Cached lhs moment index for each alpha-times entry
   int *alpha_times_a1;          // Cached rhs moment index for each alpha-times entry
   int *alpha_times_multiplier;  // Cached multiplier for each alpha-times entry
@@ -286,10 +319,13 @@ class PairSUS2MTP : public Pair {
   bool requires_two_layer_gate_sh() const;
   int two_layer_gate_signal_stride() const;
   double two_layer_gate_mu_signal(const double *, int) const;
-  void accumulate_two_layer_gate_signal_adjoints(double *, const double *) const;
-  void prepare_two_layer_gate_weight_layouts();
-  void prepare_two_layer_gate_product_layout();
-  int gate_body_order_for_mu(int) const;
+	  void accumulate_two_layer_gate_signal_adjoints(double *, const double *) const;
+	  void prepare_two_layer_gate_weight_layouts();
+	  void prepare_two_layer_gate_product_layout();
+	  void forward_two_layer_gate_products();
+	  void backprop_two_layer_gate_products(const double *);
+	  void backprop_two_layer_gate_products_compact(const double *);
+	  int gate_body_order_for_mu(int) const;
   void prepare_two_layer_gate_additive_ratios();
   void compute_two_layer_gate_sh(int, int);
   void compute_zbl(int, int);
@@ -306,10 +342,16 @@ class PairSUS2MTP : public Pair {
   void accumulate_sh_basic_edge(int, const double *, double, double, bool, int,
                                 bool = false, bool = false,
                                 double * = nullptr, double * = nullptr,
+                                double * = nullptr, double * = nullptr,
                                 double * = nullptr);
+  void accumulate_sh_basic_edge_gate_required(const double *, double,
+                                              double * = nullptr,
+                                              double * = nullptr);
   void dot_sh_basic_edge_jacobian(int, int, const double *, double, int, int,
                                   double, const double *, double &, double &,
                                   double &, const double * = nullptr,
+                                  const double * = nullptr,
+                                  const double * = nullptr,
                                   const double * = nullptr);
   bool is_static_fixed_type(int) const;
   bool static_fixed_cache_tag_matches(const tagint *, int) const;

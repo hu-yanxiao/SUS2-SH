@@ -190,6 +190,8 @@ protected:
 	std::vector<int> basic_mu_cache_;
 	std::vector<int> basic_sh_index_cache_;
 	std::vector<int> basic_sh_der_index_cache_;
+	std::vector<int> basic_indices_by_mu_;
+	std::vector<int> basic_mu_offsets_;
 	std::vector<int> mu_to_radial_eval_block_;
 	std::vector<int> radial_eval_to_scaling_block_;
 	Array3D sh_adj_ders_;
@@ -574,16 +576,18 @@ public:
 		double TwoLayerGateWeight(int weight_index) const;
 		double TwoLayerGateBodyMixWeight(int mu, int body_order) const;
 		double TwoLayerGateBodyMixWeight(int weight_index) const;
-			void ComputeTwoLayerGateBodySignals(const double* scalar_values,
-			                                    double* body_values) const;
-			void ComputeTwoLayerGateMuSignals(const double* body_values,
-			                                  double* mu_values) const;
-			const double* TwoLayerGateFullWeightMatrixData() const;
-			void ComputeTwoLayerGateFullMuSignalsForAtoms(int atom_count);
-			void AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
-				const double* mu_adjoints,
-				double* scalar_seeds,
-				std::vector<double>& body_scratch) const;
+		const double* TwoLayerGateScalarWeightData() const;
+		void ComputeTwoLayerGateBodySignals(const double* scalar_values,
+		                                    double* body_values) const;
+		void ComputeTwoLayerGateMuSignals(const double* body_values,
+		                                  double* mu_values) const;
+		const double* TwoLayerGateBodyMixWeightMatrixData() const;
+		const double* TwoLayerGateFullWeightMatrixData() const;
+		void ComputeTwoLayerGateFullMuSignalsForAtoms(int atom_count);
+		void AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
+			const double* mu_adjoints,
+			double* scalar_seeds,
+			std::vector<double>& body_scratch) const;
 		double TwoLayerResidualE0Coeff(int scalar_index) const;
 		void InitializeTwoLayerGateRadialCoeffsFromBase();
 		void InitializeTwoLayerGateAdditiveCoeffs(double value = 1.0);
