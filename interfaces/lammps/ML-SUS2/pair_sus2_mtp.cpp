@@ -54,6 +54,82 @@ bool env_flag_enabled(const char *name)
   return value != nullptr && value[0] != '\0' && value[0] != '0';
 }
 
+int env_flag_override(const char *primary, const char *alias = nullptr)
+{
+  const char *value = std::getenv(primary);
+  if ((value == nullptr || value[0] == '\0') && alias != nullptr)
+    value = std::getenv(alias);
+  if (value == nullptr || value[0] == '\0') return -1;
+  if (value[0] == '0' ||
+      std::strcmp(value, "false") == 0 || std::strcmp(value, "FALSE") == 0 ||
+      std::strcmp(value, "off") == 0 || std::strcmp(value, "OFF") == 0 ||
+      std::strcmp(value, "no") == 0 || std::strcmp(value, "NO") == 0)
+    return 0;
+  return 1;
+}
+
+bool gate_required_subset_available(int required_basic_count,
+                                    int alpha_index_basic_count)
+{
+  return required_basic_count > 0 &&
+         required_basic_count < alpha_index_basic_count;
+}
+
+bool should_use_gate_required_basic_subset(int required_basic_count,
+                                           int alpha_index_basic_count,
+                                           bool required_basics_are_y00,
+                                           bool body_linear_combo,
+                                           bool center_gate_enabled,
+                                           bool cache_body_signal_derivs,
+                                           bool sh_basic_mu_fast,
+                                           int gate_body_stride,
+                                           int gate_signal_stride)
+{
+  if (!gate_required_subset_available(required_basic_count,
+                                      alpha_index_basic_count))
+    return false;
+  const int override = env_flag_override("SUS2_LAMMPS_GATE_REQUIRED_BASIC",
+                                        "SUS2_SH_GATE_REQUIRED_BASIC");
+  if (override >= 0) return override != 0;
+
+  if (required_basics_are_y00 && !center_gate_enabled &&
+      !cache_body_signal_derivs && sh_basic_mu_fast)
+    return true;
+
+  return body_linear_combo && !center_gate_enabled && !cache_body_signal_derivs &&
+         sh_basic_mu_fast && gate_body_stride > 0 && gate_body_stride <= 4 &&
+         gate_signal_stride == gate_body_stride &&
+         alpha_index_basic_count - required_basic_count >=
+             std::max(16, alpha_index_basic_count / 4);
+}
+
+bool should_use_gate_required_dot(int required_basic_count,
+                                  int alpha_index_basic_count,
+                                  bool required_basics_are_y00,
+                                  bool body_linear_combo,
+                                  bool center_gate_enabled,
+                                  bool cache_body_signal_derivs,
+                                  bool sh_basic_mu_fast,
+                                  int gate_body_stride,
+                                  int gate_signal_stride)
+{
+  if (!gate_required_subset_available(required_basic_count,
+                                      alpha_index_basic_count))
+    return false;
+  const int override = env_flag_override("SUS2_LAMMPS_GATE_REQUIRED_DOT",
+                                        "SUS2_SH_GATE_REQUIRED_DOT");
+  if (override >= 0) return override != 0;
+
+  if (required_basics_are_y00 && !center_gate_enabled &&
+      !cache_body_signal_derivs && sh_basic_mu_fast)
+    return true;
+
+  return body_linear_combo && !center_gate_enabled && !cache_body_signal_derivs &&
+         sh_basic_mu_fast && gate_body_stride > 0 && gate_body_stride <= 4 &&
+         gate_signal_stride == gate_body_stride &&
+         required_basic_count * 2 <= alpha_index_basic_count;
+}
+
 bool disable_two_layer_gate_tanh_cache()
 {
   static const bool disabled =
@@ -143,6 +219,9 @@ enum {
   kGateProfileV2CounterSignalDerivCache,
   kGateProfileV2CounterCompactRaw,
   kGateProfileV2CounterFastMuBasic,
+  kGateProfileV2CounterRequiredBasicSubset,
+  kGateProfileV2CounterRequiredDot,
+  kGateProfileV2CounterRequiredY00,
   kGateProfileV2CounterEdgeMetadataBytes,
   kGateProfileV2CounterRadialCacheBytes,
   kGateProfileV2CounterSHCacheBytes,
@@ -181,6 +260,9 @@ const char *kGateProfileV2CounterNames[kGateProfileV2CounterCount] = {
     "signal_deriv_cache",
     "compact_raw",
     "sh_basic_mu_fast",
+    "required_basic_subset",
+    "required_dot",
+    "required_y00",
     "edge_metadata_bytes",
     "radial_cache_bytes",
     "sh_cache_bytes",
@@ -787,6 +869,63 @@ inline bool accumulate_full_scalar_adjoints_specialized(
     return true;
   default:
     return false;
+  }
+}
+
+void accumulate_full_gate_values_batched(
+    const int inum,
+    const int *ilist,
+    const int scalar_count,
+    const int gate_signal_stride,
+    const double *full_weights_by_scalar,
+    const double *scalar_cache_by_q,
+    double *gate_values)
+{
+  for (int ii = 0; ii < inum; ii++) {
+    double *__restrict gate_values_i =
+        gate_values + static_cast<size_t>(ilist[ii]) * gate_signal_stride;
+    std::fill(gate_values_i, gate_values_i + gate_signal_stride, 0.0);
+  }
+  for (int q = 0; q < scalar_count; q++) {
+    const double *__restrict weights =
+        full_weights_by_scalar + static_cast<size_t>(q) * gate_signal_stride;
+    const double *__restrict scalars =
+        scalar_cache_by_q + static_cast<size_t>(q) * inum;
+    for (int ii = 0; ii < inum; ii++) {
+      const double scalar_value = scalars[ii];
+      if (scalar_value == 0.0) continue;
+      double *__restrict gate_values_i =
+          gate_values + static_cast<size_t>(ilist[ii]) * gate_signal_stride;
+      #pragma omp simd
+      for (int g = 0; g < gate_signal_stride; g++)
+        gate_values_i[g] += scalar_value * weights[g];
+    }
+  }
+}
+
+void accumulate_full_scalar_adjoints_batched(
+    const int inum,
+    const int *ilist,
+    const int scalar_count,
+    const int gate_signal_stride,
+    const double *gate_adjoints,
+    const double *full_weights_by_scalar,
+    double *scalar_adjoint_cache_by_q)
+{
+  for (int q = 0; q < scalar_count; q++) {
+    const double *__restrict weights =
+        full_weights_by_scalar + static_cast<size_t>(q) * gate_signal_stride;
+    double *__restrict scalar_adjoints =
+        scalar_adjoint_cache_by_q + static_cast<size_t>(q) * inum;
+    for (int ii = 0; ii < inum; ii++) {
+      const double *__restrict gate_adjoint =
+          gate_adjoints + static_cast<size_t>(ilist[ii]) * gate_signal_stride;
+      double adjoint = 0.0;
+      #pragma omp simd reduction(+:adjoint)
+      for (int g = 0; g < gate_signal_stride; g++)
+        adjoint += gate_adjoint[g] * weights[g];
+      scalar_adjoints[ii] = adjoint;
+    }
   }
 }
 
@@ -1480,6 +1619,8 @@ void PairSUS2MTP::accumulate_two_layer_gate_signal_adjoints(
 void PairSUS2MTP::prepare_two_layer_gate_weight_layouts()
 {
   two_layer_gate_full_weights_by_scalar.clear();
+  two_layer_gate_full_scalar_cache.clear();
+  two_layer_gate_full_scalar_adjoint_cache.clear();
   two_layer_gate_scalar_body_bucket.clear();
   two_layer_gate_scalar_moment_indices.clear();
   two_layer_gate_body_bucket_offsets.clear();
@@ -1610,6 +1751,7 @@ void PairSUS2MTP::prepare_two_layer_gate_product_layout()
   two_layer_gate_required_basic_indices.clear();
   two_layer_gate_required_basic_mu_offsets.clear();
   two_layer_gate_required_basic_mu_indices.clear();
+  two_layer_gate_required_basics_are_y00 = false;
   if (!two_layer_gate_enabled || two_layer_gate_scalar_count <= 0 ||
       alpha_moment_count <= 0)
     return;
@@ -1707,6 +1849,16 @@ void PairSUS2MTP::prepare_two_layer_gate_product_layout()
   }
   for (int k = 0; k < alpha_index_basic_count; k++)
     if (needed[k]) two_layer_gate_required_basic_indices.push_back(k);
+  if (!two_layer_gate_required_basic_indices.empty()) {
+    two_layer_gate_required_basics_are_y00 = true;
+    const int y00_index = sh_flat_index(0, 0);
+    for (int k : two_layer_gate_required_basic_indices) {
+      if (alpha_basic_sh_index[k] != y00_index) {
+        two_layer_gate_required_basics_are_y00 = false;
+        break;
+      }
+    }
+  }
   if (!two_layer_gate_required_basic_indices.empty() &&
       static_cast<int>(two_layer_gate_required_basic_indices.size()) <
           alpha_index_basic_count &&
@@ -2334,6 +2486,8 @@ void PairSUS2MTP::ensure_two_layer_atom_buffers()
     if (two_layer_gate_mu_cache_atom_size < nmax) {
       memory->grow(two_layer_gate_mu_cache_valid, nmax,
                    "two_layer_gate_mu_cache_valid");
+      std::fill(two_layer_gate_mu_cache_valid,
+                two_layer_gate_mu_cache_valid + nmax, 0);
       two_layer_gate_mu_cache_atom_size = nmax;
     }
     if (two_layer_gate_mu_cache_size < cache_size) {
@@ -3068,6 +3222,37 @@ void PairSUS2MTP::accumulate_sh_basic_edge_gate_required(
     return;
   }
 
+  if (two_layer_gate_required_basics_are_y00) {
+    if (cached_sh_values != nullptr) {
+      const int sh_component_count = (sh_l_max + 1) * (sh_l_max + 1);
+      std::memset(cached_sh_values, 0,
+                  static_cast<size_t>(sh_component_count) * sizeof(double));
+      cached_sh_values[sh_flat_index(0, 0)] = kRealY00;
+    }
+    if (cached_sh_ders != nullptr) {
+      const int sh_component_count = (sh_l_max + 1) * (sh_l_max + 1);
+      std::memset(cached_sh_ders, 0,
+                  static_cast<size_t>(3 * sh_component_count) * sizeof(double));
+    }
+    if (static_cast<int>(two_layer_gate_required_basic_mu_offsets.size()) ==
+            radial_func_count + 1 &&
+        static_cast<int>(two_layer_gate_required_basic_mu_indices.size()) ==
+            static_cast<int>(two_layer_gate_required_basic_indices.size())) {
+      for (int mu = 0; mu < radial_func_count; mu++) {
+        const int begin = two_layer_gate_required_basic_mu_offsets[mu];
+        const int end = two_layer_gate_required_basic_mu_offsets[mu + 1];
+        if (begin == end) continue;
+        const double raw = radial_vals[mu] * kRealY00;
+        for (int pos = begin; pos < end; pos++)
+          moment_tensor_vals[two_layer_gate_required_basic_mu_indices[pos]] += raw;
+      }
+      return;
+    }
+    for (int k : two_layer_gate_required_basic_indices)
+      moment_tensor_vals[k] += radial_vals[alpha_basic_mu[k]] * kRealY00;
+    return;
+  }
+
   const double inv_dist = 1.0 / dist;
   double sh_values[kMaxSHComponents];
   if (cached_sh_values != nullptr || cached_sh_ders != nullptr) {
@@ -3117,6 +3302,7 @@ void PairSUS2MTP::dot_sh_basic_edge_jacobian(int itype,
                                              int table_bin,
                                              double table_frac,
                                              const double *basic_adjoints,
+                                             bool use_required_gate_basics,
                                              double &fx,
                                              double &fy,
                                              double &fz,
@@ -3135,6 +3321,30 @@ void PairSUS2MTP::dot_sh_basic_edge_jacobian(int itype,
       cached_radial_ders != nullptr ? cached_radial_ders : radial_ders;
 
   const double inv_dist = 1.0 / dist;
+  if (use_required_gate_basics && two_layer_gate_required_basics_are_y00 &&
+      static_cast<int>(two_layer_gate_required_basic_mu_offsets.size()) ==
+          radial_func_count + 1 &&
+      static_cast<int>(two_layer_gate_required_basic_mu_indices.size()) ==
+          static_cast<int>(two_layer_gate_required_basic_indices.size())) {
+    for (int mu = 0; mu < radial_func_count; mu++) {
+      const int begin = two_layer_gate_required_basic_mu_offsets[mu];
+      const int end = two_layer_gate_required_basic_mu_offsets[mu + 1];
+      if (begin == end) continue;
+      double adjoint_sum = 0.0;
+      for (int pos = begin; pos < end; pos++) {
+        const int k = two_layer_gate_required_basic_mu_indices[pos];
+        adjoint_sum += basic_adjoints[k];
+      }
+      if (adjoint_sum == 0.0) continue;
+      const double radial_der_pref =
+          edge_radial_ders[mu] * inv_dist * kRealY00 * adjoint_sum;
+      fx += radial_der_pref * r[0];
+      fy += radial_der_pref * r[1];
+      fz += radial_der_pref * r[2];
+    }
+    return;
+  }
+
   double sh_values[kMaxSHComponents];
   double sh_ders[3 * kMaxSHComponents];
   const double *__restrict edge_sh_values = cached_sh_values;
@@ -3145,15 +3355,6 @@ void PairSUS2MTP::dot_sh_basic_edge_jacobian(int itype,
     edge_sh_ders = sh_ders;
   }
 
-  const bool use_required_gate_basics =
-      !two_layer_gate_required_basic_indices.empty() &&
-      static_cast<int>(two_layer_gate_required_basic_indices.size()) <
-          alpha_index_basic_count &&
-      static_cast<int>(two_layer_gate_required_basic_mu_offsets.size()) ==
-          radial_func_count + 1 &&
-      static_cast<int>(two_layer_gate_required_basic_mu_indices.size()) ==
-          static_cast<int>(two_layer_gate_required_basic_indices.size()) &&
-      env_flag_enabled("SUS2_LAMMPS_GATE_REQUIRED_DOT");
   if (use_required_gate_basics) {
     for (int mu = 0; mu < radial_func_count; mu++) {
       const int begin = two_layer_gate_required_basic_mu_offsets[mu];
@@ -3528,10 +3729,17 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       : gate_moment_cache_width;
   const bool gate_scalars_basic_only = !gate_needs_product_backprop;
   const bool use_gate_required_basic_subset =
-      !two_layer_gate_required_basic_indices.empty() &&
-      static_cast<int>(two_layer_gate_required_basic_indices.size()) <
-          alpha_index_basic_count &&
-      env_flag_enabled("SUS2_LAMMPS_GATE_REQUIRED_BASIC");
+      should_use_gate_required_basic_subset(
+          static_cast<int>(two_layer_gate_required_basic_indices.size()),
+          alpha_index_basic_count, two_layer_gate_required_basics_are_y00,
+          two_layer_gate_body_linear_combo, two_layer_gate_center_enabled,
+          cache_body_signal_derivs, sh_basic_mu_fast, gate_body_stride,
+          gate_signal_stride);
+  const bool gate_required_dot_available =
+      static_cast<int>(two_layer_gate_required_basic_mu_offsets.size()) ==
+          radial_func_count + 1 &&
+      static_cast<int>(two_layer_gate_required_basic_mu_indices.size()) ==
+          static_cast<int>(two_layer_gate_required_basic_indices.size());
   std::vector<int> basic_gate_scalar_indices;
   std::vector<int> basic_gate_body_bucket_offsets;
   std::vector<int> basic_gate_body_bucket_scalar_indices;
@@ -3566,6 +3774,12 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       gate_scalars_basic_only ? alpha_index_basic_count : gate_moment_cache_width;
   const int gate_force_adjoint_fill_width =
       gate_scalars_basic_only ? alpha_index_basic_count : gate_moment_cache_width;
+  const bool use_full_gate_batched_contraction =
+      !two_layer_gate_body_linear_combo && !gate_scalars_basic_only &&
+      !static_fixed_basic_cache_enabled &&
+      env_flag_enabled("SUS2_LAMMPS_FULL_GATE_BATCH_CONTRACT") &&
+      static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) ==
+          two_layer_gate_scalar_count * gate_signal_stride;
   std::vector<double> gate_body_values(gate_body_stride, 0.0);
   std::vector<double> gate_signal_moment_ders;
   if (cache_body_signal_derivs)
@@ -3574,6 +3788,15 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   if (store_gate_moment_cache)
     two_layer_gate_moment_cache.resize(
         static_cast<size_t>(inum) * gate_moment_cache_storage_width);
+  if (use_full_gate_batched_contraction) {
+    const size_t full_scalar_cache_size =
+        static_cast<size_t>(two_layer_gate_scalar_count) * inum;
+    two_layer_gate_full_scalar_cache.resize(full_scalar_cache_size);
+    two_layer_gate_full_scalar_adjoint_cache.resize(full_scalar_cache_size);
+  } else {
+    two_layer_gate_full_scalar_cache.clear();
+    two_layer_gate_full_scalar_adjoint_cache.clear();
+  }
   std::fill(two_layer_gate_adjoints,
             two_layer_gate_adjoints + static_cast<size_t>(nall) * gate_signal_stride,
             0.0);
@@ -3597,6 +3820,14 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const bool recompute_gate_force_jacobians =
       recompute_body_combo_gate_force_jacobians ||
       (!two_layer_gate_body_linear_combo && !cache_full_gate_force_jacobians);
+  const bool use_gate_required_dot =
+      gate_required_dot_available && recompute_gate_force_jacobians &&
+      should_use_gate_required_dot(
+          static_cast<int>(two_layer_gate_required_basic_indices.size()),
+          alpha_index_basic_count, two_layer_gate_required_basics_are_y00,
+          two_layer_gate_body_linear_combo, two_layer_gate_center_enabled,
+          cache_body_signal_derivs, sh_basic_mu_fast, gate_body_stride,
+          gate_signal_stride);
   const bool cache_gate_force_radials = recompute_gate_force_jacobians;
   const bool cache_gate_force_sh_derivs =
       recompute_gate_force_jacobians &&
@@ -3833,11 +4064,18 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       continue;
     }
 
-    double profile_v2_sub_start = profile_gate_v2 ? MPI_Wtime() : 0.0;
-    forward_two_layer_gate_products();
-    if (store_gate_moment_cache) {
-      double *__restrict cache_row =
-          two_layer_gate_moment_cache.data() +
+	    double profile_v2_sub_start = profile_gate_v2 ? MPI_Wtime() : 0.0;
+	    forward_two_layer_gate_products();
+    if (use_full_gate_batched_contraction) {
+      double *__restrict scalar_cache =
+          two_layer_gate_full_scalar_cache.data() + static_cast<size_t>(ii);
+      for (int q = 0; q < two_layer_gate_scalar_count; q++)
+        scalar_cache[static_cast<size_t>(q) * inum] =
+            moment_tensor_vals[two_layer_gate_scalar_moment_indices[q]];
+    }
+	    if (store_gate_moment_cache) {
+	      double *__restrict cache_row =
+	          two_layer_gate_moment_cache.data() +
           static_cast<size_t>(ii) * gate_moment_cache_storage_width;
       if (compact_gate_moment_cache) {
         for (int c = 0; c < gate_moment_cache_storage_width; c++)
@@ -3893,14 +4131,16 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
         }
         std::copy(gate_body_values.begin(), gate_body_values.end(), gate_values_i);
       }
-    } else {
-      if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
-          two_layer_gate_scalar_count * gate_signal_stride)
-        error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
-      if (gate_scalars_basic_only) {
-        std::fill(gate_values_i, gate_values_i + gate_signal_stride, 0.0);
-        for (int q : basic_gate_scalar_indices) {
-          const double scalar_value =
+	    } else {
+	      if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
+	          two_layer_gate_scalar_count * gate_signal_stride)
+	        error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
+      if (use_full_gate_batched_contraction) {
+        // Gate values are formed after all local scalar rows are available.
+      } else if (gate_scalars_basic_only) {
+	        std::fill(gate_values_i, gate_values_i + gate_signal_stride, 0.0);
+	        for (int q : basic_gate_scalar_indices) {
+	          const double scalar_value =
               moment_tensor_vals[two_layer_gate_scalar_moment_indices[q]];
           const double *__restrict weights_by_mu =
               two_layer_gate_full_weights_by_scalar.data() +
@@ -4042,9 +4282,19 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       continue;
     }
 
+	  }
+  if (use_full_gate_batched_contraction) {
+    double profile_v2_sub_start = profile_gate_v2 ? MPI_Wtime() : 0.0;
+    accumulate_full_gate_values_batched(
+        inum, ilist, two_layer_gate_scalar_count, gate_signal_stride,
+        two_layer_gate_full_weights_by_scalar.data(),
+        two_layer_gate_full_scalar_cache.data(), two_layer_gate_values);
+    add_profile_time(profile_gate_v2,
+                     profile_v2_times[kGateProfileV2FirstProductsSignal],
+                     profile_v2_sub_start);
   }
-  if (profile_any_gate)
-    profile_first_layer = MPI_Wtime() - profile_stage_start;
+	  if (profile_any_gate)
+	    profile_first_layer = MPI_Wtime() - profile_stage_start;
 
   profile_stage_start = profile_any_gate ? MPI_Wtime() : 0.0;
   comm->forward_comm(this);
@@ -4459,11 +4709,21 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 	  comm->reverse_comm(this);
 	  if (profile_any_gate)
 	    profile_reverse_comm = MPI_Wtime() - profile_stage_start;
-	  if (profile_gate_v2)
-	    profile_v2_times[kGateProfileV2ReverseComm] = profile_reverse_comm;
+		  if (profile_gate_v2)
+		    profile_v2_times[kGateProfileV2ReverseComm] = profile_reverse_comm;
 
-	  profile_stage_start = profile_any_gate ? MPI_Wtime() : 0.0;
-  for (int ii = 0; ii < inum; ii++) {
+		  profile_stage_start = profile_any_gate ? MPI_Wtime() : 0.0;
+  if (use_full_gate_batched_contraction) {
+    double profile_v2_sub_start = profile_gate_v2 ? MPI_Wtime() : 0.0;
+    accumulate_full_scalar_adjoints_batched(
+        inum, ilist, two_layer_gate_scalar_count, gate_signal_stride,
+        two_layer_gate_adjoints, two_layer_gate_full_weights_by_scalar.data(),
+        two_layer_gate_full_scalar_adjoint_cache.data());
+    add_profile_time(profile_gate_v2,
+                     profile_v2_times[kGateProfileV2GateForceSeedBackprop],
+                     profile_v2_sub_start);
+  }
+	  for (int ii = 0; ii < inum; ii++) {
     const int i = ilist[ii];
     const int itype = type[i] - 1;
     if (itype >= species_count)
@@ -4573,14 +4833,24 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 	              adjoint;
 	        }
 	      }
-    } else {
-      if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
-          two_layer_gate_scalar_count * gate_signal_stride)
-        error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
-      if (gate_scalars_basic_only) {
-        for (int q : basic_gate_scalar_indices) {
-          const double *__restrict weights_by_mu =
-              two_layer_gate_full_weights_by_scalar.data() +
+	    } else {
+	      if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
+	          two_layer_gate_scalar_count * gate_signal_stride)
+	        error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
+      if (use_full_gate_batched_contraction) {
+        const double *__restrict scalar_adjoints =
+            two_layer_gate_full_scalar_adjoint_cache.data() +
+            static_cast<size_t>(ii);
+        for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+          const double adjoint = scalar_adjoints[static_cast<size_t>(q) * inum];
+          if (adjoint == 0.0) continue;
+          nbh_energy_ders_wrt_moments[two_layer_gate_scalar_moment_indices[q]] +=
+              adjoint;
+        }
+      } else if (gate_scalars_basic_only) {
+	        for (int q : basic_gate_scalar_indices) {
+	          const double *__restrict weights_by_mu =
+	              two_layer_gate_full_weights_by_scalar.data() +
               static_cast<size_t>(q) * gate_signal_stride;
           double adjoint = 0.0;
           #pragma omp simd reduction(+:adjoint)
@@ -4638,7 +4908,7 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
             two_layer_gate_edge_table_indices_raw[active_idx],
             two_layer_gate_edge_table_bins_raw[active_idx],
             two_layer_gate_edge_table_fracs_raw[active_idx],
-            nbh_energy_ders_wrt_moments, fx, fy, fz,
+            nbh_energy_ders_wrt_moments, use_gate_required_dot, fx, fy, fz,
             cache_gate_force_radials
             ? two_layer_gate_edge_radial_vals_raw +
                 active_idx * static_cast<size_t>(radial_func_count)
@@ -4785,6 +5055,9 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
         cache_body_signal_derivs ? 1.0 : 0.0,
         use_compact_gate_raw ? 1.0 : 0.0,
         sh_basic_mu_fast ? 1.0 : 0.0,
+        use_gate_required_basic_subset ? 1.0 : 0.0,
+        use_gate_required_dot ? 1.0 : 0.0,
+        two_layer_gate_required_basics_are_y00 ? 1.0 : 0.0,
         edge_metadata_bytes,
         radial_cache_bytes,
         sh_cache_bytes,
@@ -5668,6 +5941,7 @@ access to the buffer size that is not provided in PFR.
   two_layer_gate_required_basic_indices.clear();
   two_layer_gate_required_basic_mu_offsets.clear();
   two_layer_gate_required_basic_mu_indices.clear();
+  two_layer_gate_required_basics_are_y00 = false;
   two_layer_gate_scalar_body_order.clear();
   two_layer_gate_scalar_body_bucket.clear();
   two_layer_gate_scalar_moment_indices.clear();
@@ -5683,8 +5957,10 @@ access to the buffer size that is not provided in PFR.
   two_layer_gate_edge_main_sh_capacity = 0;
   two_layer_gate_edge_residual_radial_capacity = 0;
   two_layer_gate_edge_signal_deriv_capacity = 0;
-  two_layer_gate_full_weights_by_scalar.clear();
-  two_layer_gate_body_mix_weights.clear();
+	  two_layer_gate_full_weights_by_scalar.clear();
+  two_layer_gate_full_scalar_cache.clear();
+  two_layer_gate_full_scalar_adjoint_cache.clear();
+	  two_layer_gate_body_mix_weights.clear();
   two_layer_gate_radial_coeffs.clear();
   two_layer_gate_additive_coeffs.clear();
   zbl_enabled = false;
@@ -6762,6 +7038,25 @@ access to the buffer size that is not provided in PFR.
           error->one(FLERR, "SUS2-SH full mu/scalar gate weight count is inconsistent.");
         two_layer_gate_scalar_count =
             two_layer_gate_weight_count / radial_func_count;
+      }
+      {
+        const long sh_product_line_buffer =
+            (std::max(alpha_index_times_count, 1) * 64L + 20L) *
+            static_cast<long>(sizeof(char));
+        const long moment_coeff_line_buffer =
+            std::max(1, alpha_scalar_count) * 64L + 1024L;
+        const long gate_line_buffer =
+            std::max(4096L,
+                     std::max(static_cast<long>(two_layer_gate_weight_count),
+                              static_cast<long>(two_layer_gate_scalar_count)) *
+                             32L +
+                         1024L);
+        const long post_gate_line_buffer =
+            std::max(gate_line_buffer,
+                     std::max(sh_product_line_buffer, moment_coeff_line_buffer));
+        if (post_gate_line_buffer > 100000000L)
+          error->one(FLERR, "SUS2-SH two-layer gate metadata line is too large.");
+        tfr.set_bufsize(static_cast<int>(post_gate_line_buffer));
       }
 
       post_scalar_line = std::string(tfr.next_line());

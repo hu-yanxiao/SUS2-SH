@@ -1067,3 +1067,93 @@ Server checks:
   LAMMPS runs are bitwise identical in the checked energy/force values.
 - Smoke run in `/work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/` with the new
   independent binary.
+
+## 1t88c 96-Rank LAMMPS Status - 2026-06-18
+
+The earlier 40-rank product-array result above is historical. Current LAMMPS
+speed conclusions for this branch should use a single `1t88c` allocation with
+96 ranks and `span[ptile=96]`.
+
+Current accepted branch LAMMPS binaries:
+
+```text
+AVX2 stable trial:
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2.guarded_envbatch_noipo_trial
+
+1t88c/Sapphire-Rapids trial:
+/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_spr_low.guarded_envbatch_noipo_trial
+```
+
+Source and build record:
+
+```text
+build job: 3806942
+build directory: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/build_guarded_envbatch_1t88c_3806942
+LAMMPS source tree: /work/phy-weigw/apps/lammps-10Dec2025/src
+server source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+pair_sus2_mtp.cpp SHA-256: d51d12b20dd160472d8b7a3097c98241362527614c81c3466139c427c025bf0c
+pair_sus2_mtp.h SHA-256: 43493ad85dc9e4cccadf327294eb3c15766305cf24ba4bd1510c2566015264df
+AVX2 binary SHA-256: 2fbde6c67935795157bf8566fa21dd2f159a5c06944ed088fdd5825b76c65703
+SPR-low binary SHA-256: 608884071b9053e2739ea5f174c742dffc0d3980a67fa56b5cf504b9054fce88
+SPR-low flags: -xSAPPHIRERAPIDS -qopt-zmm-usage=low -O3 -fp-model fast=2 -no-prec-div -qoverride-limits -fimf-use-svml=true -qopt-streaming-stores=auto
+```
+
+Current full l/k matrix:
+
+```text
+job: 3806946
+summary: /work/phy-weigw/hyx/xxx-b/test/codex_guarded_envbatch_spr_matrix_96_20260618_043600/guarded_envbatch_spr_matrix_summary.txt
+main binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_main_pair_spr_low.noipo_1t88c_reference
+main SHA-256: 8719bec551be72abcf9c8c6e93bad55ab5b78327f505052cbf9683c1f22deb61
+run_steps: 800
+replicate: 6 6 6
+pruning: q_total
+gate site mode: single gate
+```
+
+Median LAMMPS loop-time ratios against the current main/developer LAMMPS
+reference:
+
+| l/k | Gate weight mode | Main median | Guarded SPR median | Ratio |
+| --- | --- | ---: | ---: | ---: |
+| l2k2 | `mu-body-linear-combo` | `2.382050 s` | `2.412690 s` | `1.0129x` |
+| l2k2 | `mu-scalar-full` | `2.544760 s` | `2.733580 s` | `1.0742x` |
+| l2k3 | `mu-body-linear-combo` | `3.483920 s` | `3.566550 s` | `1.0237x` |
+| l2k3 | `mu-scalar-full` | `3.613250 s` | `3.990340 s` | `1.1044x` |
+| l2k4 | `mu-body-linear-combo` | `9.736700 s` | `10.426700 s` | `1.0709x` |
+| l2k4 | `mu-scalar-full` | `9.339690 s` | `11.098900 s` | `1.1884x` |
+| l3k3 | `mu-body-linear-combo` | `4.264790 s` | `4.758500 s` | `1.1158x` |
+| l3k3 | `mu-scalar-full` | `4.221570 s` | `4.939370 s` | `1.1700x` |
+| l3k4 | `mu-body-linear-combo` | `7.235610 s` | `8.324090 s` | `1.1504x` |
+| l3k4 | `mu-scalar-full` | `7.218510 s` | `9.008680 s` | `1.2480x` |
+| l4k3 | `mu-body-linear-combo` | `6.473510 s` | `7.700900 s` | `1.1896x` |
+| l4k3 | `mu-scalar-full` | `6.659330 s` | `7.604340 s` | `1.1419x` |
+| l4k4 | `mu-body-linear-combo` | `10.547300 s` | `12.268100 s` | `1.1632x` |
+| l4k4 | `mu-scalar-full` | `10.618700 s` | `13.354700 s` | `1.2577x` |
+
+Decision:
+
+- `mu-body-linear-combo` is within the `1.20x` target for all tested q-total
+  models with `l<=4, k<=4`.
+- `mu-scalar-full` is within target for l2k2, l2k3, l2k4, l3k3, and l4k3, but
+  remains above target for l3k4 and l4k4. The current worst valid 1t88c result
+  is l4k4 `mu-scalar-full` at `1.2577x`.
+- Therefore the branch has not globally reached the `1.20x` target for both
+  gate weight modes. Earlier "l4k4 within 1.2x" notes should be treated as
+  combo-mode, 40-rank, candidate-specific, or invalid-baseline evidence unless
+  the exact binary family, ISA, queue, rank layout, model, and gate mode match.
+
+Rejected exact candidates from the 2026-06-18 1t88c round:
+
+- `lmp.ml-sus2_mu_body_gate_spr_low.stride20_groupadj_noipo_trial`
+  (build job 3806948, binary SHA-256
+  `0f2cfeb611ebd360687d334c87e3b78e2c81798306ab9a655a91301ac51a934b`) was
+  slower than guarded_envbatch in direct A/B testing:
+  `/work/phy-weigw/hyx/xxx-b/test/codex_stride20_vs_guarded_spr_ab_96_20260618_052029/stride20_vs_guarded_spr_ab_summary.txt`.
+  It also introduced a max force difference of about `6.9e-15` in AVX2 run-0
+  parity, so it is not promoted.
+- Runtime `SUS2_LAMMPS_GATE_COMPACT_MOMENT_CACHE=1` slowed both l3k4 and l4k4
+  `mu-scalar-full`.
+- Runtime `SUS2_LAMMPS_GATE_REQUIRED_BASIC=1` plus
+  `SUS2_LAMMPS_GATE_REQUIRED_DOT=1` was mixed: l3k4 `mu-scalar-full` improved
+  slightly, but l4k4 slowed. Keep the default heuristics.

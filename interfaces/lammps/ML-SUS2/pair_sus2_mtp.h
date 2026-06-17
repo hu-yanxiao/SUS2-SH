@@ -178,6 +178,7 @@ class PairSUS2MTP : public Pair {
 	  std::vector<int> two_layer_gate_required_basic_indices;
 	  std::vector<int> two_layer_gate_required_basic_mu_offsets;
 	  std::vector<int> two_layer_gate_required_basic_mu_indices;
+	  bool two_layer_gate_required_basics_are_y00 = false;
 	  std::vector<int> sh_scalar_body_order;
   std::vector<int> two_layer_gate_scalar_body_order;
   std::vector<int> two_layer_gate_scalar_body_bucket;
@@ -193,6 +194,8 @@ class PairSUS2MTP : public Pair {
   bool two_layer_gate_full_identity_signal = false;
   std::vector<int> two_layer_gate_full_signal_group_for_mu;
   std::vector<double> two_layer_gate_full_weights_by_scalar;
+  std::vector<double> two_layer_gate_full_scalar_cache;
+  std::vector<double> two_layer_gate_full_scalar_adjoint_cache;
   std::vector<double> two_layer_gate_body_mix_weights;
   std::vector<double> two_layer_gate_radial_coeffs;
   std::vector<double> two_layer_gate_additive_coeffs;
@@ -348,8 +351,9 @@ class PairSUS2MTP : public Pair {
                                               double * = nullptr,
                                               double * = nullptr);
   void dot_sh_basic_edge_jacobian(int, int, const double *, double, int, int,
-                                  double, const double *, double &, double &,
-                                  double &, const double * = nullptr,
+                                  double, const double *, bool, double &,
+                                  double &, double &,
+                                  const double * = nullptr,
                                   const double * = nullptr,
                                   const double * = nullptr,
                                   const double * = nullptr);
