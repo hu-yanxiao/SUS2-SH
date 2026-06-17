@@ -1087,6 +1087,8 @@ AVX2 stable trial:
 Source and build record:
 
 ```text
+GitHub branch: codex/mu-body-order-gate
+LAMMPS code commit: 337b3a6a1100b7f549398d8265c8d8767b83b8ae
 build job: 3806942
 build directory: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/build_guarded_envbatch_1t88c_3806942
 LAMMPS source tree: /work/phy-weigw/apps/lammps-10Dec2025/src
