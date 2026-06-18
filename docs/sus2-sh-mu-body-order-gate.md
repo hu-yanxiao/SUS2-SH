@@ -1159,3 +1159,62 @@ Rejected exact candidates from the 2026-06-18 1t88c round:
 - Runtime `SUS2_LAMMPS_GATE_REQUIRED_BASIC=1` plus
   `SUS2_LAMMPS_GATE_REQUIRED_DOT=1` was mixed: l3k4 `mu-scalar-full` improved
   slightly, but l4k4 slowed. Keep the default heuristics.
+
+## Formal App Installs - 2026-06-18
+
+The last exact optimization attempts after the accepted guarded-envbatch source
+were rejected. The branch was restored to the accepted source hashes below, and
+the formal CPU LAMMPS binaries are installed under `/work/phy-weigw/app/`.
+
+```text
+GitHub branch: codex/mu-body-order-gate
+branch HEAD at build time: 74b8e61aba78e24198172f0ed5872eb52940182f
+LAMMPS source tree used for app builds: /work/phy-weigw/apps/lammps-10Dec2025/src
+server LAMMPS mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+pair_sus2_mtp.cpp SHA-256: d51d12b20dd160472d8b7a3097c98241362527614c81c3466139c427c025bf0c
+pair_sus2_mtp.h SHA-256: 43493ad85dc9e4cccadf327294eb3c15766305cf24ba4bd1510c2566015264df
+```
+
+Installed binaries:
+
+| Target | Queue | Binary | SHA-256 | Build job | Status |
+| --- | --- | --- | --- | ---: | --- |
+| Generic AVX2 | `33` | `/work/phy-weigw/app/lmp.sus2-sh-mu-body-order-gate_33_avx2` | `77272a531821825d84453d20a1c228116ac191ba2d72ad7a85b8e06bad2b4691` | 3807120 | DONE |
+| High performance xHost | `1t88c` | `/work/phy-weigw/app/lmp.sus2-sh-mu-body-order-gate_1t88c_xhost_high` | `ecdd45153e958624080bde652233934c6aef98f0433df9649a7b9100411fb4e7` | 3807121 | DONE after linked binary copy; final `make` exited only on duplicate `liblammps.a` symlink |
+| High performance xHost | `1t75c` | `/work/phy-weigw/app/lmp.sus2-sh-mu-body-order-gate_1t75c_xhost_high` | pending | 3807125 | queued on `1t75c` host slot limit |
+| High performance xHost | `1t81c` | `/work/phy-weigw/app/lmp.sus2-sh-mu-body-order-gate_1t81c_xhost_high` | pending | 3807127 | queued with dependency `done(3807125)` |
+
+Build records are stored in:
+
+```text
+/work/phy-weigw/app/sus2-sh-mu-body-order-gate-build-info/
+```
+
+The `33` build uses:
+
+```text
+-xCORE-AVX2 -O3 -fp-model fast=2 -no-prec-div -qoverride-limits -fimf-use-svml=true -qopt-streaming-stores=never
+```
+
+The target-CPU builds use:
+
+```text
+-xHost -qopt-zmm-usage=high -O3 -fp-model fast=2 -no-prec-div -qoverride-limits -fimf-use-svml=true -qopt-streaming-stores=auto
+```
+
+Rejected final attempts are archived under:
+
+```text
+/work/phy-weigw/app/sus2-sh-mu-body-order-gate-build-info/rejected-test-summaries/
+```
+
+The rejected final attempts were:
+
+- `directfulladj`: parity-correct but slower than the accepted source for the
+  tested full-mode cases.
+- `profile_split`: diagnostic only; it showed the full scalar contraction is not
+  the main bottleneck for l4k4 `mu-scalar-full`.
+- `skipzero_backprop`: parity-correct but slower than the accepted source for
+  l3k4 and l4k4 `mu-scalar-full`.
+- earlier `unroll16_20` and `full_envbatch` candidates were also archived as
+  rejected summaries.
