@@ -41,6 +41,7 @@ namespace {
 constexpr int kEnvGateChannels = 6;
 constexpr KK_FLOAT kEnvGateMaxLogDensityCoeff = 6.0;
 constexpr int kMaxSHComponentsKK = 25;
+constexpr int kMaxGateSignalStrideKK = 25;
 constexpr KK_FLOAT kRealY00KK = 0.28209479177387814;
 constexpr KK_FLOAT kRealY1KK = 0.48860251190291992;
 constexpr KK_FLOAT kRealY2AKK = 1.0925484305920792;
@@ -431,8 +432,11 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::init_style()
 
 	  if (force->newton_pair == 0) error->all(FLERR, "Pair style SUS2MTP requires newton pair on.");
 	  if (two_layer_gate_enabled) {
-	    comm_forward = 1;
-	    comm_reverse = 1;
+	    const int gate_signal_stride = two_layer_gate_signal_stride();
+	    if (gate_signal_stride <= 0)
+	      error->all(FLERR, "Pair sus2mtp/kk two-layer gate signal stride is invalid.");
+	    comm_forward = gate_signal_stride;
+	    comm_reverse = gate_signal_stride;
 	    reverse_comm_device = 1;
 	  }
 
@@ -517,8 +521,9 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   if (two_layer_gate_enabled) {
     if (!is_sh_model)
       error->all(FLERR, "Pair sus2mtp/kk/device two-layer gate support requires a SUS2-SH model.");
-    error->all(FLERR,
-               "Pair sus2mtp/kk does not implement SUS2-SH mu two-layer gate modes; use the CPU pair style for this branch.");
+    if (two_layer_gate_center_enabled)
+      error->all(FLERR,
+                 "Pair sus2mtp/kk/device mu-body-order gate currently supports neighbor-site gate only.");
   }
 
   // Store SUS2-MLIP parameters from base class (CPU version already calculated these)
@@ -585,10 +590,10 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	  scal_coeffs_offset = PairSUS2MTP::scal_coeffs_offset;
 	  radial_coeffs_offset = PairSUS2MTP::radial_coeffs_offset;
 	  two_layer_gate_product_limit = alpha_index_times_count;
-	  if (two_layer_gate_enabled && two_layer_gate_weight_count > 0 &&
-	      two_layer_gate_weight_count < alpha_scalar_count) {
+	  if (two_layer_gate_enabled && two_layer_gate_scalar_count > 0 &&
+	      two_layer_gate_scalar_count < alpha_scalar_count) {
 	    std::vector<unsigned char> needed(alpha_moment_count, 0);
-	    for (int q = 0; q < two_layer_gate_weight_count; q++) {
+	    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
 	      const int scalar_index = two_layer_gate_scalar_indices[q];
 	      if (scalar_index < 0 || scalar_index >= alpha_scalar_count)
 	        error->all(FLERR, "SUS2-SH two-layer gate scalar index is out of range.");
@@ -622,15 +627,48 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	  MemKK::realloc_kokkos(d_two_layer_gate_mu_derivs,
 	                        "sus2mtp/kk:two_layer_gate_mu_derivs", 1, 1);
 	  if (two_layer_gate_enabled) {
+	    two_layer_gate_kk_signal_stride = two_layer_gate_signal_stride();
+	    two_layer_gate_kk_body_stride = std::max(0, two_layer_gate_body_order_max - 1);
+	    two_layer_gate_kk_compact_body_signal =
+	        (two_layer_gate_body_linear_combo &&
+	         !two_layer_gate_body_signal_buckets.empty()) ? 1 : 0;
+	    two_layer_gate_kk_full_identity_signal =
+	        (!two_layer_gate_body_linear_combo &&
+	         two_layer_gate_full_identity_signal) ? 1 : 0;
+	    if (two_layer_gate_kk_signal_stride <= 0)
+	      error->all(FLERR, "Pair sus2mtp/kk two-layer gate signal stride is invalid.");
 	    MemKK::realloc_kokkos(d_two_layer_gate_weight_moment_indices,
 	                          "sus2mtp/kk:two_layer_gate_weight_moment_indices",
-	                          two_layer_gate_weight_count);
+	                          std::max(1, two_layer_gate_scalar_count));
+	    MemKK::realloc_kokkos(d_two_layer_gate_scalar_body_bucket,
+	                          "sus2mtp/kk:two_layer_gate_scalar_body_bucket",
+	                          std::max(1, two_layer_gate_scalar_count));
+	    MemKK::realloc_kokkos(d_two_layer_gate_scalar_signal_index,
+	                          "sus2mtp/kk:two_layer_gate_scalar_signal_index",
+	                          std::max(1, two_layer_gate_scalar_count));
+	    MemKK::realloc_kokkos(d_two_layer_gate_body_signal_buckets,
+	                          "sus2mtp/kk:two_layer_gate_body_signal_buckets",
+	                          std::max(1, two_layer_gate_kk_signal_stride));
+	    MemKK::realloc_kokkos(d_two_layer_gate_full_signal_group_for_mu,
+	                          "sus2mtp/kk:two_layer_gate_full_signal_group_for_mu",
+	                          std::max(1, radial_func_count));
 	    MemKK::realloc_kokkos(d_two_layer_gate_weights,
 	                          "sus2mtp/kk:two_layer_gate_weights",
-	                          two_layer_gate_weight_count);
+	                          std::max(1, two_layer_gate_scalar_count));
+	    MemKK::realloc_kokkos(d_two_layer_gate_body_mix_weights,
+	                          "sus2mtp/kk:two_layer_gate_body_mix_weights",
+	                          std::max(1, radial_func_count * two_layer_gate_kk_signal_stride));
+	    MemKK::realloc_kokkos(d_two_layer_gate_full_weights_by_scalar,
+	                          "sus2mtp/kk:two_layer_gate_full_weights_by_scalar",
+	                          std::max(1, two_layer_gate_scalar_count),
+	                          std::max(1, two_layer_gate_kk_signal_stride));
+	    MemKK::realloc_kokkos(d_two_layer_gate_full_weights_by_signal,
+	                          "sus2mtp/kk:two_layer_gate_full_weights_by_signal",
+	                          std::max(1, two_layer_gate_kk_signal_stride),
+	                          std::max(1, two_layer_gate_scalar_count));
 	    MemKK::realloc_kokkos(d_two_layer_gate_additive_coeffs,
 	                          "sus2mtp/kk:two_layer_gate_additive_coeffs",
-	                          species_count * radial_func_count);
+	                          std::max(1, species_count));
 	  }
 	  if (zbl_enabled) {
 	    const int zbl_pair_count = species_count * species_count;
@@ -670,7 +708,21 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	  auto h_shift_coeffs = Kokkos::create_mirror_view(d_shift_coeffs);
 	  auto h_two_layer_gate_weight_moment_indices =
 	      Kokkos::create_mirror_view(d_two_layer_gate_weight_moment_indices);
+	  auto h_two_layer_gate_scalar_body_bucket =
+	      Kokkos::create_mirror_view(d_two_layer_gate_scalar_body_bucket);
+	  auto h_two_layer_gate_scalar_signal_index =
+	      Kokkos::create_mirror_view(d_two_layer_gate_scalar_signal_index);
+	  auto h_two_layer_gate_body_signal_buckets =
+	      Kokkos::create_mirror_view(d_two_layer_gate_body_signal_buckets);
+	  auto h_two_layer_gate_full_signal_group_for_mu =
+	      Kokkos::create_mirror_view(d_two_layer_gate_full_signal_group_for_mu);
 	  auto h_two_layer_gate_weights = Kokkos::create_mirror_view(d_two_layer_gate_weights);
+	  auto h_two_layer_gate_body_mix_weights =
+	      Kokkos::create_mirror_view(d_two_layer_gate_body_mix_weights);
+	  auto h_two_layer_gate_full_weights_by_scalar =
+	      Kokkos::create_mirror_view(d_two_layer_gate_full_weights_by_scalar);
+	  auto h_two_layer_gate_full_weights_by_signal =
+	      Kokkos::create_mirror_view(d_two_layer_gate_full_weights_by_signal);
 	  auto h_two_layer_gate_additive_coeffs =
 	      Kokkos::create_mirror_view(d_two_layer_gate_additive_coeffs);
 	  auto h_zbl_atomic_numbers = Kokkos::create_mirror_view(d_zbl_atomic_numbers);
@@ -753,12 +805,70 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	    h_shift_coeffs(i) = PairSUS2MTP::regression_coeffs[shift_coeffs_offset + i];
 	  }
 	  if (two_layer_gate_enabled) {
-	    for (int q = 0; q < two_layer_gate_weight_count; q++) {
+	    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
 	      const int scalar_index = two_layer_gate_scalar_indices[q];
 	      h_two_layer_gate_weight_moment_indices(q) = alpha_moment_mapping[scalar_index];
-	      h_two_layer_gate_weights(q) = two_layer_gate_weights[q];
+	      const int body_bucket =
+	          (q < static_cast<int>(two_layer_gate_scalar_body_bucket.size()))
+	          ? two_layer_gate_scalar_body_bucket[q] : 0;
+	      h_two_layer_gate_scalar_body_bucket(q) = body_bucket;
+	      int signal_index = body_bucket;
+	      if (two_layer_gate_kk_compact_body_signal) {
+	        signal_index = -1;
+	        for (int s = 0; s < two_layer_gate_kk_signal_stride; s++) {
+	          const int signal_bucket =
+	              (s < static_cast<int>(two_layer_gate_body_signal_buckets.size()))
+	              ? two_layer_gate_body_signal_buckets[s] : s;
+	          if (signal_bucket == body_bucket) {
+	            signal_index = s;
+	            break;
+	          }
+	        }
+	      }
+	      if (signal_index < 0 || signal_index >= two_layer_gate_kk_signal_stride)
+	        signal_index = -1;
+	      h_two_layer_gate_scalar_signal_index(q) = signal_index;
+	      h_two_layer_gate_weights(q) =
+	          two_layer_gate_body_linear_combo ? two_layer_gate_weights[q] : 0.0;
 	    }
-	    for (int idx = 0; idx < species_count * radial_func_count; idx++)
+	    for (int s = 0; s < two_layer_gate_kk_signal_stride; s++) {
+	      h_two_layer_gate_body_signal_buckets(s) =
+	          (s < static_cast<int>(two_layer_gate_body_signal_buckets.size()))
+	          ? two_layer_gate_body_signal_buckets[s] : s;
+	    }
+	    for (int mu = 0; mu < radial_func_count; mu++) {
+	      h_two_layer_gate_full_signal_group_for_mu(mu) =
+	          (mu < static_cast<int>(two_layer_gate_full_signal_group_for_mu.size()))
+	          ? two_layer_gate_full_signal_group_for_mu[mu] : mu;
+	    }
+	    if (two_layer_gate_body_linear_combo) {
+	      const std::vector<double> &mix_weights =
+	          !two_layer_gate_body_signal_mix_weights.empty()
+	          ? two_layer_gate_body_signal_mix_weights
+	          : two_layer_gate_body_mix_weights;
+	      if (static_cast<int>(mix_weights.size()) !=
+	          radial_func_count * two_layer_gate_kk_signal_stride)
+	        error->all(FLERR, "SUS2-SH Kokkos body gate mix layout is inconsistent.");
+	      for (int idx = 0; idx < radial_func_count * two_layer_gate_kk_signal_stride; idx++)
+	        h_two_layer_gate_body_mix_weights(idx) = mix_weights[idx];
+	    } else {
+	      if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
+	          two_layer_gate_scalar_count * two_layer_gate_kk_signal_stride)
+	        error->all(FLERR, "SUS2-SH Kokkos full gate weight layout is inconsistent.");
+	      for (int q = 0; q < two_layer_gate_scalar_count; q++)
+	        for (int s = 0; s < two_layer_gate_kk_signal_stride; s++)
+	          h_two_layer_gate_full_weights_by_scalar(q, s) =
+	              two_layer_gate_full_weights_by_scalar[
+	                  static_cast<size_t>(q) * two_layer_gate_kk_signal_stride + s];
+	      for (int s = 0; s < two_layer_gate_kk_signal_stride; s++)
+	        for (int q = 0; q < two_layer_gate_scalar_count; q++)
+	          h_two_layer_gate_full_weights_by_signal(s, q) =
+	              two_layer_gate_full_weights_by_scalar[
+	                  static_cast<size_t>(q) * two_layer_gate_kk_signal_stride + s];
+	    }
+	    if (static_cast<int>(two_layer_gate_additive_coeffs.size()) != species_count)
+	      error->all(FLERR, "SUS2-SH Kokkos gate additive coefficient layout is inconsistent.");
+	    for (int idx = 0; idx < species_count; idx++)
 	      h_two_layer_gate_additive_coeffs(idx) = two_layer_gate_additive_coeffs[idx];
 	  }
 	  if (zbl_enabled) {
@@ -799,7 +909,21 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	  if (two_layer_gate_enabled) {
 	    Kokkos::deep_copy(d_two_layer_gate_weight_moment_indices,
 	                      h_two_layer_gate_weight_moment_indices);
+	    Kokkos::deep_copy(d_two_layer_gate_scalar_body_bucket,
+	                      h_two_layer_gate_scalar_body_bucket);
+	    Kokkos::deep_copy(d_two_layer_gate_scalar_signal_index,
+	                      h_two_layer_gate_scalar_signal_index);
+	    Kokkos::deep_copy(d_two_layer_gate_body_signal_buckets,
+	                      h_two_layer_gate_body_signal_buckets);
+	    Kokkos::deep_copy(d_two_layer_gate_full_signal_group_for_mu,
+	                      h_two_layer_gate_full_signal_group_for_mu);
 	    Kokkos::deep_copy(d_two_layer_gate_weights, h_two_layer_gate_weights);
+	    Kokkos::deep_copy(d_two_layer_gate_body_mix_weights,
+	                      h_two_layer_gate_body_mix_weights);
+	    Kokkos::deep_copy(d_two_layer_gate_full_weights_by_scalar,
+	                      h_two_layer_gate_full_weights_by_scalar);
+	    Kokkos::deep_copy(d_two_layer_gate_full_weights_by_signal,
+	                      h_two_layer_gate_full_weights_by_signal);
 	    Kokkos::deep_copy(d_two_layer_gate_additive_coeffs,
 	                      h_two_layer_gate_additive_coeffs);
 	  }
@@ -823,7 +947,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	  v_buf = buf.view<DeviceType>();
 	  Kokkos::parallel_for(Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPPackForwardComm>(0, n),
 	                       *this);
-	  return n;
+	  return n * two_layer_gate_kk_signal_stride;
 	}
 
 	template <class DeviceType>
@@ -844,7 +968,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	  v_buf = buf.view<DeviceType>();
 	  Kokkos::parallel_for(Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPPackReverseComm>(0, n),
 	                       *this);
-	  return n;
+	  return n * two_layer_gate_kk_signal_stride;
 	}
 
 	template <class DeviceType>
@@ -1408,6 +1532,32 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_env_gate_rho(
   }
 }
 
+template <class DeviceType>
+KOKKOS_INLINE_FUNCTION void
+PairSUS2MTPKokkos<DeviceType>::accumulate_two_layer_gate_mu_adjoint_kk(
+    const int atom_index, const int mu, const F_FLOAT gate_adjoint_mu) const
+{
+  if (gate_adjoint_mu == static_cast<F_FLOAT>(0.0)) return;
+  const int stride = two_layer_gate_kk_signal_stride;
+  const size_t adjoint_offset = static_cast<size_t>(atom_index) * stride;
+  if (two_layer_gate_body_linear_combo) {
+    const size_t weight_offset = static_cast<size_t>(mu) * stride;
+    for (int s = 0; s < stride; s++) {
+      const F_FLOAT coeff = d_two_layer_gate_body_mix_weights(weight_offset + s);
+      if (coeff != static_cast<F_FLOAT>(0.0))
+        Kokkos::atomic_add(&d_two_layer_gate_adjoints(adjoint_offset + s),
+                           gate_adjoint_mu * coeff);
+    }
+  } else if (two_layer_gate_kk_full_identity_signal) {
+    Kokkos::atomic_add(&d_two_layer_gate_adjoints(adjoint_offset + mu),
+                       gate_adjoint_mu);
+  } else {
+    const int group = d_two_layer_gate_full_signal_group_for_mu(mu);
+    Kokkos::atomic_add(&d_two_layer_gate_adjoints(adjoint_offset + group),
+                       gate_adjoint_mu);
+  }
+}
+
 // Finds the maximum number of neighbours in all neigbhourhoods. This enables use to set the size (2nd index) of the jacobian. (Copied from other potentials)
 template <class DeviceType> struct FindMaxNumNeighs {
   typedef DeviceType device_type;
@@ -1578,10 +1728,21 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
   double prof_main_force = 0.0;
   double prof_reverse_comm = 0.0;
   double prof_chain_force = 0.0;
-  double prof_zbl = 0.0;
+	  double prof_zbl = 0.0;
   int prof_first_chunks = 0;
   int prof_main_chunks = 0;
 	  const double prof_total_start = kk_profile ? profile_now() : 0.0;
+	  // The direct gate chain path only accumulates forces and optional global
+	  // virial. Per-atom energy, per-atom virial, and centroid stress require
+	  // the pair tally path so cvflag_atom remains bitwise tied to v_tally_xyz.
+	  const bool needs_atom_or_centroid_gate_tally =
+	      eflag_atom || vflag_atom || cvflag_atom;
+	  const bool direct_gate_chain = !needs_atom_or_centroid_gate_tally;
+	  const bool needs_gate_main_pair_tally =
+	      eflag_atom || vflag_global || vflag_atom || cvflag_atom;
+	  const bool use_gate_moment_cache =
+	      direct_gate_chain && sh_k_max >= 4 && sh_l_max >= 3 &&
+	      alpha_moment_count <= 4000;
 
   // Resize the arrays to the chunksize if needed. Do not initialize values, we do so in the loop.
   if ((int) d_moment_tensor_vals.extent(0) < chunk_size) {
@@ -1608,8 +1769,8 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		                 "Pair sus2mtp/kk/device two-layer gate requires a preinterpolated shared-radial table.");
 
 		    profile_begin();
-		    max_neighs = 1;
-	    {
+	    max_neighs = 1;
+	    if (!direct_gate_chain) {
 	      FindMaxNumNeighs<DeviceType> find_max_neighs(k_list);
 	      Kokkos::parallel_reduce("SUS2MTPGateFindMaxNeighs",
 	                              typename Kokkos::RangePolicy<DeviceType>(0, inum),
@@ -1618,10 +1779,21 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 
 	    ensure_two_layer_atom_buffers();
 	    const int nmax = atom->nmax;
-	    if ((int) d_two_layer_gate_values.extent(0) < nmax) {
-	      Kokkos::realloc(Kokkos::WithoutInitializing, d_two_layer_gate_values, nmax);
-	      Kokkos::realloc(Kokkos::WithoutInitializing, d_two_layer_gate_adjoints, nmax);
-	    }
+	    const int gate_signal_stride = two_layer_gate_kk_signal_stride;
+		    if ((int) d_two_layer_gate_values.extent(0) < nmax * gate_signal_stride) {
+		      Kokkos::realloc(Kokkos::WithoutInitializing, d_two_layer_gate_values,
+		                      nmax * gate_signal_stride);
+		      Kokkos::realloc(Kokkos::WithoutInitializing, d_two_layer_gate_adjoints,
+		                      nmax * gate_signal_stride);
+		    }
+		    if (use_gate_moment_cache &&
+		        ((int) d_two_layer_gate_cached_moment_vals.extent(0) < nmax ||
+		         (int) d_two_layer_gate_cached_moment_vals.extent(1) <
+		             alpha_moment_count)) {
+		      Kokkos::realloc(Kokkos::WithoutInitializing,
+		                      d_two_layer_gate_cached_moment_vals, nmax,
+		                      alpha_moment_count);
+		    }
 	    if ((int) d_two_layer_gate_mu_multipliers.extent(0) < nmax ||
 	        (int) d_two_layer_gate_mu_multipliers.extent(1) < radial_func_count) {
 	      Kokkos::realloc(Kokkos::WithoutInitializing, d_two_layer_gate_mu_multipliers,
@@ -1629,12 +1801,13 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	      Kokkos::realloc(Kokkos::WithoutInitializing, d_two_layer_gate_mu_derivs,
 	                      nmax, radial_func_count);
 	    }
-	    if ((int) d_two_layer_gate_first_derivs.extent(0) < inum ||
-	        (int) d_two_layer_gate_first_derivs.extent(1) < max_neighs) {
+	    if (!direct_gate_chain &&
+	        ((int) d_two_layer_gate_first_derivs.extent(0) < inum ||
+	         (int) d_two_layer_gate_first_derivs.extent(1) < max_neighs ||
+	         (int) d_two_layer_gate_first_derivs.extent(2) < 3 * gate_signal_stride)) {
 	      Kokkos::realloc(Kokkos::WithoutInitializing, d_two_layer_gate_first_derivs,
-	                      inum, max_neighs, 3);
+	                      inum, max_neighs, 3 * gate_signal_stride);
 		    }
-		    Kokkos::deep_copy(d_two_layer_gate_values, 1.0);
 		    Kokkos::deep_copy(d_two_layer_gate_adjoints, 0.0);
 		    profile_end(prof_setup);
 
@@ -1663,29 +1836,71 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 			      Kokkos::parallel_for("ComputeGateFirstLayer", policy_gate_first, *this);
 			      profile_end(prof_first_layer);
 
-			      {
-			        typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateFirstFinalize>
-			            policy_gate_first_finalize(0, chunk_size);
-			        profile_begin();
-			        Kokkos::parallel_for("ComputeGateFirstFinalize", policy_gate_first_finalize, *this);
-			        profile_end(prof_first_finalize);
-			      }
+				      {
+				        profile_begin();
+				        if (!two_layer_gate_body_linear_combo) {
+				          if (two_layer_gate_product_limit > 0) {
+				            typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateProducts>
+				                policy_gate_products(0, chunk_size);
+				            Kokkos::parallel_for("ComputeGateProducts",
+				                                 policy_gate_products, *this);
+				          }
+				          typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateFullForward>
+				              policy_gate_full_forward(
+				                  0, chunk_size * two_layer_gate_kk_signal_stride);
+				          Kokkos::parallel_for("ComputeGateFullForward",
+				                               policy_gate_full_forward, *this);
+				        } else {
+				          typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateFirstFinalize>
+				              policy_gate_first_finalize(0, chunk_size);
+			          Kokkos::parallel_for("ComputeGateFirstFinalize",
+			                               policy_gate_first_finalize, *this);
+				        }
+				        profile_end(prof_first_finalize);
+				      }
 
-			      {
-			        int deriv_team_size = team_size_default;
-			        const int deriv_vector_length = 1;
-			        check_team_size_for<TagPairSUS2MTPComputeGateFirstDerivsTeam>(
-			            chunk_size, deriv_team_size, deriv_vector_length);
-			        Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstDerivsTeam>
-			            policy_gate_first_derivs(chunk_size, deriv_team_size, deriv_vector_length);
-			        const int deriv_scratch_size =
-			            scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
-			        policy_gate_first_derivs =
-			            policy_gate_first_derivs.set_scratch_size(
-			                0, Kokkos::PerTeam(deriv_scratch_size));
-			        profile_begin();
-			        Kokkos::parallel_for("ComputeGateFirstDerivs", policy_gate_first_derivs, *this);
-			        profile_end(prof_first_derivs);
+				      if (use_gate_moment_cache) {
+				        const int local_chunk_offset = chunk_offset;
+				        const int local_alpha_moment_count = alpha_moment_count;
+				        auto d_local_ilist = d_ilist;
+				        auto d_local_moments = d_moment_tensor_vals;
+				        auto d_local_cache = d_two_layer_gate_cached_moment_vals;
+				        Kokkos::parallel_for(
+				            "StoreGateMomentCache",
+				            typename Kokkos::RangePolicy<DeviceType>(
+				                0, chunk_size * local_alpha_moment_count),
+				            KOKKOS_LAMBDA(const int idx) {
+				              const int ii = idx / local_alpha_moment_count;
+				              const int k = idx - ii * local_alpha_moment_count;
+				              const int atom_index =
+				                  d_local_ilist(ii + local_chunk_offset);
+				              d_local_cache(atom_index, k) = d_local_moments(ii, k);
+				            });
+				      }
+
+				      if (!direct_gate_chain) {
+			        for (int signal = 0; signal < gate_signal_stride; signal++) {
+			          two_layer_gate_kk_deriv_signal = signal;
+			          profile_begin();
+			          Kokkos::deep_copy(d_nbh_energy_ders_wrt_moments,
+			                            nbh_der_buffer_value_type(0));
+			          typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateSignalDers>
+			              policy_gate_signal_ders(0, chunk_size);
+			          Kokkos::parallel_for("ComputeGateSignalDers", policy_gate_signal_ders, *this);
+			          int deriv_team_size = team_size_default;
+			          const int deriv_vector_length = 1;
+			          check_team_size_for<TagPairSUS2MTPComputeGateFirstDerivsTeam>(
+			              chunk_size, deriv_team_size, deriv_vector_length);
+			          Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstDerivsTeam>
+			              policy_gate_first_derivs(chunk_size, deriv_team_size, deriv_vector_length);
+			          const int deriv_scratch_size =
+			              scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+			          policy_gate_first_derivs =
+			              policy_gate_first_derivs.set_scratch_size(
+			                  0, Kokkos::PerTeam(deriv_scratch_size));
+			          Kokkos::parallel_for("ComputeGateFirstDerivs", policy_gate_first_derivs, *this);
+			          profile_end(prof_first_derivs);
+			        }
 			      }
 			      prof_first_chunks++;
 		      chunk_offset += chunk_size;
@@ -1698,9 +1913,14 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	    {
 	      const int nall = atom->nlocal + atom->nghost;
 	      const int mu_count = radial_func_count;
+	      const int stride = two_layer_gate_kk_signal_stride;
+	      const int body_combo = two_layer_gate_body_linear_combo ? 1 : 0;
+	      const int full_identity = two_layer_gate_kk_full_identity_signal;
 	      auto d_type = type;
 	      auto d_gate_values = d_two_layer_gate_values;
 	      auto d_additive_coeffs = d_two_layer_gate_additive_coeffs;
+	      auto d_body_mix_weights = d_two_layer_gate_body_mix_weights;
+	      auto d_full_signal_group = d_two_layer_gate_full_signal_group_for_mu;
 	      auto d_mu_multipliers = d_two_layer_gate_mu_multipliers;
 		      auto d_mu_derivs = d_two_layer_gate_mu_derivs;
 		      const F_FLOAT tanh_amplitude = two_layer_gate_tanh_amplitude;
@@ -1712,11 +1932,21 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	            const int atom_index = idx / mu_count;
 	            const int mu = idx - atom_index * mu_count;
 	            const int jtype = d_type(atom_index) - 1;
-	            const F_FLOAT residual =
-	                d_gate_values(atom_index) - static_cast<F_FLOAT>(1.0);
-	            const F_FLOAT additive_coeff =
-	                d_additive_coeffs(jtype * mu_count + mu);
-	            const F_FLOAT arg = additive_coeff * residual;
+	            F_FLOAT gate_signal = static_cast<F_FLOAT>(0.0);
+	            const size_t gate_offset = static_cast<size_t>(atom_index) * stride;
+	            if (body_combo) {
+	              const size_t weight_offset = static_cast<size_t>(mu) * stride;
+	              for (int s = 0; s < stride; s++)
+	                gate_signal += d_body_mix_weights(weight_offset + s) *
+	                               d_gate_values(gate_offset + s);
+	            } else if (full_identity) {
+	              gate_signal = d_gate_values(gate_offset + mu);
+	            } else {
+	              gate_signal =
+	                  d_gate_values(gate_offset + d_full_signal_group(mu));
+	            }
+	            const F_FLOAT additive_coeff = d_additive_coeffs(jtype);
+	            const F_FLOAT arg = additive_coeff * gate_signal;
 	            const F_FLOAT tanh_arg =
 	                (arg == static_cast<F_FLOAT>(0.0)) ? static_cast<F_FLOAT>(0.0)
 	                                                   : Kokkos::tanh(arg);
@@ -1756,11 +1986,13 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		      Kokkos::parallel_for("ComputeGateMainAlphaBasic", policy_gate_main, *this);
 		      profile_end(prof_main_basic);
 
-		      typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeAlphaTimes>
-		          policy_times(0, chunk_size);
-		      profile_begin();
-		      Kokkos::parallel_for("ComputeAlphaTimes", policy_times, *this);
-		      profile_end(prof_products);
+		      if (alpha_index_times_count > 0) {
+		        typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeAlphaTimes>
+		            policy_times(0, chunk_size);
+		        profile_begin();
+		        Kokkos::parallel_for("ComputeAlphaTimes", policy_times, *this);
+		        profile_end(prof_products);
+		      }
 
 		      typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeNbhDers>
 		          policy_nbh_calc(0, chunk_size);
@@ -1769,7 +2001,36 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		      profile_end(prof_nbh_der);
 
 				      profile_begin();
-		    if (evflag) {
+		      if (direct_gate_chain && eflag_global && !needs_gate_main_pair_tally) {
+		        double energy_tmp = 0.0;
+		        const int local_chunk_offset = chunk_offset;
+		        const int local_alpha_scalar_count = alpha_scalar_count;
+		        auto d_local_ilist = d_ilist;
+		        auto d_local_type = type;
+		        auto d_local_species_coeffs = d_species_coeffs;
+		        auto d_local_shift_coeffs = d_shift_coeffs;
+		        auto d_local_linear_coeffs = d_linear_coeffs;
+		        auto d_local_moment_tensor_vals = d_moment_tensor_vals;
+		        auto d_local_alpha_moment_mapping = d_alpha_moment_mapping;
+		        Kokkos::parallel_reduce(
+		            "ComputeGateEnergyOnly",
+		            typename Kokkos::RangePolicy<DeviceType>(0, chunk_size),
+		            KOKKOS_LAMBDA(const int ii, double &sum) {
+		              const int i = d_local_ilist(ii + local_chunk_offset);
+		              const int itype = d_local_type(i) - 1;
+		              double scalar_sum = 1.0;
+		              for (int k = 0; k < local_alpha_scalar_count; k++) {
+		                const int basis_member_index = d_local_alpha_moment_mapping(k);
+		                scalar_sum += d_local_linear_coeffs(k) *
+		                              d_local_moment_tensor_vals(ii, basis_member_index);
+		              }
+		              sum += d_local_species_coeffs(itype) * scalar_sum +
+		                     d_local_shift_coeffs(itype);
+		            },
+		            energy_tmp);
+		        ev.evdwl += energy_tmp;
+		      }
+		    if (needs_gate_main_pair_tally) {
 	        if (neighflag == HALF) {
 	          typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateMainForce<HALF, 1>>
 	              policy_force(0, chunk_size);
@@ -1781,30 +2042,57 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	        }
 	        ev += ev_tmp;
 	      } else {
+	        const bool use_local_gate_force =
+	            two_layer_gate_body_linear_combo &&
+	            two_layer_gate_kk_signal_stride <= kMaxGateSignalStrideKK;
 	        if (neighflag == HALF) {
 		          int force_team_size = team_size_default;
 		          const int force_vector_length = 1;
-	          check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALF>>(
-	              chunk_size, force_team_size, force_vector_length);
-	          Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<HALF>>
-	              policy_force(chunk_size, force_team_size, force_vector_length);
-	          const int force_scratch_size =
-	              scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
-	          policy_force = policy_force.set_scratch_size(
-	              0, Kokkos::PerTeam(force_scratch_size));
-	          Kokkos::parallel_for("ComputeGateMainForceTeam", policy_force, *this);
+	          if (use_local_gate_force) {
+	            check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALF, 1>>(
+	                chunk_size, force_team_size, force_vector_length);
+	            Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<HALF, 1>>
+	                policy_force(chunk_size, force_team_size, force_vector_length);
+	            const int force_scratch_size =
+	                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+	            policy_force = policy_force.set_scratch_size(
+	                0, Kokkos::PerTeam(force_scratch_size));
+	            Kokkos::parallel_for("ComputeGateMainForceTeamLocalAdjoint", policy_force, *this);
+	          } else {
+	            check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALF, 0>>(
+	                chunk_size, force_team_size, force_vector_length);
+	            Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<HALF, 0>>
+	                policy_force(chunk_size, force_team_size, force_vector_length);
+	            const int force_scratch_size =
+	                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+	            policy_force = policy_force.set_scratch_size(
+	                0, Kokkos::PerTeam(force_scratch_size));
+	            Kokkos::parallel_for("ComputeGateMainForceTeam", policy_force, *this);
+	          }
 	        } else if (neighflag == HALFTHREAD) {
 		          int force_team_size = team_size_default;
 		          const int force_vector_length = 1;
-	          check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD>>(
-	              chunk_size, force_team_size, force_vector_length);
-	          Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD>>
-	              policy_force(chunk_size, force_team_size, force_vector_length);
-	          const int force_scratch_size =
-	              scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
-	          policy_force = policy_force.set_scratch_size(
-	              0, Kokkos::PerTeam(force_scratch_size));
-	          Kokkos::parallel_for("ComputeGateMainForceTeam", policy_force, *this);
+	          if (use_local_gate_force) {
+	            check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD, 1>>(
+	                chunk_size, force_team_size, force_vector_length);
+	            Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD, 1>>
+	                policy_force(chunk_size, force_team_size, force_vector_length);
+	            const int force_scratch_size =
+	                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+	            policy_force = policy_force.set_scratch_size(
+	                0, Kokkos::PerTeam(force_scratch_size));
+	            Kokkos::parallel_for("ComputeGateMainForceTeamLocalAdjoint", policy_force, *this);
+	          } else {
+	            check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD, 0>>(
+	                chunk_size, force_team_size, force_vector_length);
+	            Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD, 0>>
+	                policy_force(chunk_size, force_team_size, force_vector_length);
+	            const int force_scratch_size =
+	                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+	            policy_force = policy_force.set_scratch_size(
+	                0, Kokkos::PerTeam(force_scratch_size));
+	            Kokkos::parallel_for("ComputeGateMainForceTeam", policy_force, *this);
+	          }
 	        }
 		      }
 		      profile_end(prof_main_force);
@@ -1817,7 +2105,179 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 			    profile_end(prof_reverse_comm);
 
 			    profile_begin();
-		    if (evflag) {
+		    if (direct_gate_chain) {
+		      chunk_size = MIN(input_chunk_size, inum);
+		      chunk_offset = 0;
+				      while (chunk_offset < inum) {
+				        if (chunk_size > inum - chunk_offset) chunk_size = inum - chunk_offset;
+				        Kokkos::deep_copy(d_nbh_energy_ders_wrt_moments,
+				                          nbh_der_buffer_value_type(0));
+				        if (use_gate_moment_cache) {
+				          const int local_chunk_offset = chunk_offset;
+				          const int local_alpha_moment_count = alpha_moment_count;
+				          auto d_local_ilist = d_ilist;
+			          auto d_local_moments = d_moment_tensor_vals;
+			          auto d_local_cache = d_two_layer_gate_cached_moment_vals;
+			          Kokkos::parallel_for(
+			              "LoadGateMomentCache",
+			              typename Kokkos::RangePolicy<DeviceType>(
+			                  0, chunk_size * local_alpha_moment_count),
+			              KOKKOS_LAMBDA(const int idx) {
+			                const int ii = idx / local_alpha_moment_count;
+			                const int k = idx - ii * local_alpha_moment_count;
+			                const int atom_index =
+			                    d_local_ilist(ii + local_chunk_offset);
+				                d_local_moments(ii, k) = d_local_cache(atom_index, k);
+				              });
+				        } else {
+				          Kokkos::deep_copy(d_moment_tensor_vals,
+				                            moment_buffer_value_type(0));
+				          int chain_alpha_team_size = alpha_basic_team_size;
+				          int chain_alpha_vector_length = alpha_basic_vector_length;
+				          check_team_size_for<TagPairSUS2MTPComputeGateFirstLayer>(
+				              chunk_size, chain_alpha_team_size,
+				              chain_alpha_vector_length);
+				          const int chain_radial_scratch_count = basic_mu_group_count;
+				          const int chain_alpha_scratch_size =
+				              scratch_size_helper<F_FLOAT>(
+				                  chain_alpha_team_size * chain_radial_scratch_count);
+				          Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstLayer>
+				              policy_gate_chain_first(chunk_size, chain_alpha_team_size,
+				                                      chain_alpha_vector_length);
+				          policy_gate_chain_first =
+				              policy_gate_chain_first.set_scratch_size(
+				                  0, Kokkos::PerTeam(chain_alpha_scratch_size));
+				          Kokkos::parallel_for("ComputeGateChainFirstLayer",
+				                               policy_gate_chain_first, *this);
+				          if (two_layer_gate_product_limit > 0) {
+				            typename Kokkos::RangePolicy<DeviceType,
+				                                         TagPairSUS2MTPComputeGateProducts>
+				                policy_gate_chain_products(0, chunk_size);
+				            Kokkos::parallel_for("ComputeGateChainProducts",
+				                                 policy_gate_chain_products, *this);
+				          }
+				        }
+
+				        const bool per_signal_direct_chain = false;
+		        if (per_signal_direct_chain) {
+		          for (int signal = 0; signal < two_layer_gate_kk_signal_stride; signal++) {
+		            two_layer_gate_kk_deriv_signal = signal;
+		            Kokkos::deep_copy(d_nbh_energy_ders_wrt_moments,
+		                              nbh_der_buffer_value_type(0));
+		            typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateSignalAdjointDers>
+		                policy_gate_signal_adjoint_ders(0, chunk_size);
+		            Kokkos::parallel_for("ComputeGateSignalAdjointDers",
+		                                 policy_gate_signal_adjoint_ders, *this);
+
+		            if (neighflag == HALF) {
+		              int chain_team_size = team_size_default;
+		              const int chain_vector_length = 1;
+		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0>>(
+		                  chunk_size, chain_team_size, chain_vector_length);
+		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0>>
+		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
+		              const int chain_scratch_size =
+		                  scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+		              policy_chain =
+		                  policy_chain.set_scratch_size(0, Kokkos::PerTeam(chain_scratch_size));
+		              Kokkos::parallel_for("ComputeGateChainForceDirectTeam",
+		                                   policy_chain, *this);
+		            } else if (neighflag == HALFTHREAD) {
+		              int chain_team_size = team_size_default;
+		              const int chain_vector_length = 1;
+		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0>>(
+		                  chunk_size, chain_team_size, chain_vector_length);
+		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0>>
+		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
+		              const int chain_scratch_size =
+		                  scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+		              policy_chain =
+		                  policy_chain.set_scratch_size(0, Kokkos::PerTeam(chain_scratch_size));
+		              Kokkos::parallel_for("ComputeGateChainForceDirectTeam",
+		                                   policy_chain, *this);
+		            }
+		          }
+		        } else {
+		          if (!two_layer_gate_body_linear_combo) {
+			          typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateFullScalarAdjoints>
+			              policy_gate_full_adjoints(
+			                  0, chunk_size * two_layer_gate_scalar_count);
+			          Kokkos::parallel_for("ComputeGateFullScalarAdjoints",
+			                               policy_gate_full_adjoints, *this);
+			          if (two_layer_gate_product_limit > 0) {
+			            typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateProductAdjoints>
+			                policy_gate_product_adjoints(0, chunk_size);
+			            Kokkos::parallel_for("ComputeGateProductAdjoints",
+			                                 policy_gate_product_adjoints, *this);
+			          }
+			        } else {
+			          typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateAdjointDers>
+			              policy_gate_adjoint_ders(0, chunk_size);
+		          Kokkos::parallel_for("ComputeGateAdjointDers",
+		                               policy_gate_adjoint_ders, *this);
+		          }
+
+		          if (neighflag == HALF) {
+		            int chain_team_size = team_size_default;
+		            const int chain_vector_length = 1;
+		            if (vflag_global)
+		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 1>>(
+		                  chunk_size, chain_team_size, chain_vector_length);
+		            else
+		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0>>(
+		                  chunk_size, chain_team_size, chain_vector_length);
+		            const int chain_scratch_size =
+		                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+		            if (vflag_global) {
+		              EV_FLOAT ev_tmp;
+		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 1>>
+		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
+		              policy_chain =
+		                  policy_chain.set_scratch_size(0, Kokkos::PerTeam(chain_scratch_size));
+		              Kokkos::parallel_reduce("ComputeGateChainForceDirectTeamEV",
+		                                      policy_chain, *this, ev_tmp);
+		              ev += ev_tmp;
+		            } else {
+		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0>>
+		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
+		              policy_chain =
+		                  policy_chain.set_scratch_size(0, Kokkos::PerTeam(chain_scratch_size));
+		              Kokkos::parallel_for("ComputeGateChainForceDirectTeam",
+		                                   policy_chain, *this);
+		            }
+		          } else if (neighflag == HALFTHREAD) {
+		            int chain_team_size = team_size_default;
+		            const int chain_vector_length = 1;
+		            if (vflag_global)
+		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 1>>(
+		                  chunk_size, chain_team_size, chain_vector_length);
+		            else
+		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0>>(
+		                  chunk_size, chain_team_size, chain_vector_length);
+		            const int chain_scratch_size =
+		                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+		            if (vflag_global) {
+		              EV_FLOAT ev_tmp;
+		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 1>>
+		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
+		              policy_chain =
+		                  policy_chain.set_scratch_size(0, Kokkos::PerTeam(chain_scratch_size));
+		              Kokkos::parallel_reduce("ComputeGateChainForceDirectTeamEV",
+		                                      policy_chain, *this, ev_tmp);
+		              ev += ev_tmp;
+		            } else {
+		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0>>
+		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
+		              policy_chain =
+		                  policy_chain.set_scratch_size(0, Kokkos::PerTeam(chain_scratch_size));
+		              Kokkos::parallel_for("ComputeGateChainForceDirectTeam",
+		                                   policy_chain, *this);
+		            }
+		          }
+		        }
+		        chunk_offset += chunk_size;
+		      }
+		    } else if (evflag) {
 	      EV_FLOAT ev_tmp;
 	      if (neighflag == HALF) {
 	        typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeGateChainForce<HALF, 1>>
@@ -1896,11 +2356,13 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 
 	      // ========== Calculate the non-elementary alphas  ==========
 	      {
-		        typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeAlphaTimes> policy_times(
-		            0, chunk_size);
-		        profile_begin();
-		        Kokkos::parallel_for("ComputeAlphaTimes", policy_times, *this);
-		        profile_end(prof_products);
+		        if (alpha_index_times_count > 0) {
+		          typename Kokkos::RangePolicy<DeviceType, TagPairSUS2MTPComputeAlphaTimes> policy_times(
+		              0, chunk_size);
+		          profile_begin();
+		          Kokkos::parallel_for("ComputeAlphaTimes", policy_times, *this);
+		          profile_end(prof_products);
+		        }
 		      }
 	      trace_kokkos_moments("after_products");
 	      // ========== Calc the nbh ders wrt moments ==========
@@ -2076,21 +2538,32 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(TagPairSUS
 	    TagPairSUS2MTPPackForwardComm, const int &ii) const
 	{
 	  const int j = d_sendlist(ii);
-	  v_buf(ii) = d_two_layer_gate_values(j);
+	  const int stride = two_layer_gate_kk_signal_stride;
+	  for (int s = 0; s < stride; s++)
+	    v_buf(ii * stride + s) =
+	        d_two_layer_gate_values(static_cast<size_t>(j) * stride + s);
 	}
 
 	template <class DeviceType>
 	KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	    TagPairSUS2MTPUnpackForwardComm, const int &ii) const
 	{
-	  d_two_layer_gate_values(first + ii) = v_buf(ii);
+	  const int stride = two_layer_gate_kk_signal_stride;
+	  const int dst = first + ii;
+	  for (int s = 0; s < stride; s++)
+	    d_two_layer_gate_values(static_cast<size_t>(dst) * stride + s) =
+	        v_buf(ii * stride + s);
 	}
 
 	template <class DeviceType>
 	KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	    TagPairSUS2MTPPackReverseComm, const int &ii) const
 	{
-	  v_buf(ii) = d_two_layer_gate_adjoints(first + ii);
+	  const int stride = two_layer_gate_kk_signal_stride;
+	  const int src = first + ii;
+	  for (int s = 0; s < stride; s++)
+	    v_buf(ii * stride + s) =
+	        d_two_layer_gate_adjoints(static_cast<size_t>(src) * stride + s);
 	}
 
 	template <class DeviceType>
@@ -2098,7 +2571,11 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(TagPairSUS
 	    TagPairSUS2MTPUnpackReverseComm, const int &ii) const
 	{
 	  const int j = d_sendlist(ii);
-	  Kokkos::atomic_add(&d_two_layer_gate_adjoints(j), v_buf(ii));
+	  const int stride = two_layer_gate_kk_signal_stride;
+	  for (int s = 0; s < stride; s++)
+	    Kokkos::atomic_add(
+	        &d_two_layer_gate_adjoints(static_cast<size_t>(j) * stride + s),
+	        v_buf(ii * stride + s));
 	}
 
 	template <class DeviceType>
@@ -2210,9 +2687,40 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	}
 
 	template <class DeviceType>
-	KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
-	    TagPairSUS2MTPComputeGateFirstFinalize, const int &ii) const
-	{
+		KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
+		    TagPairSUS2MTPComputeGateProducts, const int &ii) const
+		{
+		  for (int k = 0; k < two_layer_gate_product_limit; k++) {
+		    const int a0 = d_alpha_index_times(k, 0);
+	    const int a1 = d_alpha_index_times(k, 1);
+	    const F_FLOAT mult = d_alpha_times_coeff(k);
+	    const int out = d_alpha_index_times(k, 3);
+	    d_moment_tensor_vals(ii, out) +=
+		        mult * d_moment_tensor_vals(ii, a0) * d_moment_tensor_vals(ii, a1);
+		  }
+		}
+
+		template <class DeviceType>
+		KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
+		    TagPairSUS2MTPComputeGateProductAdjoints, const int &ii) const
+		{
+		  for (int k = two_layer_gate_product_limit - 1; k >= 0; k--) {
+		    const int a0 = d_alpha_index_times(k, 0);
+		    const int a1 = d_alpha_index_times(k, 1);
+		    const F_FLOAT mult = d_alpha_times_coeff(k);
+		    const int out = d_alpha_index_times(k, 3);
+		    const F_FLOAT adj = d_nbh_energy_ders_wrt_moments(ii, out);
+		    d_nbh_energy_ders_wrt_moments(ii, a1) +=
+		        adj * mult * d_moment_tensor_vals(ii, a0);
+		    d_nbh_energy_ders_wrt_moments(ii, a0) +=
+		        adj * mult * d_moment_tensor_vals(ii, a1);
+		  }
+		}
+
+		template <class DeviceType>
+		KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
+		    TagPairSUS2MTPComputeGateFirstFinalize, const int &ii) const
+		{
 	  const int ilist_index = ii + chunk_offset;
 	  const int i = d_ilist[ilist_index];
 
@@ -2225,15 +2733,74 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	        mult * d_moment_tensor_vals(ii, a0) * d_moment_tensor_vals(ii, a1);
 	  }
 
-	  F_FLOAT gate_delta = 0.0;
-	  for (int q = 0; q < two_layer_gate_weight_count; q++)
-	    gate_delta += d_two_layer_gate_weights(q) *
-	                  d_moment_tensor_vals(ii, d_two_layer_gate_weight_moment_indices(q));
-	  d_two_layer_gate_values(i) = static_cast<F_FLOAT>(1.0) + gate_delta;
+	  const int stride = two_layer_gate_kk_signal_stride;
+	  const size_t gate_offset = static_cast<size_t>(i) * stride;
+	  for (int s = 0; s < stride; s++)
+	    d_two_layer_gate_values(gate_offset + s) = static_cast<F_FLOAT>(0.0);
 
-	  for (int q = 0; q < two_layer_gate_weight_count; q++)
-	    d_nbh_energy_ders_wrt_moments(ii, d_two_layer_gate_weight_moment_indices(q)) +=
-	        d_two_layer_gate_weights(q);
+		  if (two_layer_gate_body_linear_combo) {
+		    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+		      const int signal = d_two_layer_gate_scalar_signal_index(q);
+		      if (signal < 0 || signal >= stride) continue;
+		      d_two_layer_gate_values(gate_offset + signal) +=
+		          d_two_layer_gate_weights(q) *
+		          d_moment_tensor_vals(ii, d_two_layer_gate_weight_moment_indices(q));
+		    }
+	  } else {
+	    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+	      const F_FLOAT scalar =
+	          d_moment_tensor_vals(ii, d_two_layer_gate_weight_moment_indices(q));
+	      for (int s = 0; s < stride; s++)
+	        d_two_layer_gate_values(gate_offset + s) +=
+	            scalar * d_two_layer_gate_full_weights_by_scalar(q, s);
+	    }
+		  }
+		}
+
+		template <class DeviceType>
+		KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
+		    TagPairSUS2MTPComputeGateFullForward, const int &idx) const
+		{
+		  const int stride = two_layer_gate_kk_signal_stride;
+		  const int ii = idx / stride;
+		  const int s = idx - ii * stride;
+		  const int ilist_index = ii + chunk_offset;
+		  const int i = d_ilist[ilist_index];
+		  const size_t gate_offset = static_cast<size_t>(i) * stride;
+		  F_FLOAT signal = static_cast<F_FLOAT>(0.0);
+		  for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+		    signal +=
+		        d_moment_tensor_vals(ii, d_two_layer_gate_weight_moment_indices(q)) *
+		        d_two_layer_gate_full_weights_by_signal(s, q);
+		  }
+		  d_two_layer_gate_values(gate_offset + s) = signal;
+		}
+
+	template <class DeviceType>
+	KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
+	    TagPairSUS2MTPComputeGateSignalDers, const int &ii) const
+	{
+	  const int signal = two_layer_gate_kk_deriv_signal;
+	  if (signal < 0 || signal >= two_layer_gate_kk_signal_stride) return;
+
+		  if (two_layer_gate_body_linear_combo) {
+		    const int body_bucket = two_layer_gate_kk_compact_body_signal
+		        ? d_two_layer_gate_body_signal_buckets(signal) : signal;
+	    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+	      if (d_two_layer_gate_scalar_body_bucket(q) != body_bucket) continue;
+	      d_nbh_energy_ders_wrt_moments(
+	          ii, d_two_layer_gate_weight_moment_indices(q)) +=
+	          d_two_layer_gate_weights(q);
+	    }
+	  } else {
+	    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+	      const F_FLOAT coeff = d_two_layer_gate_full_weights_by_scalar(q, signal);
+	      if (coeff == static_cast<F_FLOAT>(0.0)) continue;
+	      d_nbh_energy_ders_wrt_moments(
+	          ii, d_two_layer_gate_weight_moment_indices(q)) += coeff;
+	    }
+	  }
+
 	  for (int k = two_layer_gate_product_limit - 1; k >= 0; k--) {
 	    const int a0 = d_alpha_index_times(k, 0);
 	    const int a1 = d_alpha_index_times(k, 1);
@@ -2249,6 +2816,119 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 
 	template <class DeviceType>
 	KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
+	    TagPairSUS2MTPComputeGateSignalAdjointDers, const int &ii) const
+	{
+	  const int signal = two_layer_gate_kk_deriv_signal;
+	  const int stride = two_layer_gate_kk_signal_stride;
+	  if (signal < 0 || signal >= stride) return;
+
+	  const int ilist_index = ii + chunk_offset;
+	  const int i = d_ilist[ilist_index];
+	  const F_FLOAT signal_adj =
+	      d_two_layer_gate_adjoints(static_cast<size_t>(i) * stride + signal);
+	  if (signal_adj == static_cast<F_FLOAT>(0.0)) return;
+
+	  if (two_layer_gate_body_linear_combo) {
+	    const int body_bucket = two_layer_gate_kk_compact_body_signal
+	        ? d_two_layer_gate_body_signal_buckets(signal) : signal;
+	    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+	      if (d_two_layer_gate_scalar_body_bucket(q) != body_bucket) continue;
+	      d_nbh_energy_ders_wrt_moments(
+	          ii, d_two_layer_gate_weight_moment_indices(q)) +=
+	          signal_adj * d_two_layer_gate_weights(q);
+	    }
+	  } else {
+	    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+	      const F_FLOAT coeff = d_two_layer_gate_full_weights_by_scalar(q, signal);
+	      if (coeff == static_cast<F_FLOAT>(0.0)) continue;
+	      d_nbh_energy_ders_wrt_moments(
+	          ii, d_two_layer_gate_weight_moment_indices(q)) +=
+	          signal_adj * coeff;
+	    }
+	  }
+
+	  for (int k = two_layer_gate_product_limit - 1; k >= 0; k--) {
+	    const int a0 = d_alpha_index_times(k, 0);
+	    const int a1 = d_alpha_index_times(k, 1);
+	    const F_FLOAT mult = d_alpha_times_coeff(k);
+	    const int out = d_alpha_index_times(k, 3);
+	    const F_FLOAT adj = d_nbh_energy_ders_wrt_moments(ii, out);
+	    d_nbh_energy_ders_wrt_moments(ii, a1) +=
+	        adj * mult * d_moment_tensor_vals(ii, a0);
+	    d_nbh_energy_ders_wrt_moments(ii, a0) +=
+	        adj * mult * d_moment_tensor_vals(ii, a1);
+	  }
+	}
+
+	template <class DeviceType>
+	KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
+	    TagPairSUS2MTPComputeGateAdjointDers, const int &ii) const
+	{
+	  const int ilist_index = ii + chunk_offset;
+	  const int i = d_ilist[ilist_index];
+	  const int stride = two_layer_gate_kk_signal_stride;
+	  const size_t adjoint_offset = static_cast<size_t>(i) * stride;
+
+		  if (two_layer_gate_body_linear_combo) {
+		    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+		      const int signal = d_two_layer_gate_scalar_signal_index(q);
+		      if (signal < 0 || signal >= stride) continue;
+		      const F_FLOAT adj = d_two_layer_gate_adjoints(adjoint_offset + signal);
+		      if (adj == static_cast<F_FLOAT>(0.0)) continue;
+	      d_nbh_energy_ders_wrt_moments(
+	          ii, d_two_layer_gate_weight_moment_indices(q)) +=
+	          adj * d_two_layer_gate_weights(q);
+	    }
+	  } else {
+	    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+	      F_FLOAT scalar_adj = static_cast<F_FLOAT>(0.0);
+	      for (int s = 0; s < stride; s++) {
+	        const F_FLOAT adj = d_two_layer_gate_adjoints(adjoint_offset + s);
+	        if (adj != static_cast<F_FLOAT>(0.0))
+	          scalar_adj += adj * d_two_layer_gate_full_weights_by_scalar(q, s);
+	      }
+	      if (scalar_adj == static_cast<F_FLOAT>(0.0)) continue;
+	      d_nbh_energy_ders_wrt_moments(
+	          ii, d_two_layer_gate_weight_moment_indices(q)) += scalar_adj;
+	    }
+	  }
+
+	  for (int k = two_layer_gate_product_limit - 1; k >= 0; k--) {
+	    const int a0 = d_alpha_index_times(k, 0);
+	    const int a1 = d_alpha_index_times(k, 1);
+	    const F_FLOAT mult = d_alpha_times_coeff(k);
+	    const int out = d_alpha_index_times(k, 3);
+	    const F_FLOAT adj = d_nbh_energy_ders_wrt_moments(ii, out);
+	    d_nbh_energy_ders_wrt_moments(ii, a1) +=
+	        adj * mult * d_moment_tensor_vals(ii, a0);
+	    d_nbh_energy_ders_wrt_moments(ii, a0) +=
+	        adj * mult * d_moment_tensor_vals(ii, a1);
+	  }
+		}
+
+		template <class DeviceType>
+		KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
+		    TagPairSUS2MTPComputeGateFullScalarAdjoints, const int &idx) const
+		{
+		  const int q = idx % two_layer_gate_scalar_count;
+		  const int ii = idx / two_layer_gate_scalar_count;
+		  const int ilist_index = ii + chunk_offset;
+		  const int i = d_ilist[ilist_index];
+		  const int stride = two_layer_gate_kk_signal_stride;
+		  const size_t adjoint_offset = static_cast<size_t>(i) * stride;
+		    F_FLOAT scalar_adj = static_cast<F_FLOAT>(0.0);
+		    for (int s = 0; s < stride; s++) {
+		      const F_FLOAT adj = d_two_layer_gate_adjoints(adjoint_offset + s);
+		      if (adj != static_cast<F_FLOAT>(0.0))
+		        scalar_adj += adj * d_two_layer_gate_full_weights_by_scalar(q, s);
+		    }
+		    if (scalar_adj != static_cast<F_FLOAT>(0.0))
+		      d_nbh_energy_ders_wrt_moments(
+		          ii, d_two_layer_gate_weight_moment_indices(q)) += scalar_adj;
+		}
+
+	template <class DeviceType>
+	KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	    TagPairSUS2MTPComputeGateFirstDerivs, const int &ii) const
 	{
 	  const int ilist_index = ii + chunk_offset;
@@ -2256,11 +2936,12 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	  const F_FLOAT xi[3] = {x(i, 0), x(i, 1), x(i, 2)};
 	  const int itype = type[i] - 1;
 	  const int jnum = d_numneigh(i);
+	  const int deriv_offset = 3 * two_layer_gate_kk_deriv_signal;
 
 	  for (int jj = 0; jj < jnum; jj++) {
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 0) = 0.0;
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 1) = 0.0;
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 2) = 0.0;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 0) = 0.0;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 1) = 0.0;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 2) = 0.0;
 	    const int j = d_neighbors(i, jj) & NEIGHMASK;
 	    const int jtype = type[j] - 1;
 	    const F_FLOAT r[3] = {x(j, 0) - xi[0], x(j, 1) - xi[1], x(j, 2) - xi[2]};
@@ -2366,9 +3047,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 		        }
 		      }
 		    }
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 0) = gx;
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 1) = gy;
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 2) = gz;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 0) = gx;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 1) = gy;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 2) = gz;
 	  }
 	}
 
@@ -2384,6 +3065,7 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	  const F_FLOAT xi[3] = {x(i, 0), x(i, 1), x(i, 2)};
 	  const int itype = type[i] - 1;
 	  const int jnum = d_numneigh(i);
+	  const int deriv_offset = 3 * two_layer_gate_kk_deriv_signal;
 
 	  shared_double_1d s_basic_coeffs(team.team_scratch(0), alpha_index_basic_count);
 	  if (is_sh_model) {
@@ -2395,9 +3077,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	  }
 
 	  Kokkos::parallel_for(Kokkos::TeamThreadRange(team, jnum), [&](const int jj) {
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 0) = 0.0;
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 1) = 0.0;
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 2) = 0.0;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 0) = 0.0;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 1) = 0.0;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 2) = 0.0;
 	    const int j = d_neighbors(i, jj) & NEIGHMASK;
 	    const int jtype = type[j] - 1;
 	    const F_FLOAT r[3] = {x(j, 0) - xi[0], x(j, 1) - xi[1], x(j, 2) - xi[2]};
@@ -2522,9 +3204,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	      }
 	    }
 
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 0) = gx;
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 1) = gy;
-	    d_two_layer_gate_first_derivs(ilist_index, jj, 2) = gz;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 0) = gx;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 1) = gy;
+	    d_two_layer_gate_first_derivs(ilist_index, jj, deriv_offset + 2) = gz;
 	  });
 	}
 
@@ -2844,7 +3526,6 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	    }
 
 	    F_FLOAT temp_force[3] = {0.0, 0.0, 0.0};
-	    F_FLOAT gate_adjoint = 0.0;
 	    F_FLOAT sh_values[kMaxSHComponentsKK];
 	    F_FLOAT sh_ders[3 * kMaxSHComponentsKK];
 	    if (is_sh_model)
@@ -2867,6 +3548,7 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	      const F_FLOAT val = base_val * gate_multiplier;
 	      const F_FLOAT der = base_der * gate_multiplier;
 	      const F_FLOAT gate_residual_val = base_val * gate_deriv;
+	      F_FLOAT gate_adjoint_mu = static_cast<F_FLOAT>(0.0);
 
 	      if (is_sh_model) {
 	        F_FLOAT dot_y = 0.0;
@@ -2887,7 +3569,7 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	        temp_force[0] += radial_der_pref * r[0] * dot_y + val * dot_d0;
 	        temp_force[1] += radial_der_pref * r[1] * dot_y + val * dot_d1;
 	        temp_force[2] += radial_der_pref * r[2] * dot_y + val * dot_d2;
-	        gate_adjoint += gate_residual_val * dot_y;
+	        gate_adjoint_mu += gate_residual_val * dot_y;
 	      } else {
 	        for (int grouped_idx = d_basic_mu_offsets(mu_group);
 	             grouped_idx < d_basic_mu_offsets(mu_group + 1); grouped_idx++) {
@@ -2923,12 +3605,12 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	          temp_force[0] += coeff * jac0;
 	          temp_force[1] += coeff * jac1;
 	          temp_force[2] += coeff * jac2;
-	          gate_adjoint += coeff * gate_raw;
+	          gate_adjoint_mu += coeff * gate_raw;
 	        }
 	      }
+	      accumulate_two_layer_gate_mu_adjoint_kk(j, mu, gate_adjoint_mu);
 	    }
 
-	    Kokkos::atomic_add(&d_two_layer_gate_adjoints(j), gate_adjoint);
 	    a_f(i, 0) += temp_force[0];
 	    a_f(i, 1) += temp_force[1];
 	    a_f(i, 2) += temp_force[2];
@@ -2954,11 +3636,11 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	}
 
 template <class DeviceType>
-template <int NEIGHFLAG>
+template <int NEIGHFLAG, int LOCAL_GATE_ADJOINTS>
 KOKKOS_INLINE_FUNCTION void
 PairSUS2MTPKokkos<DeviceType>::operator()(
-    TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG>,
-    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG>>::member_type
+    TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS>,
+    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS>>::member_type
         &team) const
 {
   auto v_f =
@@ -3012,12 +3694,18 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
 	      }
 	    }
 	    F_FLOAT temp_force[3] = {0.0, 0.0, 0.0};
-    F_FLOAT gate_adjoint = 0.0;
     F_FLOAT sh_values[kMaxSHComponentsKK];
     F_FLOAT sh_ders[3 * kMaxSHComponentsKK];
     if (is_sh_model)
       eval_real_sh_kk(r, static_cast<F_FLOAT>(1.0) / dist, sh_l_max,
                       sh_values, sh_ders);
+
+    const int gate_stride = two_layer_gate_kk_signal_stride;
+    F_FLOAT gate_signal_adjoints[LOCAL_GATE_ADJOINTS ? kMaxGateSignalStrideKK : 1];
+    if constexpr (LOCAL_GATE_ADJOINTS) {
+      for (int s = 0; s < kMaxGateSignalStrideKK; s++)
+        gate_signal_adjoints[s] = static_cast<F_FLOAT>(0.0);
+    }
 
 	    for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
 	      F_FLOAT base_val = static_cast<F_FLOAT>(0.0);
@@ -3035,6 +3723,7 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
 	      const F_FLOAT val = base_val * gate_multiplier;
 	      const F_FLOAT der = base_der * gate_multiplier;
 	      const F_FLOAT gate_residual_val = base_val * gate_deriv;
+	      F_FLOAT gate_adjoint_mu = static_cast<F_FLOAT>(0.0);
 	      if (is_sh_model) {
         F_FLOAT dot_y = 0.0;
         F_FLOAT dot_d0 = 0.0;
@@ -3054,7 +3743,7 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
         temp_force[0] += radial_der_pref * r[0] * dot_y + val * dot_d0;
         temp_force[1] += radial_der_pref * r[1] * dot_y + val * dot_d1;
         temp_force[2] += radial_der_pref * r[2] * dot_y + val * dot_d2;
-        gate_adjoint += gate_residual_val * dot_y;
+        gate_adjoint_mu += gate_residual_val * dot_y;
       } else {
         for (int grouped_idx = d_basic_mu_offsets(mu_group);
              grouped_idx < d_basic_mu_offsets(mu_group + 1); grouped_idx++) {
@@ -3090,12 +3779,28 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
           temp_force[0] += coeff * jac0;
           temp_force[1] += coeff * jac1;
           temp_force[2] += coeff * jac2;
-	          gate_adjoint += coeff * gate_raw;
+	          gate_adjoint_mu += coeff * gate_raw;
 	        }
 	      }
+      if constexpr (LOCAL_GATE_ADJOINTS) {
+        const size_t weight_offset = static_cast<size_t>(mu) * gate_stride;
+        for (int s = 0; s < gate_stride; s++)
+          gate_signal_adjoints[s] +=
+              gate_adjoint_mu * d_two_layer_gate_body_mix_weights(weight_offset + s);
+      } else {
+        accumulate_two_layer_gate_mu_adjoint_kk(j, mu, gate_adjoint_mu);
+      }
 	    }
 
-	    Kokkos::atomic_add(&d_two_layer_gate_adjoints(j), gate_adjoint);
+    if constexpr (LOCAL_GATE_ADJOINTS) {
+      const size_t adjoint_offset = static_cast<size_t>(j) * gate_stride;
+      for (int s = 0; s < gate_stride; s++) {
+        const F_FLOAT adj = gate_signal_adjoints[s];
+        if (adj != static_cast<F_FLOAT>(0.0))
+          Kokkos::atomic_add(&d_two_layer_gate_adjoints(adjoint_offset + s), adj);
+      }
+    }
+
 	    sum_fx += temp_force[0];
     sum_fy += temp_force[1];
     sum_fz += temp_force[2];
@@ -3336,17 +4041,25 @@ KOKKOS_INLINE_FUNCTION void
 	          dup_f, ndup_f);
 	  auto a_f = v_f.template access<AtomicDup_v<NEIGHFLAG, DeviceType>>();
 	  const int i = d_ilist[ii];
-	  const F_FLOAT gate_adjoint_center = d_two_layer_gate_adjoints(i);
-	  if (gate_adjoint_center == static_cast<F_FLOAT>(0.0)) return;
+	  const int stride = two_layer_gate_kk_signal_stride;
+	  const size_t adjoint_offset = static_cast<size_t>(i) * stride;
 	  const int jnum = d_numneigh(i);
 	  const F_FLOAT xi[3] = {x(i, 0), x(i, 1), x(i, 2)};
 	  const bool need_virial_tally = EVFLAG && (vflag_global || vflag_atom || cvflag_atom);
 
 	  for (int jj = 0; jj < jnum; jj++) {
 	    const int j = d_neighbors(i, jj) & NEIGHMASK;
-	    const F_FLOAT fx = gate_adjoint_center * d_two_layer_gate_first_derivs(ii, jj, 0);
-	    const F_FLOAT fy = gate_adjoint_center * d_two_layer_gate_first_derivs(ii, jj, 1);
-	    const F_FLOAT fz = gate_adjoint_center * d_two_layer_gate_first_derivs(ii, jj, 2);
+	    F_FLOAT fx = static_cast<F_FLOAT>(0.0);
+	    F_FLOAT fy = static_cast<F_FLOAT>(0.0);
+	    F_FLOAT fz = static_cast<F_FLOAT>(0.0);
+	    for (int s = 0; s < stride; s++) {
+	      const F_FLOAT adj = d_two_layer_gate_adjoints(adjoint_offset + s);
+	      if (adj == static_cast<F_FLOAT>(0.0)) continue;
+	      const int deriv_offset = 3 * s;
+	      fx += adj * d_two_layer_gate_first_derivs(ii, jj, deriv_offset + 0);
+	      fy += adj * d_two_layer_gate_first_derivs(ii, jj, deriv_offset + 1);
+	      fz += adj * d_two_layer_gate_first_derivs(ii, jj, deriv_offset + 2);
+	    }
 	    if (fx == static_cast<F_FLOAT>(0.0) &&
 	        fy == static_cast<F_FLOAT>(0.0) &&
 	        fz == static_cast<F_FLOAT>(0.0))
@@ -3389,20 +4102,28 @@ KOKKOS_INLINE_FUNCTION void
 
 	  const int ii = team.league_rank();
 	  const int i = d_ilist[ii];
-	  const F_FLOAT gate_adjoint_center = d_two_layer_gate_adjoints(i);
+	  const int stride = two_layer_gate_kk_signal_stride;
+	  const size_t adjoint_offset = static_cast<size_t>(i) * stride;
 	  const int jnum = d_numneigh(i);
 
 	  F_FLOAT center_fx = static_cast<F_FLOAT>(0.0);
 	  F_FLOAT center_fy = static_cast<F_FLOAT>(0.0);
 	  F_FLOAT center_fz = static_cast<F_FLOAT>(0.0);
-	  if (gate_adjoint_center != static_cast<F_FLOAT>(0.0)) {
 	    Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, jnum),
 	                            [&](const int jj, F_FLOAT &sum_fx, F_FLOAT &sum_fy,
 	                                F_FLOAT &sum_fz) {
 	      const int j = d_neighbors(i, jj) & NEIGHMASK;
-	      const F_FLOAT fx = gate_adjoint_center * d_two_layer_gate_first_derivs(ii, jj, 0);
-	      const F_FLOAT fy = gate_adjoint_center * d_two_layer_gate_first_derivs(ii, jj, 1);
-	      const F_FLOAT fz = gate_adjoint_center * d_two_layer_gate_first_derivs(ii, jj, 2);
+	      F_FLOAT fx = static_cast<F_FLOAT>(0.0);
+	      F_FLOAT fy = static_cast<F_FLOAT>(0.0);
+	      F_FLOAT fz = static_cast<F_FLOAT>(0.0);
+	      for (int s = 0; s < stride; s++) {
+	        const F_FLOAT adj = d_two_layer_gate_adjoints(adjoint_offset + s);
+	        if (adj == static_cast<F_FLOAT>(0.0)) continue;
+	        const int deriv_offset = 3 * s;
+	        fx += adj * d_two_layer_gate_first_derivs(ii, jj, deriv_offset + 0);
+	        fy += adj * d_two_layer_gate_first_derivs(ii, jj, deriv_offset + 1);
+	        fz += adj * d_two_layer_gate_first_derivs(ii, jj, deriv_offset + 2);
+	      }
 	      if (fx == static_cast<F_FLOAT>(0.0) &&
 	          fy == static_cast<F_FLOAT>(0.0) &&
 	          fz == static_cast<F_FLOAT>(0.0))
@@ -3414,13 +4135,233 @@ KOKKOS_INLINE_FUNCTION void
 	      a_f(j, 1) -= fy;
 	      a_f(j, 2) -= fz;
 	    }, center_fx, center_fy, center_fz);
-	  }
 
 	  Kokkos::single(Kokkos::PerTeam(team), [&]() {
 	    a_f(i, 0) += center_fx;
 	    a_f(i, 1) += center_fy;
 	    a_f(i, 2) += center_fz;
 	  });
+	}
+
+template <class DeviceType>
+template <int NEIGHFLAG, int EVFLAG>
+KOKKOS_INLINE_FUNCTION void
+	PairSUS2MTPKokkos<DeviceType>::operator()(
+	    TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>,
+	    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>>::member_type
+	        &team,
+	    EV_FLOAT &ev) const
+	{
+	  auto v_f =
+	      ScatterViewHelper<NeedDup_v<NEIGHFLAG, DeviceType>, decltype(dup_f), decltype(ndup_f)>::get(
+	          dup_f, ndup_f);
+	  auto a_f = v_f.template access<AtomicDup_v<NEIGHFLAG, DeviceType>>();
+
+	  const int ii = team.league_rank();
+	  const int ilist_index = ii + chunk_offset;
+	  const int i = d_ilist[ilist_index];
+	  const F_FLOAT xi[3] = {x(i, 0), x(i, 1), x(i, 2)};
+	  const int itype = type[i] - 1;
+	  const int jnum = d_numneigh(i);
+
+	  shared_double_1d s_basic_coeffs(team.team_scratch(0), alpha_index_basic_count);
+	  if (is_sh_model) {
+	    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, alpha_index_basic_count),
+	                         [&](const int k) {
+	      s_basic_coeffs(k) = d_nbh_energy_ders_wrt_moments(ii, k);
+	    });
+	    team.team_barrier();
+	  }
+
+	  F_FLOAT center_fx = static_cast<F_FLOAT>(0.0);
+	  F_FLOAT center_fy = static_cast<F_FLOAT>(0.0);
+	  F_FLOAT center_fz = static_cast<F_FLOAT>(0.0);
+	  F_FLOAT vir0 = static_cast<F_FLOAT>(0.0);
+	  F_FLOAT vir1 = static_cast<F_FLOAT>(0.0);
+	  F_FLOAT vir2 = static_cast<F_FLOAT>(0.0);
+	  F_FLOAT vir3 = static_cast<F_FLOAT>(0.0);
+	  F_FLOAT vir4 = static_cast<F_FLOAT>(0.0);
+	  F_FLOAT vir5 = static_cast<F_FLOAT>(0.0);
+	  Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, jnum),
+	                          [&](const int jj, F_FLOAT &sum_fx, F_FLOAT &sum_fy,
+	                              F_FLOAT &sum_fz, F_FLOAT &sum_v0,
+	                              F_FLOAT &sum_v1, F_FLOAT &sum_v2,
+	                              F_FLOAT &sum_v3, F_FLOAT &sum_v4,
+	                              F_FLOAT &sum_v5) {
+	    const int j = d_neighbors(i, jj) & NEIGHMASK;
+	    const int jtype = type[j] - 1;
+	    const F_FLOAT r[3] = {x(j, 0) - xi[0], x(j, 1) - xi[1], x(j, 2) - xi[2]};
+	    const F_FLOAT rsq = Kokkos::fma(r[0], r[0], Kokkos::fma(r[1], r[1], r[2] * r[2]));
+	    if (rsq <= static_cast<F_FLOAT>(0.0) || rsq >= max_cutoff_sq) return;
+	    const F_FLOAT dist = Kokkos::sqrt(rsq);
+
+	    int table_index = -1;
+	    int r_list = 0;
+	    int r_next = 0;
+	    F_FLOAT ddr = 0.0;
+	    if (do_list && d_two_layer_gate_radial_list.extent(0) > 0) {
+	      r_list = (int) Kokkos::floor(dist * inv_dr);
+	      const int last_interval = list_grid_size - 2;
+	      if (r_list < 0) r_list = 0;
+	      if (r_list > last_interval) r_list = last_interval;
+	      r_next = r_list + 1;
+	      const int shift = itype * species_count + jtype;
+	      table_index = d_pair_to_table_index(shift);
+	      if (table_index >= 0) {
+	        ddr = dist * inv_dr - r_list;
+	        if (ddr < 0.0) ddr = 0.0;
+	        if (ddr > 1.0) ddr = 1.0;
+	      }
+	    }
+
+	    F_FLOAT gx = static_cast<F_FLOAT>(0.0);
+	    F_FLOAT gy = static_cast<F_FLOAT>(0.0);
+	    F_FLOAT gz = static_cast<F_FLOAT>(0.0);
+	    F_FLOAT sh_values[kMaxSHComponentsKK];
+	    F_FLOAT sh_ders[3 * kMaxSHComponentsKK];
+	    if (is_sh_model)
+	      eval_real_sh_kk(r, static_cast<F_FLOAT>(1.0) / dist, sh_l_max,
+	                      sh_values, sh_ders);
+
+	    if (is_sh_model) {
+	      for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
+	        F_FLOAT val = static_cast<F_FLOAT>(0.0);
+	        F_FLOAT der = static_cast<F_FLOAT>(0.0);
+	        if (table_index >= 0) {
+	          const F_FLOAT v1 =
+	              d_two_layer_gate_radial_list(table_index, r_list, mu_group);
+	          const F_FLOAT v2 =
+	              d_two_layer_gate_radial_list(table_index, r_next, mu_group);
+	          const F_FLOAT d1 =
+	              d_two_layer_gate_radial_der_list(table_index, r_list, mu_group);
+	          const F_FLOAT d2 =
+	              d_two_layer_gate_radial_der_list(table_index, r_next, mu_group);
+	          val = v1 + ddr * (v2 - v1);
+	          der = d1 + ddr * (d2 - d1);
+	        }
+	        F_FLOAT dot_y = static_cast<F_FLOAT>(0.0);
+	        F_FLOAT dot_d0 = static_cast<F_FLOAT>(0.0);
+	        F_FLOAT dot_d1 = static_cast<F_FLOAT>(0.0);
+	        F_FLOAT dot_d2 = static_cast<F_FLOAT>(0.0);
+	        for (int grouped_idx = d_basic_mu_offsets(mu_group);
+	             grouped_idx < d_basic_mu_offsets(mu_group + 1); grouped_idx++) {
+	          const int k = d_basic_grouped_indices(grouped_idx);
+	          const F_FLOAT pref = s_basic_coeffs(k);
+	          if (pref == static_cast<F_FLOAT>(0.0)) continue;
+	          const int sh_idx = d_alpha_basic_sh_index(k);
+	          dot_y += pref * sh_values[sh_idx];
+	          dot_d0 += pref * sh_ders[3 * sh_idx + 0];
+	          dot_d1 += pref * sh_ders[3 * sh_idx + 1];
+	          dot_d2 += pref * sh_ders[3 * sh_idx + 2];
+	        }
+	        const F_FLOAT radial_der_pref = der * (static_cast<F_FLOAT>(1.0) / dist);
+	        gx += radial_der_pref * r[0] * dot_y + val * dot_d0;
+	        gy += radial_der_pref * r[1] * dot_y + val * dot_d1;
+	        gz += radial_der_pref * r[2] * dot_y + val * dot_d2;
+	      }
+	    } else {
+	      for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
+	        F_FLOAT val = static_cast<F_FLOAT>(0.0);
+	        F_FLOAT der = static_cast<F_FLOAT>(0.0);
+	        if (table_index >= 0) {
+	          const F_FLOAT v1 =
+	              d_two_layer_gate_radial_list(table_index, r_list, mu_group);
+	          const F_FLOAT v2 =
+	              d_two_layer_gate_radial_list(table_index, r_next, mu_group);
+	          const F_FLOAT d1 =
+	              d_two_layer_gate_radial_der_list(table_index, r_list, mu_group);
+	          const F_FLOAT d2 =
+	              d_two_layer_gate_radial_der_list(table_index, r_next, mu_group);
+	          val = v1 + ddr * (v2 - v1);
+	          der = d1 + ddr * (d2 - d1);
+	        }
+	        for (int grouped_idx = d_basic_mu_offsets(mu_group);
+	             grouped_idx < d_basic_mu_offsets(mu_group + 1); grouped_idx++) {
+	          const int k = d_basic_grouped_indices(grouped_idx);
+	          const F_FLOAT pref = d_nbh_energy_ders_wrt_moments(ii, k);
+	          if (pref == static_cast<F_FLOAT>(0.0)) continue;
+	          F_FLOAT jac0 = static_cast<F_FLOAT>(0.0);
+	          F_FLOAT jac1 = static_cast<F_FLOAT>(0.0);
+	          F_FLOAT jac2 = static_cast<F_FLOAT>(0.0);
+	          const int a0 = d_alpha_index_basic(k, 1);
+	          const int a1 = d_alpha_index_basic(k, 2);
+	          const int a2 = d_alpha_index_basic(k, 3);
+	          const int norm_rank = a0 + a1 + a2;
+	          const F_FLOAT norm_fac = static_cast<F_FLOAT>(1.0) / int_pow(dist, norm_rank);
+	          const F_FLOAT val_scaled = val * norm_fac;
+	          const F_FLOAT der_scaled =
+	              Kokkos::fma(norm_fac, der, -norm_rank * val_scaled / dist);
+	          const F_FLOAT pow0 = int_pow(r[0], a0);
+	          const F_FLOAT pow1 = int_pow(r[1], a1);
+	          const F_FLOAT pow2 = int_pow(r[2], a2);
+	          const F_FLOAT pow = pow0 * pow1 * pow2;
+	          const F_FLOAT common = pow * der_scaled / dist;
+	          jac0 = common * r[0];
+	          jac1 = common * r[1];
+	          jac2 = common * r[2];
+	          if (a0 != 0)
+	            jac0 = Kokkos::fma(val_scaled * a0,
+	                               int_pow(r[0], a0 - 1) * pow1 * pow2, jac0);
+	          if (a1 != 0)
+	            jac1 = Kokkos::fma(val_scaled * a1,
+	                               pow0 * int_pow(r[1], a1 - 1) * pow2, jac1);
+	          if (a2 != 0)
+	            jac2 = Kokkos::fma(val_scaled * a2,
+	                               pow0 * pow1 * int_pow(r[2], a2 - 1), jac2);
+	          gx += pref * jac0;
+	          gy += pref * jac1;
+	          gz += pref * jac2;
+	        }
+	      }
+	    }
+
+	    if (gx == static_cast<F_FLOAT>(0.0) &&
+	        gy == static_cast<F_FLOAT>(0.0) &&
+	        gz == static_cast<F_FLOAT>(0.0))
+	      return;
+	    sum_fx += gx;
+	    sum_fy += gy;
+	    sum_fz += gz;
+	    if (EVFLAG && vflag_global) {
+	      sum_v0 += -gx * r[0];
+	      sum_v1 += -gy * r[1];
+	      sum_v2 += -gz * r[2];
+	      sum_v3 += -gx * r[1];
+	      sum_v4 += -gx * r[2];
+	      sum_v5 += -gy * r[2];
+	    }
+	    a_f(j, 0) -= gx;
+	    a_f(j, 1) -= gy;
+	    a_f(j, 2) -= gz;
+	  }, center_fx, center_fy, center_fz, vir0, vir1, vir2, vir3, vir4, vir5);
+
+	  Kokkos::single(Kokkos::PerTeam(team), [&]() {
+	    a_f(i, 0) += center_fx;
+	    a_f(i, 1) += center_fy;
+	    a_f(i, 2) += center_fz;
+	    if (EVFLAG && vflag_global) {
+	      ev.v[0] += vir0;
+	      ev.v[1] += vir1;
+	      ev.v[2] += vir2;
+	      ev.v[3] += vir3;
+	      ev.v[4] += vir4;
+	      ev.v[5] += vir5;
+	    }
+	  });
+	}
+
+template <class DeviceType>
+template <int NEIGHFLAG, int EVFLAG>
+KOKKOS_INLINE_FUNCTION void
+	PairSUS2MTPKokkos<DeviceType>::operator()(
+	    TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>,
+	    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>>::member_type
+	        &team) const
+	{
+	  EV_FLOAT ev;
+	  this->template operator()<NEIGHFLAG, EVFLAG>(
+	      TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>(),
+	      team, ev);
 	}
 
 	template <class DeviceType>

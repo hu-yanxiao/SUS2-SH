@@ -44,9 +44,16 @@ namespace LAMMPS_NS {
 	  struct TagPairSUS2MTPUnpackReverseComm {};
 	  struct TagPairSUS2MTPComputeEnvGate {};
 	  struct TagPairSUS2MTPApplyEnvGate {};
-	  struct TagPairSUS2MTPComputeGateFirstLayer {};
-	  struct TagPairSUS2MTPComputeGateFirstFinalize {};
-	  struct TagPairSUS2MTPComputeGateFirstDerivs {};
+		  struct TagPairSUS2MTPComputeGateFirstLayer {};
+		  struct TagPairSUS2MTPComputeGateProducts {};
+		  struct TagPairSUS2MTPComputeGateProductAdjoints {};
+		  struct TagPairSUS2MTPComputeGateFirstFinalize {};
+		  struct TagPairSUS2MTPComputeGateFullForward {};
+		  struct TagPairSUS2MTPComputeGateSignalDers {};
+		  struct TagPairSUS2MTPComputeGateSignalAdjointDers {};
+		  struct TagPairSUS2MTPComputeGateAdjointDers {};
+		  struct TagPairSUS2MTPComputeGateFullScalarAdjoints {};
+		  struct TagPairSUS2MTPComputeGateFirstDerivs {};
 	  struct TagPairSUS2MTPComputeGateFirstDerivsTeam {};
 	  struct TagPairSUS2MTPComputeGateMainAlphaBasic {};
 	  struct TagPairSUS2MTPComputeAlphaBasic {};
@@ -56,8 +63,10 @@ namespace LAMMPS_NS {
 	  struct TagPairSUS2MTPComputeEnvRhoChain {};
 	  template <int NEIGHFLAG, int EVFLAG> struct TagPairSUS2MTPComputeGateMainForce {};
 	  template <int NEIGHFLAG, int EVFLAG> struct TagPairSUS2MTPComputeGateChainForce {};
-	  template <int NEIGHFLAG> struct TagPairSUS2MTPComputeGateMainForceTeam {};
+	  template <int NEIGHFLAG, int LOCAL_GATE_ADJOINTS>
+	  struct TagPairSUS2MTPComputeGateMainForceTeam {};
 	  template <int NEIGHFLAG> struct TagPairSUS2MTPComputeGateChainForceTeam {};
+	  template <int NEIGHFLAG, int EVFLAG> struct TagPairSUS2MTPComputeGateChainForceDirectTeam {};
 	  template <int NEIGHFLAG, int EVFLAG> struct TagPairSUS2MTPComputeZBLForce {};
 	  template <int NEIGHFLAG, int EVFLAG> struct TagPairSUS2MTPComputeForce {};
 	  template <int NEIGHFLAG> struct TagPairSUS2MTPComputeForceTeam {};
@@ -121,11 +130,13 @@ namespace LAMMPS_NS {
 	      const int itype, const int jtype, const F_FLOAT dist, const int mu_group,
 	      const int gate_atom_index, F_FLOAT &val, F_FLOAT &der,
 	      F_FLOAT &gate_residual_val) const;
-		  KOKKOS_INLINE_FUNCTION void eval_env_gate_weighted_basis(
-		      const int itype, const int jtype, const F_FLOAT dist, F_FLOAT *weighted_basis,
-		      F_FLOAT *weighted_basis_der) const;
+	  KOKKOS_INLINE_FUNCTION void eval_env_gate_weighted_basis(
+	      const int itype, const int jtype, const F_FLOAT dist, F_FLOAT *weighted_basis,
+	      F_FLOAT *weighted_basis_der) const;
 	  KOKKOS_INLINE_FUNCTION void eval_env_gate_rho(const int itype, const F_FLOAT dist,
 	                                                F_FLOAT &rho, F_FLOAT &rho_der) const;
+	  KOKKOS_INLINE_FUNCTION void accumulate_two_layer_gate_mu_adjoint_kk(
+	      const int atom_index, const int mu, const F_FLOAT gate_adjoint_mu) const;
 
   // ---------- SUS2MTP routines (in order of execution) ----------
 
@@ -154,14 +165,35 @@ namespace LAMMPS_NS {
 	  KOKKOS_INLINE_FUNCTION
 	  void operator()(TagPairSUS2MTPApplyEnvGate, const int &ii) const;
 
-	  KOKKOS_INLINE_FUNCTION
-	  void
+		  KOKKOS_INLINE_FUNCTION
+		  void
 		  operator()(TagPairSUS2MTPComputeGateFirstLayer,
 		             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstLayer>::member_type
 		                 &team) const;
 
+			  KOKKOS_INLINE_FUNCTION
+			  void operator()(TagPairSUS2MTPComputeGateProducts, const int &ii) const;
+
+			  KOKKOS_INLINE_FUNCTION
+			  void operator()(TagPairSUS2MTPComputeGateProductAdjoints, const int &ii) const;
+
+			  KOKKOS_INLINE_FUNCTION
+			  void operator()(TagPairSUS2MTPComputeGateFirstFinalize, const int &ii) const;
+
+			  KOKKOS_INLINE_FUNCTION
+			  void operator()(TagPairSUS2MTPComputeGateFullForward, const int &idx) const;
+
 		  KOKKOS_INLINE_FUNCTION
-		  void operator()(TagPairSUS2MTPComputeGateFirstFinalize, const int &ii) const;
+		  void operator()(TagPairSUS2MTPComputeGateSignalDers, const int &ii) const;
+
+		  KOKKOS_INLINE_FUNCTION
+		  void operator()(TagPairSUS2MTPComputeGateSignalAdjointDers, const int &ii) const;
+
+			  KOKKOS_INLINE_FUNCTION
+			  void operator()(TagPairSUS2MTPComputeGateAdjointDers, const int &ii) const;
+
+			  KOKKOS_INLINE_FUNCTION
+			  void operator()(TagPairSUS2MTPComputeGateFullScalarAdjoints, const int &idx) const;
 
 		  KOKKOS_INLINE_FUNCTION
 		  void operator()(TagPairSUS2MTPComputeGateFirstDerivs, const int &ii) const;
@@ -206,10 +238,10 @@ namespace LAMMPS_NS {
 	  operator()(TagPairSUS2MTPComputeGateMainForce<NEIGHFLAG, EVFLAG>, const int &ii,
 	             EV_FLOAT &) const;
 
-	  template <int NEIGHFLAG>
+	  template <int NEIGHFLAG, int LOCAL_GATE_ADJOINTS>
 	  KOKKOS_INLINE_FUNCTION void
-	  operator()(TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG>,
-	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG>>::member_type
+	  operator()(TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS>,
+	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS>>::member_type
 	                 &team) const;
 
 	  template <int NEIGHFLAG, int EVFLAG>
@@ -226,6 +258,19 @@ namespace LAMMPS_NS {
 	  KOKKOS_INLINE_FUNCTION void
 	  operator()(TagPairSUS2MTPComputeGateChainForceTeam<NEIGHFLAG>,
 	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceTeam<NEIGHFLAG>>::member_type
+	                 &team) const;
+
+	  template <int NEIGHFLAG, int EVFLAG>
+	  KOKKOS_INLINE_FUNCTION void
+	  operator()(TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>,
+	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>>::member_type
+	                 &team,
+	             EV_FLOAT &) const;
+
+	  template <int NEIGHFLAG, int EVFLAG>
+	  KOKKOS_INLINE_FUNCTION void
+	  operator()(TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>,
+	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>>::member_type
 	                 &team) const;
 
 	  template <int NEIGHFLAG, int EVFLAG>
@@ -354,13 +399,22 @@ namespace LAMMPS_NS {
 	  Kokkos::View<double *, DeviceType> d_env_gate_der_prefactors;
 	  Kokkos::View<double *, DeviceType> d_env_gate_rho_chain_values;
 	  Kokkos::View<moment_buffer_value_type **, DeviceType> d_env_gate_activation_basic_vals;
-	  Kokkos::View<double *, DeviceType> d_two_layer_gate_values;
-	  Kokkos::View<double *, DeviceType> d_two_layer_gate_adjoints;
-	  Kokkos::View<double ***, DeviceType> d_two_layer_gate_first_derivs;
+		  Kokkos::View<double *, DeviceType> d_two_layer_gate_values;
+		  Kokkos::View<double *, DeviceType> d_two_layer_gate_adjoints;
+		  Kokkos::View<moment_buffer_value_type **, DeviceType>
+		      d_two_layer_gate_cached_moment_vals;
+		  Kokkos::View<double ***, DeviceType> d_two_layer_gate_first_derivs;
 	  Kokkos::View<double **, DeviceType> d_two_layer_gate_mu_multipliers;
 	  Kokkos::View<double **, DeviceType> d_two_layer_gate_mu_derivs;
-	  Kokkos::View<int *, DeviceType> d_two_layer_gate_weight_moment_indices;
+		  Kokkos::View<int *, DeviceType> d_two_layer_gate_weight_moment_indices;
+		  Kokkos::View<int *, DeviceType> d_two_layer_gate_scalar_body_bucket;
+		  Kokkos::View<int *, DeviceType> d_two_layer_gate_scalar_signal_index;
+		  Kokkos::View<int *, DeviceType> d_two_layer_gate_body_signal_buckets;
+	  Kokkos::View<int *, DeviceType> d_two_layer_gate_full_signal_group_for_mu;
 	  Kokkos::View<double *, DeviceType> d_two_layer_gate_weights;
+	  Kokkos::View<double *, DeviceType> d_two_layer_gate_body_mix_weights;
+	  Kokkos::View<double **, DeviceType> d_two_layer_gate_full_weights_by_scalar;
+	  Kokkos::View<double **, DeviceType> d_two_layer_gate_full_weights_by_signal;
 	  Kokkos::View<double *, DeviceType> d_two_layer_gate_additive_coeffs;
 	  Kokkos::View<int *, DeviceType> d_zbl_atomic_numbers;
 	  Kokkos::View<double *, DeviceType> d_zbl_pair_inner_cutoffs;
@@ -384,6 +438,11 @@ namespace LAMMPS_NS {
 	  int regression_coeffs_count;    // Total size of unified regression_coeffs array
 	  int basic_mu_group_count;       // Number of unique mu values in alpha_index_basic
 	  int two_layer_gate_product_limit = 0;
+	  int two_layer_gate_kk_signal_stride = 1;
+	  int two_layer_gate_kk_body_stride = 0;
+	  int two_layer_gate_kk_deriv_signal = 0;
+	  int two_layer_gate_kk_compact_body_signal = 0;
+	  int two_layer_gate_kk_full_identity_signal = 0;
 	  int first;
 	  int need_dup;
 

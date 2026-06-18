@@ -1218,3 +1218,94 @@ The rejected final attempts were:
   l3k4 and l4k4 `mu-scalar-full`.
 - earlier `unroll16_20` and `full_envbatch` candidates were also archived as
   rejected summaries.
+
+## Kokkos GPU LAMMPS v21 - 2026-06-18
+
+This round optimizes the Kokkos GPU LAMMPS interface for the experimental
+`codex/mu-body-order-gate` branch. The accepted Kokkos binary is installed at:
+
+```text
+/work/phy-weigw/app/lmp.sus2-sh-mu-body-order-gate_kokkos_sm80_v21_split_gate_force_kernel
+```
+
+Source and binary record:
+
+```text
+branch: codex/mu-body-order-gate
+source commit: this documentation commit; final pushed hash is recorded in the server source map
+server source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src/KOKKOS
+server build tree: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/build_mu_gate_kokkos_gpu_20260618_120200
+build job: 3812933
+Kokkos binary SHA-256: 9ac60065bb2590e18647633684634d2d1c2751eae1afbd709a0b8bf1f2720dc3
+pair_sus2_mtp_kokkos.cpp SHA-256: 72a31557e1903e61170ce29ee3b4e3eb1dcb1d5a1d7d5e5d53abfc1ff12cbeb0
+pair_sus2_mtp_kokkos.h SHA-256: c06e42d35a53afc1247fa8ce01917b18735f53a1fd8414829cdb6ce415af3a1e
+```
+
+The v21 optimization keeps the exact math and does not change atomic or
+centroid virial formulas. The direct gate chain fast path remains disabled when
+`eflag_atom`, `vflag_atom`, or `cvflag_atom` is set, so
+`compute centroid/stress/atom` continues to use the `v_tally_xyz` pair tally
+path. The performance change is limited to splitting the direct-chain team force
+kernel into:
+
+- a combo-mode local-adjoint kernel that keeps the small signal adjoint
+  accumulation array and reduces atomics;
+- a normal full-mode kernel that does not instantiate the combo-only local
+  adjoint array, reducing register/local-memory pressure.
+
+Centroid stress oracle:
+
+```text
+job: 3812936
+directory: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/oracle_l4k4_v21_centroid_20260618
+input check: compute ccent all centroid/stress/atom NULL pair
+combo: dE=0, dP=0, force_max=9.1593399531575415e-15, centroid_rel=8.2133422715458233e-15 PASS
+full:  dE=0, dP=0, force_max=2.1316282072803006e-14, centroid_rel=1.3829233550611508e-14 PASS
+```
+
+Kokkos GPU speed matrix:
+
+```text
+job: 3812939
+node: c04u01g
+main reference binary: /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_tabstep_double_compute1
+mu binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.sus2_sh_mu_body_gate_kk_sm80_v21_split_gate_force_kernel_20260618
+cell: B-system first training structure, replicate 6 6 6
+run steps: 800
+reps: 3
+models: q-total l2k2, l2k3, l2k4, l3k3, l3k4, l4k3, l4k4
+```
+
+Median loop-time ratios against the current main Kokkos gate reference:
+
+| l/k | Gate weight mode | Main median | v21 median | Ratio | Status |
+| --- | --- | ---: | ---: | ---: | --- |
+| l2k2 | `mu-body-linear-combo` | `2.49414 s` | `2.63148 s` | `1.0551x` | PASS |
+| l2k2 | `mu-scalar-full` | `2.49414 s` | `2.50149 s` | `1.0029x` | PASS |
+| l2k3 | `mu-body-linear-combo` | `4.64907 s` | `5.22997 s` | `1.1249x` | PASS |
+| l2k3 | `mu-scalar-full` | `4.64907 s` | `5.07160 s` | `1.0909x` | PASS |
+| l2k4 | `mu-body-linear-combo` | `30.2593 s` | `36.2827 s` | `1.1991x` | PASS |
+| l2k4 | `mu-scalar-full` | `30.2593 s` | `36.2037 s` | `1.1964x` | PASS |
+| l3k3 | `mu-body-linear-combo` | `7.62669 s` | `8.67004 s` | `1.1368x` | PASS |
+| l3k3 | `mu-scalar-full` | `7.62669 s` | `8.31637 s` | `1.0904x` | PASS |
+| l3k4 | `mu-body-linear-combo` | `17.7583 s` | `20.9923 s` | `1.1821x` | PASS |
+| l3k4 | `mu-scalar-full` | `17.7583 s` | `20.8855 s` | `1.1761x` | PASS |
+| l4k3 | `mu-body-linear-combo` | `13.8074 s` | `16.2601 s` | `1.1776x` | PASS |
+| l4k3 | `mu-scalar-full` | `13.8074 s` | `15.7815 s` | `1.1430x` | PASS |
+| l4k4 | `mu-body-linear-combo` | `27.3667 s` | `31.7116 s` | `1.1588x` | PASS |
+| l4k4 | `mu-scalar-full` | `27.3667 s` | `32.0424 s` | `1.1709x` | PASS |
+
+Archived reports:
+
+```text
+/work/phy-weigw/app/sus2-sh-mu-body-order-gate-build-info/kokkos-v21-20260618/kokkos_matrix_report.txt
+/work/phy-weigw/app/sus2-sh-mu-body-order-gate-build-info/kokkos-v21-20260618/kokkos_matrix_summary.tsv
+/work/phy-weigw/app/sus2-sh-mu-body-order-gate-build-info/kokkos-v21-20260618/centroid_oracle_report.txt
+/work/phy-weigw/app/sus2-sh-mu-body-order-gate-build-info/kokkos-v21-20260618/source.sha256
+/work/phy-weigw/app/sus2-sh-mu-body-order-gate-build-info/kokkos-v21-20260618/binary.sha256
+```
+
+Decision: v21 is the accepted Kokkos GPU LAMMPS implementation for this branch.
+For the tested q-total models with `l<=4, k<=4`, both `mu-body-linear-combo`
+and `mu-scalar-full` meet the `main x1.20` speed target on the fixed GPU
+benchmark while preserving centroid stress correctness.
