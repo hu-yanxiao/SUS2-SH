@@ -786,6 +786,12 @@ public:
 						const double coeff,
 						double& out_penalty_accumulator,
 						Array1D* out_penalty_grad_accumulator) override;
+	void AddScalarWeightL2Penalty(const double head_coeff,
+						const double gate_scalar_coeff,
+						const double gate_mix_coeff,
+						const double gate_full_coeff,
+						double& out_penalty_accumulator,
+						Array1D* out_penalty_grad_accumulator) override;
 
 
 	int alpha_count;								//!< Basis functions count 

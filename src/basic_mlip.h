@@ -87,9 +87,15 @@ public:
 								double& out_penalty_accumulator,
 								Array1D* out_penalty_grad_accumulator = nullptr);
 	virtual void AddFixedAtomicEnergyPenalty(const std::vector<double>& atomic_energies,
-								const double coeff,
-								double& out_penalty_accumulator,
-								Array1D* out_penalty_grad_accumulator = nullptr);
+									const double coeff,
+									double& out_penalty_accumulator,
+									Array1D* out_penalty_grad_accumulator = nullptr);
+	virtual void AddScalarWeightL2Penalty(const double head_coeff,
+									const double gate_scalar_coeff,
+									const double gate_mix_coeff,
+									const double gate_full_coeff,
+									double& out_penalty_accumulator,
+									Array1D* out_penalty_grad_accumulator = nullptr);
 
 		// CalcEFS
 		virtual void CalcE(Configuration& cfg);

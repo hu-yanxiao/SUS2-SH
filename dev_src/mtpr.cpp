@@ -6721,6 +6721,98 @@ void MLMTPR::AddFixedAtomicEnergyPenalty(const std::vector<double>& atomic_energ
 	}
 }
 
+void MLMTPR::AddScalarWeightL2Penalty(const double head_coeff,
+									  const double gate_scalar_coeff,
+									  const double gate_mix_coeff,
+									  const double gate_full_coeff,
+									  double& out_penalty_accumulator,
+									  Array1D* out_penalty_grad_accumulator)
+{
+	if (!std::isfinite(head_coeff) || head_coeff < 0.0)
+		ERROR("Scalar head L2 penalty coefficient should be finite and >= 0");
+	if (!std::isfinite(gate_scalar_coeff) || gate_scalar_coeff < 0.0)
+		ERROR("Gate scalar L2 penalty coefficient should be finite and >= 0");
+	if (!std::isfinite(gate_mix_coeff) || gate_mix_coeff < 0.0)
+		ERROR("Gate mix L2 penalty coefficient should be finite and >= 0");
+	if (!std::isfinite(gate_full_coeff) || gate_full_coeff < 0.0)
+		ERROR("Gate full L2 penalty coefficient should be finite and >= 0");
+	if (out_penalty_grad_accumulator != nullptr)
+		out_penalty_grad_accumulator->resize(CoeffCount());
+
+	if (head_coeff != 0.0 && alpha_scalar_moments > 0) {
+		const int linear_begin = LinearCoeffOffset();
+		const int scalar_begin = linear_begin + species_count;
+		if (scalar_begin < 0
+		    || scalar_begin + alpha_scalar_moments > static_cast<int>(regression_coeffs.size()))
+			ERROR("Invalid MTPR scalar head coefficient layout for L2 penalty");
+		const double weight = head_coeff / static_cast<double>(alpha_scalar_moments);
+		for (int q = 0; q < alpha_scalar_moments; ++q) {
+			const int coeff_index = scalar_begin + q;
+			const double mult = q < static_cast<int>(linear_mults.size())
+				? linear_mults[q]
+				: 1.0;
+			const double value = regression_coeffs[coeff_index] * mult;
+			out_penalty_accumulator += weight * value * value;
+			if (out_penalty_grad_accumulator != nullptr)
+				(*out_penalty_grad_accumulator)[coeff_index] +=
+					2.0 * weight * value * mult;
+		}
+	}
+
+	if (TwoLayerGateUsesBodyLinearCombo()) {
+		const int gate_weight_count = TwoLayerGateWeightCount();
+		if (gate_scalar_coeff != 0.0 && gate_weight_count > 0) {
+			const int gate_weight_offset = TwoLayerGateWeightOffset();
+			if (gate_weight_offset < 0
+			    || gate_weight_offset + gate_weight_count > static_cast<int>(regression_coeffs.size()))
+				ERROR("Invalid SUS2-SH gate scalar weight layout for L2 penalty");
+			const double weight = gate_scalar_coeff / static_cast<double>(gate_weight_count);
+			for (int i = 0; i < gate_weight_count; ++i) {
+				const int coeff_index = gate_weight_offset + i;
+				const double value = regression_coeffs[coeff_index];
+				out_penalty_accumulator += weight * value * value;
+				if (out_penalty_grad_accumulator != nullptr)
+					(*out_penalty_grad_accumulator)[coeff_index] +=
+						2.0 * weight * value;
+			}
+		}
+
+		const int gate_mix_count = TwoLayerGateBodyMixWeightCount();
+		if (gate_mix_coeff != 0.0 && gate_mix_count > 0) {
+			const int gate_mix_offset = TwoLayerGateBodyMixWeightOffset();
+			if (gate_mix_offset < 0
+			    || gate_mix_offset + gate_mix_count > static_cast<int>(regression_coeffs.size()))
+				ERROR("Invalid SUS2-SH gate body-mix weight layout for L2 penalty");
+			const double weight = gate_mix_coeff / static_cast<double>(gate_mix_count);
+			for (int i = 0; i < gate_mix_count; ++i) {
+				const int coeff_index = gate_mix_offset + i;
+				const double diff = regression_coeffs[coeff_index] - 1.0;
+				out_penalty_accumulator += weight * diff * diff;
+				if (out_penalty_grad_accumulator != nullptr)
+					(*out_penalty_grad_accumulator)[coeff_index] +=
+						2.0 * weight * diff;
+			}
+		}
+	} else if (TwoLayerGateUsesFullScalarWeights()) {
+		const int gate_weight_count = TwoLayerGateWeightCount();
+		if (gate_full_coeff != 0.0 && gate_weight_count > 0) {
+			const int gate_weight_offset = TwoLayerGateWeightOffset();
+			if (gate_weight_offset < 0
+			    || gate_weight_offset + gate_weight_count > static_cast<int>(regression_coeffs.size()))
+				ERROR("Invalid SUS2-SH full gate weight layout for L2 penalty");
+			const double weight = gate_full_coeff / static_cast<double>(gate_weight_count);
+			for (int i = 0; i < gate_weight_count; ++i) {
+				const int coeff_index = gate_weight_offset + i;
+				const double value = regression_coeffs[coeff_index];
+				out_penalty_accumulator += weight * value * value;
+				if (out_penalty_grad_accumulator != nullptr)
+					(*out_penalty_grad_accumulator)[coeff_index] +=
+						2.0 * weight * value;
+			}
+		}
+	}
+}
+
 void MLMTPR::AddPenaltyGrad(const double coeff,													// Must calculate add penalty and optionally (if out_penalty_grad_accumulator != nullptr) its gradient w.r.t. coefficients multiplied by coeff to out_penalty
 							double& out_penalty_accumulator,
 							Array1D* out_penalty_grad_accumulator)

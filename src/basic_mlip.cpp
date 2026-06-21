@@ -205,6 +205,21 @@ void AnyLocalMLIP::AddFixedAtomicEnergyPenalty(const std::vector<double>& atomic
 	(void)out_penalty_grad_accumulator;
 }
 
+void AnyLocalMLIP::AddScalarWeightL2Penalty(const double head_coeff,
+											const double gate_scalar_coeff,
+											const double gate_mix_coeff,
+											const double gate_full_coeff,
+											double& out_penalty_accumulator,
+											Array1D* out_penalty_grad_accumulator)
+{
+	(void)head_coeff;
+	(void)gate_scalar_coeff;
+	(void)gate_mix_coeff;
+	(void)gate_full_coeff;
+	(void)out_penalty_accumulator;
+	(void)out_penalty_grad_accumulator;
+}
+
 AnyLocalMLIP::AnyLocalMLIP(double _min_dist, double _max_dist, int _radial_basis_size)
 {
 	p_RadialBasis = new RadialBasis_Shapeev(_min_dist, _max_dist, _radial_basis_size);

@@ -103,6 +103,14 @@ void NonLinearRegression::AddGlobalRegularization(double local_multiplier, Array
 		ERROR("--radial-smooth-grid should be > 0");
 	if (fixed_atomic_energy_weight < 0.0)
 		ERROR("--atomic-energy-weight should be >= 0");
+	if (!std::isfinite(scalar_head_l2_regularization) || scalar_head_l2_regularization < 0.0)
+		ERROR("--scalar-head-l2 should be finite and >= 0");
+	if (!std::isfinite(gate_scalar_l2_regularization) || gate_scalar_l2_regularization < 0.0)
+		ERROR("--gate-scalar-l2 should be finite and >= 0");
+	if (!std::isfinite(gate_mix_l2_regularization) || gate_mix_l2_regularization < 0.0)
+		ERROR("--gate-mix-l2 should be finite and >= 0");
+	if (!std::isfinite(gate_full_l2_regularization) || gate_full_l2_regularization < 0.0)
+		ERROR("--gate-full-l2 should be finite and >= 0");
 
 	const double radial_coeff = local_multiplier * radial_smooth_regularization;
 	if (radial_coeff != 0.0)
@@ -116,6 +124,19 @@ void NonLinearRegression::AddGlobalRegularization(double local_multiplier, Array
 		                                    local_multiplier * fixed_atomic_energy_weight,
 		                                    loss_,
 		                                    grad_accumulator);
+	}
+
+	if (scalar_head_l2_regularization != 0.0
+	    || gate_scalar_l2_regularization != 0.0
+	    || gate_mix_l2_regularization != 0.0
+	    || gate_full_l2_regularization != 0.0) {
+		p_mlip->AddScalarWeightL2Penalty(
+			local_multiplier * scalar_head_l2_regularization,
+			local_multiplier * gate_scalar_l2_regularization,
+			local_multiplier * gate_mix_l2_regularization,
+			local_multiplier * gate_full_l2_regularization,
+			loss_,
+			grad_accumulator);
 	}
 }
 

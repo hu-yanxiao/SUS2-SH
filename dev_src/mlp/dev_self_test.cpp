@@ -2236,6 +2236,119 @@ TEST("MTPR radial smoothness penalty gradient finite difference") {
 	std::remove(model_path.c_str());
 } END_TEST;
 
+TEST("MTPR scalar and gate weight L2 penalty gradient finite difference") {
+	const std::string combo_path = "/tmp/sus2sh_scalar_l2_combo_self_test.mtp";
+	const std::string full_path = "/tmp/sus2sh_scalar_l2_full_self_test.mtp";
+	std::map<std::string, std::string> sh_opts;
+	sh_opts["species-count"] = "1";
+	sh_opts["l-max"] = "1";
+	sh_opts["k-max"] = "1";
+	sh_opts["body-order"] = "2";
+	sh_opts["body-l-max"] = "1,1,1,1";
+	sh_opts["cutoff"] = "5.0";
+	sh_opts["radial-basis-size"] = "4";
+	sh_opts["radial-basis-type"] = "RBChebyshev_sss";
+
+	const double head_coeff = 1.0e-5;
+	const double gate_scalar_coeff = 1.0e-4;
+	const double gate_mix_coeff = 1.0e-5;
+	const double gate_full_coeff = 1.0e-4;
+	auto set_linear_head = [](MLMTPR& mtpr) {
+		const int linear_begin = mtpr.LinearCoeffOffset();
+		for (int q = 0; q < mtpr.alpha_scalar_moments; ++q) {
+			mtpr.Coeff()[linear_begin + mtpr.species_count + q] =
+				0.05 * static_cast<double>(q + 1);
+			mtpr.linear_mults[q] = 1.0 + 0.2 * static_cast<double>(q + 1);
+		}
+		mtpr.LinCoeff();
+	};
+	auto check_fd = [&](MLMTPR& mtpr,
+	                    double head,
+	                    double gate_scalar,
+	                    double gate_mix,
+	                    double gate_full,
+	                    const std::vector<int>& indices) -> std::pair<double, double> {
+		double penalty = 0.0;
+		Array1D grad(mtpr.CoeffCount());
+		FillWithZero(grad);
+		mtpr.AddScalarWeightL2Penalty(head,
+		                               gate_scalar,
+		                               gate_mix,
+		                               gate_full,
+		                               penalty,
+		                               &grad);
+		const double step = 1.0e-6;
+		double max_rel_err = 0.0;
+		double max_abs_err = 0.0;
+		for (int idx : indices) {
+			const double original = mtpr.Coeff()[idx];
+			mtpr.Coeff()[idx] = original + step;
+			double penalty_p = 0.0;
+			mtpr.AddScalarWeightL2Penalty(head, gate_scalar, gate_mix, gate_full, penalty_p, nullptr);
+			mtpr.Coeff()[idx] = original - step;
+			double penalty_m = 0.0;
+			mtpr.AddScalarWeightL2Penalty(head, gate_scalar, gate_mix, gate_full, penalty_m, nullptr);
+			mtpr.Coeff()[idx] = original;
+
+			const double fd = (penalty_p - penalty_m) / (2.0 * step);
+			const double abs_err = fabs(fd - grad[idx]);
+			const double denom = std::max(1.0e-12, std::max(fabs(fd), fabs(grad[idx])));
+			const double rel_err = abs_err / denom;
+			max_abs_err = std::max(max_abs_err, abs_err);
+			max_rel_err = std::max(max_rel_err, rel_err);
+		}
+		return std::make_pair(max_abs_err, max_rel_err);
+	};
+
+	WriteSphericalHarmonicModel(combo_path, sh_opts);
+	MLMTPR combo(combo_path);
+	combo.UpgradePlainSHToTwoLayerGate(2, false, "neighbor", "mu-body-linear-combo");
+	set_linear_head(combo);
+	for (int i = 0; i < combo.TwoLayerGateWeightCount(); ++i)
+		combo.Coeff()[combo.TwoLayerGateWeightOffset() + i] =
+			0.1 * static_cast<double>(i + 1);
+	for (int i = 0; i < combo.TwoLayerGateBodyMixWeightCount(); ++i)
+		combo.Coeff()[combo.TwoLayerGateBodyMixWeightOffset() + i] =
+			1.0 + 0.07 * static_cast<double>(i + 1);
+	std::vector<int> combo_indices;
+	if (combo.alpha_scalar_moments > 0)
+		combo_indices.push_back(combo.LinearCoeffOffset() + combo.species_count);
+	if (combo.TwoLayerGateWeightCount() > 0)
+		combo_indices.push_back(combo.TwoLayerGateWeightOffset());
+	if (combo.TwoLayerGateBodyMixWeightCount() > 0)
+		combo_indices.push_back(combo.TwoLayerGateBodyMixWeightOffset());
+	const std::pair<double, double> combo_err =
+		check_fd(combo, head_coeff, gate_scalar_coeff, gate_mix_coeff, gate_full_coeff, combo_indices);
+	if (combo_err.first > 5.0e-10 && combo_err.second > 2.0e-6) {
+		std::cerr << "combo max_abs_err=" << combo_err.first
+		          << " max_rel_err=" << combo_err.second;
+		FAIL()
+	}
+
+	WriteSphericalHarmonicModel(full_path, sh_opts);
+	MLMTPR full(full_path);
+	full.UpgradePlainSHToTwoLayerGate(2, false, "neighbor", "mu-scalar-full");
+	set_linear_head(full);
+	for (int i = 0; i < full.TwoLayerGateWeightCount(); ++i)
+		full.Coeff()[full.TwoLayerGateWeightOffset() + i] =
+			-0.08 * static_cast<double>(i + 1);
+	std::vector<int> full_indices;
+	if (full.alpha_scalar_moments > 0)
+		full_indices.push_back(full.LinearCoeffOffset() + full.species_count);
+	if (full.TwoLayerGateWeightCount() > 0)
+		full_indices.push_back(full.TwoLayerGateWeightOffset());
+	const std::pair<double, double> full_err =
+		check_fd(full, head_coeff, gate_scalar_coeff, gate_mix_coeff, gate_full_coeff, full_indices);
+	if (full_err.first > 5.0e-10 && full_err.second > 2.0e-6) {
+		std::cerr << "full max_abs_err=" << full_err.first
+		          << " max_rel_err=" << full_err.second;
+		FAIL()
+	}
+
+	std::remove(combo_path.c_str());
+	std::remove(full_path.c_str());
+} END_TEST;
+
 TEST("MTPR fixed atomic energy penalty gradient finite difference") {
 	MLMTPR mtpr(PATH+"learned.mtp");
 	mtpr.LinCoeff();

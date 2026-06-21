@@ -102,6 +102,10 @@ public:
 		std_scaling = 0.0;
 		stdd_scaling = 0.0;
 		radial_smooth_regularization = 0.0;
+		scalar_head_l2_regularization = 0.0;
+		gate_scalar_l2_regularization = 0.0;
+		gate_mix_l2_regularization = 0.0;
+		gate_full_l2_regularization = 0.0;
 		fixed_atomic_energies.clear();
 	}
 
@@ -928,7 +932,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-loss-gradient-dev",
 		"checks MTPR loss gradient against finite differences",
-		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
+		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-loss-gradient-dev: model and cfg arguments are required\n";
@@ -954,6 +958,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const double stress_weight = ParseDevDoubleOption(opts, "stress-weight", 0.0);
 		const double radial_smooth = ParseDevDoubleOption(opts, "radial-smooth", 0.0);
 		const int radial_smooth_grid = ParseDevIntOption(opts, "radial-smooth-grid", 128);
+		const double scalar_head_l2 = ParseDevDoubleOption(opts, "scalar-head-l2", 0.0);
+		const double gate_scalar_l2 = ParseDevDoubleOption(opts, "gate-scalar-l2", 0.0);
+		const double gate_mix_l2 = ParseDevDoubleOption(opts, "gate-mix-l2", 0.0);
+		const double gate_full_l2 = ParseDevDoubleOption(opts, "gate-full-l2", 0.0);
 		const double displacement = ParseDevDoubleOption(opts, "displacement", 1.0e-7);
 		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-5);
 		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-4);
@@ -967,6 +975,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		DevLossGradientProbe probe(&mtpr, energy_weight, force_weight, stress_weight);
 		probe.radial_smooth_regularization = radial_smooth;
 		probe.radial_smooth_grid = radial_smooth_grid;
+		probe.scalar_head_l2_regularization = scalar_head_l2;
+		probe.gate_scalar_l2_regularization = gate_scalar_l2;
+		probe.gate_mix_l2_regularization = gate_mix_l2;
+		probe.gate_full_l2_regularization = gate_full_l2;
 		probe.residual_stage = residual_stage;
 		probe.stage_active_only = stage_active_only;
 		DevLossGradientProbe::Result result =

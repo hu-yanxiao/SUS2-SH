@@ -1113,6 +1113,39 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (radial_smooth_grid <= 0)
 		ERROR("--radial-smooth-grid should be > 0");
 
+	std::string scalar_weight_l2_preset = "none";
+	if (opts["scalar-weight-l2-preset"] != "")
+		scalar_weight_l2_preset = opts["scalar-weight-l2-preset"];
+	if (scalar_weight_l2_preset != "none"
+	    && scalar_weight_l2_preset != "recommended")
+		ERROR("--scalar-weight-l2-preset should be 'none' or 'recommended'");
+	double scalar_head_l2 = 0.0;
+	double gate_scalar_l2 = 0.0;
+	double gate_mix_l2 = 0.0;
+	double gate_full_l2 = 0.0;
+	if (scalar_weight_l2_preset == "recommended") {
+		scalar_head_l2 = 1.0e-5;
+		gate_scalar_l2 = 1.0e-4;
+		gate_mix_l2 = 1.0e-5;
+		gate_full_l2 = 1.0e-4;
+	}
+	if (opts["scalar-head-l2"] != "")
+		scalar_head_l2 = stod(opts["scalar-head-l2"]);
+	if (opts["gate-scalar-l2"] != "")
+		gate_scalar_l2 = stod(opts["gate-scalar-l2"]);
+	if (opts["gate-mix-l2"] != "")
+		gate_mix_l2 = stod(opts["gate-mix-l2"]);
+	if (opts["gate-full-l2"] != "")
+		gate_full_l2 = stod(opts["gate-full-l2"]);
+	if (!std::isfinite(scalar_head_l2) || scalar_head_l2 < 0.0)
+		ERROR("--scalar-head-l2 should be a finite non-negative value");
+	if (!std::isfinite(gate_scalar_l2) || gate_scalar_l2 < 0.0)
+		ERROR("--gate-scalar-l2 should be a finite non-negative value");
+	if (!std::isfinite(gate_mix_l2) || gate_mix_l2 < 0.0)
+		ERROR("--gate-mix-l2 should be a finite non-negative value");
+	if (!std::isfinite(gate_full_l2) || gate_full_l2 < 0.0)
+		ERROR("--gate-full-l2 should be a finite non-negative value");
+
 	bool custom_two_layer_gate_tanh_amplitude = false;
 	double two_layer_gate_tanh_amplitude = 0.8;
 	if (opts["two-layer-gate-tanh-amplitude"] != "") {
@@ -1279,6 +1312,10 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.bfgs_trace_file = bfgs_trace_fnm;
 	trainer.radial_smooth_regularization = radial_smooth;
 	trainer.radial_smooth_grid = radial_smooth_grid;
+	trainer.scalar_head_l2_regularization = scalar_head_l2;
+	trainer.gate_scalar_l2_regularization = gate_scalar_l2;
+	trainer.gate_mix_l2_regularization = gate_mix_l2;
+	trainer.gate_full_l2_regularization = gate_full_l2;
 	trainer.fixed_atomic_energies = fixed_atomic_energies;
 	trainer.fixed_atomic_energy_weight = fixed_atomic_energy_weight;
 	trainer.force_loss_kind = force_loss_kind;
@@ -1315,13 +1352,26 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			          << mtpr.TwoLayerGateTanhAmplitude() << std::endl;
 		if (prank == 0)
 			std::cout << "radial smoothness penalty: " << radial_smooth
-		          << " grid=" << radial_smooth_grid << std::endl;
-	if (prank == 0 && !fixed_atomic_energies.empty()) {
-		std::cout << "fixed atomic energies enabled:";
-		for (double value : fixed_atomic_energies)
-			std::cout << " " << value;
-		std::cout << " penalty_weight=" << fixed_atomic_energy_weight << std::endl;
-	}
+			          << " grid=" << radial_smooth_grid << std::endl;
+		if (prank == 0
+		    && (scalar_weight_l2_preset != "none"
+		        || scalar_head_l2 != 0.0
+		        || gate_scalar_l2 != 0.0
+		        || gate_mix_l2 != 0.0
+		        || gate_full_l2 != 0.0)) {
+			std::cout << "scalar weight L2 preset: " << scalar_weight_l2_preset
+			          << " head=" << scalar_head_l2
+			          << " gate_scalar=" << gate_scalar_l2
+			          << " gate_mix=" << gate_mix_l2
+			          << " gate_full=" << gate_full_l2
+			          << std::endl;
+		}
+		if (prank == 0 && !fixed_atomic_energies.empty()) {
+			std::cout << "fixed atomic energies enabled:";
+			for (double value : fixed_atomic_energies)
+				std::cout << " " << value;
+			std::cout << " penalty_weight=" << fixed_atomic_energy_weight << std::endl;
+		}
 	if (prank == 0 && fine_tune)
 		std::cout << "fine-tune mode enabled: scal_coeffs frozen; initial rescale+linear solve will run before BFGS" << std::endl;
 	if (prank == 0 && two_layer_residual_staged) {

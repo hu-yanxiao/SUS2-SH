@@ -67,6 +67,10 @@ public:
 	int radial_smooth_grid = 128;
 	std::vector<double> fixed_atomic_energies;
 	double fixed_atomic_energy_weight = 1.0e8;
+	double scalar_head_l2_regularization = 0.0;
+	double gate_scalar_l2_regularization = 0.0;
+	double gate_mix_l2_regularization = 0.0;
+	double gate_full_l2_regularization = 0.0;
 	ForceLossKind force_loss_kind = ForceLossKind::L2;
 	double force_log_cosh_scale = 2.0;
 
