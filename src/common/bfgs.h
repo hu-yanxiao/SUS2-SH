@@ -338,6 +338,7 @@ private:
 	std::vector<int> distributed_elem_counts_;
 	std::vector<int> distributed_elem_displs_;
 	bool use_distributed_dense_ = false;
+	bool armijo_value_only_trial_ready_ = false;
 	int distributed_rank_ = 0;
 	int distributed_size_ = 1;
 	int distributed_row_start_ = 0;
@@ -376,6 +377,8 @@ public:
 	int iter_step = 0;
 	bool is_in_linesearch() { return is_in_linesearch_; }
 	bool linesearch_stagnated() const { return linesearch.stagnated(); }
+	bool ArmijoValueOnlyTrialReady() const;
+	bool ArmijoValueOnlyAccepts(double f) const;
 
 	double wolfe_c1 = 0.1;
 	double wolfe_c2 = 0.5;
@@ -398,6 +401,8 @@ public:
 	double x(int i) { return x_[i]; }					//! read-only access to x
 	const double* Data() const { return x_.data(); }
 	const Array1D& Iterate(double f, const Array1D& g);	//! Make a BFGS iteration
+	const Array1D& IterateArmijoWithGradient(double f, const Array1D& g); //!< Accept current point with gradient and start next value-only Armijo trial
+	const Array1D& BacktrackArmijoValueOnly(double f); //!< Reject current Armijo trial using only the objective value
 	const Array1D& Iterate2(double _lr, const Array1D& g);	//! Make a BFGS iteration
 	const Array1D& ReduceStep(double _coeff = 0.25);	//! Reduce the step (e.g., if x was unphysical)
 };

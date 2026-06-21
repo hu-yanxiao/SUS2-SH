@@ -1057,6 +1057,11 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	double bfgs_conv_tol = 1e-3;
 	if (opts["bfgs-conv-tol"] != "")
 		bfgs_conv_tol = stod(opts["bfgs-conv-tol"]);
+	string bfgs_line_search = "wolfe";
+	if (opts["bfgs-line-search"] != "")
+		bfgs_line_search = opts["bfgs-line-search"];
+	if (bfgs_line_search != "wolfe" && bfgs_line_search != "armijo-value")
+		ERROR("--bfgs-line-search should be 'wolfe' or 'armijo-value'");
         
         bool do_sample = true;
 	if (opts["do-samp"] != "")
@@ -1269,6 +1274,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.std_scaling = weight_std;
         trainer.stdd_scaling = weight_stdd;
 	trainer.linstop = bfgs_conv_tol;	//if in 100 iterations loss decreases less than this, BFGS is finished
+	trainer.bfgs_line_search = bfgs_line_search;
 	trainer.curr_pot_name = curr_fnm;
 	trainer.bfgs_trace_file = bfgs_trace_fnm;
 	trainer.radial_smooth_regularization = radial_smooth;
@@ -1591,6 +1597,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << "Modified by Hu Yanxiao. " << std::endl;
                         std::cout << "BFGS iterations count set to " << trainer.max_step_count << std::endl;
 			std::cout << "BFGS convergence tolerance set to " << bfgs_conv_tol << std::endl;
+			std::cout << "BFGS line search: " << trainer.bfgs_line_search << std::endl;
 			if (trainer.do_lin) {
 				std::cout << "do-lin enabled for first " << trainer.do_lin_step_limit
 				          << " BFGS steps, frequency " << trainer.do_lin_frequency << std::endl;

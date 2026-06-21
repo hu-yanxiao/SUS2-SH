@@ -249,6 +249,7 @@ void BFGS::MaskCoordinates(const std::vector<int>& indices)
 //! Internally, it changes the protected members
 //! alpha and if outside linesearch then it changes p.
 const Array1D& BFGS::Iterate(double f, const Array1D& g) {
+	armijo_value_only_trial_ready_ = false;
 	const int bad_grad_index = FirstNonFinite(g, size);
 	if (!std::isfinite(f) || bad_grad_index >= 0) {
 		if (BFGSShouldBacktrackNonFinite(is_in_linesearch_, linesearch)) {
@@ -320,6 +321,87 @@ const Array1D& BFGS::Iterate(double f, const Array1D& g) {
 		CheckFiniteArray(x_, size, "BFGS next x");
 	}
 
+	return x_;
+}
+
+bool BFGS::ArmijoValueOnlyTrialReady() const
+{
+	return armijo_value_only_trial_ready_;
+}
+
+bool BFGS::ArmijoValueOnlyAccepts(double f) const
+{
+	if (!armijo_value_only_trial_ready_)
+		return false;
+	if (!std::isfinite(f))
+		return false;
+	return f <= f_start + wolfe_c1 * linesearch.x() * p_dot_g_start;
+}
+
+const Array1D& BFGS::BacktrackArmijoValueOnly(double f)
+{
+	if (!armijo_value_only_trial_ready_)
+		ERROR("BFGS Armijo value-only backtrack requested without an active trial.");
+	if (ArmijoValueOnlyAccepts(f))
+		return x_;
+
+	is_in_linesearch_ = true;
+	iter_step += 1;
+	const double old_step = linesearch.x();
+	linesearch.ReduceStep(0.5);
+	if (linesearch.x() == old_step)
+		ERROR("BFGS Armijo value-only line search stagnated.");
+	for (int i = 0; i < size; i++)
+		x_[i] = x_start[i] + linesearch.x() * p[i];
+	CheckFiniteArray(x_, size, "BFGS Armijo value-only backtracked x");
+	return x_;
+}
+
+const Array1D& BFGS::IterateArmijoWithGradient(double f, const Array1D& g)
+{
+	const int bad_grad_index = FirstNonFinite(g, size);
+	if (!std::isfinite(f))
+		ERROR("BFGS Armijo received a non-finite function value at an accepted point.");
+	if (bad_grad_index >= 0)
+		ERROR("BFGS Armijo received a non-finite gradient at accepted-point index "
+		      + std::to_string(bad_grad_index));
+
+	p_dot_g = ScalarProd(&g[0], &p[0]);
+	if (!std::isfinite(p_dot_g))
+		ERROR("BFGS Armijo produced a non-finite accepted directional derivative.");
+
+	is_in_linesearch_ = false;
+	iter_step = 0;
+	armijo_value_only_trial_ready_ = false;
+
+	UpdateInvHess(g);
+	FormDenseDirection(g);
+	CheckFiniteArray(p, size, "BFGS Armijo search direction");
+	p_dot_g = ScalarProd(&g[0], &p[0]);
+	if (!std::isfinite(p_dot_g))
+		ERROR("BFGS Armijo produced a non-finite directional derivative after Hessian update.");
+	linesearch.Reset();
+	SetStart(f, g);
+
+	if (p_dot_g > 0) {
+		if (!use_distributed_dense_) {
+			std::ofstream ofs("bfgs.log");
+			ofs.precision(16);
+			ofs << size << '\n';
+			for(int i=0; i<size; i++)
+				for(int j=0; j<size; j++)
+					ofs << inv_hess(i,j) << " ";
+			ofs.close();
+		}
+		ERROR("BFGS Armijo: stepping in accend direction detected.");
+	}
+
+	linesearch.Iterate(f, p_dot_g);
+	for (int i = 0; i < size; i++)
+		x_[i] = x_start[i] + linesearch.x() * p[i];
+	CheckFiniteArray(x_, size, "BFGS Armijo next x");
+	is_in_linesearch_ = true;
+	armijo_value_only_trial_ready_ = true;
 	return x_;
 }
 
@@ -428,6 +510,7 @@ void BFGS::Set_x(const double * x, int _size) {
 	// reset linesearch
 	linesearch.Reset();
 	is_in_linesearch_ = false;
+	armijo_value_only_trial_ready_ = false;
 }
 
 void BFGS::Restart() {
@@ -447,4 +530,5 @@ void BFGS::Restart() {
 	p_dot_g_start = HUGE_DOUBLE;
 	linesearch.Reset();
 	is_in_linesearch_ = false;
+	armijo_value_only_trial_ready_ = false;
 }

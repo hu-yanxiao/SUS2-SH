@@ -166,12 +166,21 @@ void NonLinearRegression::AddLoss(const Configuration & orig)
 
 void NonLinearRegression::AddLoss(const Configuration & orig, const Neighborhoods* neighborhoods)
 {
+	AddLoss(orig, neighborhoods, nullptr);
+}
+
+void NonLinearRegression::AddLoss(const Configuration & orig,
+								  const Neighborhoods* neighborhoods,
+								  Configuration* evaluated_cfg_out)
+{
 	if (orig.size() == 0)
 		return;
 
 	const bool need_std_terms = NeedStdTerms();
 	Configuration cfg = orig;
 	EvaluateTrainingConfiguration(orig, cfg, neighborhoods, false);
+	if (evaluated_cfg_out != nullptr)
+		*evaluated_cfg_out = cfg;
 
 	if (collect_error_metrics_ && orig.has_energy() && cfg.has_energy()) {
 		const double energy_delta = orig.energy - cfg.energy;
@@ -279,6 +288,13 @@ void NonLinearRegression::AddLossGrad(const Configuration & orig)
 
 void NonLinearRegression::AddLossGrad(const Configuration & orig, const Neighborhoods* neighborhoods)
 {
+	AddLossGrad(orig, neighborhoods, nullptr);
+}
+
+void NonLinearRegression::AddLossGrad(const Configuration & orig,
+									  const Neighborhoods* neighborhoods,
+									  const Configuration* evaluated_cfg)
+{
 	if (orig.size() == 0)
 		return;
 
@@ -286,8 +302,9 @@ void NonLinearRegression::AddLossGrad(const Configuration & orig, const Neighbor
 		loss_grad_.resize(p_mlip->CoeffCount());
 
 	const bool need_std_terms = NeedStdTerms();
-	Configuration cfg = orig;
-	EvaluateTrainingConfiguration(orig, cfg, neighborhoods, true);
+	Configuration cfg = evaluated_cfg != nullptr ? *evaluated_cfg : orig;
+	if (evaluated_cfg == nullptr)
+		EvaluateTrainingConfiguration(orig, cfg, neighborhoods, true);
 
 	if (collect_error_metrics_ && orig.has_energy() && cfg.has_energy()) {
 		const double energy_delta = orig.energy - cfg.energy;
@@ -459,10 +476,28 @@ double NonLinearRegression::ObjectiveFunction(vector<Configuration>& training_se
 
 double NonLinearRegression::ObjectiveFunction(vector<Configuration>& training_set, const std::vector<Neighborhoods>* neighborhoods)
 {
+	objective_prediction_cache_valid_ = false;
 	ResetObjectiveAccumulators();
 	for (size_t i = 0; i < training_set.size(); ++i)
 		AddLoss(training_set[i], neighborhoods == nullptr ? nullptr : &(*neighborhoods)[i]);
 	AddGlobalRegularization(static_cast<double>(training_set.size()), nullptr);
+	return loss_;
+}
+
+double NonLinearRegression::ObjectiveFunctionAndCachePredictions(
+	vector<Configuration>& training_set,
+	const std::vector<Neighborhoods>* neighborhoods)
+{
+	ResetObjectiveAccumulators();
+	objective_prediction_cache_.clear();
+	objective_prediction_cache_.resize(training_set.size());
+	for (size_t i = 0; i < training_set.size(); ++i)
+		AddLoss(training_set[i],
+		        neighborhoods == nullptr ? nullptr : &(*neighborhoods)[i],
+		        &objective_prediction_cache_[i]);
+	AddGlobalRegularization(static_cast<double>(training_set.size()), nullptr);
+	objective_prediction_cache_valid_ =
+		objective_prediction_cache_.size() == training_set.size();
 	return loss_;
 }
 
@@ -474,6 +509,7 @@ void NonLinearRegression::CalcObjectiveFunctionGrad(vector<Configuration>& train
 
 void NonLinearRegression::CalcObjectiveFunctionGrad(vector<Configuration>& training_set, const std::vector<Neighborhoods>* neighborhoods)
 {
+	objective_prediction_cache_valid_ = false;
 	ResetObjectiveAccumulators();
 	loss_grad_.resize(p_mlip->CoeffCount());
 	FillWithZero(loss_grad_);
@@ -481,6 +517,28 @@ void NonLinearRegression::CalcObjectiveFunctionGrad(vector<Configuration>& train
 	for (size_t i = 0; i < training_set.size(); ++i) 
 		AddLossGrad(training_set[i], neighborhoods == nullptr ? nullptr : &(*neighborhoods)[i]);
 	AddGlobalRegularization(static_cast<double>(training_set.size()), &loss_grad_);
+}
+
+void NonLinearRegression::CalcObjectiveFunctionGradFromCachedPredictions(
+	vector<Configuration>& training_set,
+	const std::vector<Neighborhoods>* neighborhoods)
+{
+	if (!objective_prediction_cache_valid_
+	    || objective_prediction_cache_.size() != training_set.size()) {
+		CalcObjectiveFunctionGrad(training_set, neighborhoods);
+		return;
+	}
+
+	ResetObjectiveAccumulators();
+	loss_grad_.resize(p_mlip->CoeffCount());
+	FillWithZero(loss_grad_);
+
+	for (size_t i = 0; i < training_set.size(); ++i)
+		AddLossGrad(training_set[i],
+		            neighborhoods == nullptr ? nullptr : &(*neighborhoods)[i],
+		            &objective_prediction_cache_[i]);
+	AddGlobalRegularization(static_cast<double>(training_set.size()), &loss_grad_);
+	objective_prediction_cache_valid_ = false;
 }
 
 double NonLinearRegression::EnergyMAE_meVPerAtom() const

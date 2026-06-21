@@ -34,8 +34,10 @@ protected:
 	bool collect_error_metrics_ = true;
 	void AddLoss(const Configuration &orig);
 	void AddLoss(const Configuration &orig, const Neighborhoods* neighborhoods);
+	void AddLoss(const Configuration &orig, const Neighborhoods* neighborhoods, Configuration* evaluated_cfg_out);
 	void AddLossGrad(const Configuration &orig);
 	void AddLossGrad(const Configuration &orig, const Neighborhoods* neighborhoods);
+	void AddLossGrad(const Configuration &orig, const Neighborhoods* neighborhoods, const Configuration* evaluated_cfg);
 	bool NeedForceTerms(const Configuration& orig) const;
 	bool NeedStressTerms(const Configuration& orig) const;
 	bool NeedPositionDerivativeTerms(const Configuration& orig) const;
@@ -52,8 +54,10 @@ protected:
         double stdd_;
 	double mean_1;
         double mean_2;
-		double mean_3;
+	double mean_3;
         std::vector<double> loss_grad_;							// result of AddLossGrad
+	std::vector<Configuration> objective_prediction_cache_;
+	bool objective_prediction_cache_valid_ = false;
 
 public:
 	int norm_by_forces = 0;									// whether to scale weight of E&F in configurations depending on the abs(F)
@@ -81,8 +85,10 @@ public:
 														
 	double ObjectiveFunction(std::vector<Configuration>& train_set);			// Calculates objective function summed over train_set
 	double ObjectiveFunction(std::vector<Configuration>& train_set, const std::vector<Neighborhoods>* neighborhoods);
+	double ObjectiveFunctionAndCachePredictions(std::vector<Configuration>& train_set, const std::vector<Neighborhoods>* neighborhoods);
 	void CalcObjectiveFunctionGrad(std::vector<Configuration>& train_set);		// Calculates objective function summed over train_set with their gradients
 	void CalcObjectiveFunctionGrad(std::vector<Configuration>& train_set, const std::vector<Neighborhoods>* neighborhoods);
+	void CalcObjectiveFunctionGradFromCachedPredictions(std::vector<Configuration>& train_set, const std::vector<Neighborhoods>* neighborhoods);
 	double EnergyMAE_meVPerAtom() const;
 	double EnergyRMSE_meVPerAtom() const;
 	double ForceMAE_meVPerA() const;

@@ -906,6 +906,45 @@ TEST("Linesearch") {
 	}
 } END_TEST;
 
+	TEST("BFGS Armijo value-only trial") {
+		Array1D x0(1);
+		x0[0] = 0.0;
+		BFGS bfgs;
+		bfgs.Set_x(x0);
+		bfgs.wolfe_c1 = 0.1;
+
+		auto value = [](double x) {
+			return (x - 1.0) * (x - 1.0);
+		};
+		auto gradient = [](double x) {
+			Array1D g(1);
+			g[0] = 2.0 * (x - 1.0);
+			return g;
+		};
+
+		Array1D g0 = gradient(0.0);
+		bfgs.IterateArmijoWithGradient(value(0.0), g0);
+		if (!bfgs.ArmijoValueOnlyTrialReady())
+			FAIL();
+		if (std::abs(bfgs.x(0) - 2.0) > 1.0e-12)
+			FAIL();
+
+		const double rejected_f = value(bfgs.x(0));
+		if (bfgs.ArmijoValueOnlyAccepts(rejected_f))
+			FAIL();
+		bfgs.BacktrackArmijoValueOnly(rejected_f);
+		if (std::abs(bfgs.x(0) - 1.0) > 1.0e-12)
+			FAIL();
+
+		const double accepted_f = value(bfgs.x(0));
+		if (!bfgs.ArmijoValueOnlyAccepts(accepted_f))
+			FAIL();
+		Array1D g1 = gradient(bfgs.x(0));
+		bfgs.IterateArmijoWithGradient(accepted_f, g1);
+		if (!bfgs.ArmijoValueOnlyTrialReady())
+			FAIL();
+	} END_TEST;
+
 TEST("checks minimal distance in configurations") {
 	int count = 0;
 	int status = 0;

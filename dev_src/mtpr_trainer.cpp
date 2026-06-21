@@ -1400,10 +1400,11 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		bool converge = false;
 		bool restored_rejected_linesearch = false;
 
-	double max_shift = 0.1*random_perturb;
-	double cooling_rate = 0.2;
-	bool linesearch = false;
-	auto abort_if_any_rank_reports = [&](int local_status, const std::string& message) {
+		double max_shift = 0.1*random_perturb;
+		double cooling_rate = 0.2;
+		bool linesearch = false;
+		const bool use_armijo_value_line_search = (bfgs_line_search == "armijo-value");
+		auto abort_if_any_rank_reports = [&](int local_status, const std::string& message) {
 		int global_status = local_status;
 #ifdef MLIP_MPI
 		MPI_Allreduce(&local_status, &global_status, 1, MPI_INT, MPI_MAX, train_comm);
@@ -1517,72 +1518,123 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			save_last_accepted_coeffs();
 		}
 
-		copy_bfgs_x_to_full_coeffs();
-		require_finite_coeffs_all("BFGS trial step " + std::to_string(num_step));
+			copy_bfgs_x_to_full_coeffs();
+			require_finite_coeffs_all("BFGS trial step " + std::to_string(num_step));
 
-		CalcObjectiveFunctionGrad(training_set, cache_training_neighborhoods ? &training_neighborhoods : nullptr);
-
-		loss_ /= K;
-		std_ /= K;
-        stdd_/=K;
-		mean_1 /= K;
-		mean_2 /= K;
-		mean_3 /= K;
-		for (int i = 0; i < n; i++)
-			loss_grad_[i] /= K;
-
-#ifdef MLIP_MPI
-		optimizer_reduce_local[0] = loss_;
-		for (int active_idx = 0; active_idx < opt_n; ++active_idx)
-			optimizer_reduce_local[kOptimizerReducePrefix + active_idx] =
-				optimizer_gradient_value(active_coeff_indices[active_idx]);
-		MPI_Reduce(optimizer_reduce_local.data(),
-		           prank == 0 ? optimizer_reduce_global.data() : optimizer_reduce_local.data(),
-		           opt_n + kOptimizerReducePrefix,
-		           MPI_DOUBLE,
-		           MPI_SUM,
-		           0,
-		           train_comm);
-		if (prank == 0) {
-			bfgs_f = optimizer_reduce_global[0];
-			std::memcpy(&bfgs_g[0],
-			            optimizer_reduce_global.data() + kOptimizerReducePrefix,
-			            opt_n * sizeof(double));
-		}
-
-#else
-		bfgs_f = loss_;
-		for (int active_idx = 0; active_idx < opt_n; ++active_idx)
-			bfgs_g[active_idx] = optimizer_gradient_value(active_coeff_indices[active_idx]);
-#endif	
-		if (freeze_species_coeffs) {
-			for (int idx : species_coeff_active_indices)
-				bfgs_g[idx] = 0.0;
-		}
-
-#ifdef MLIP_MPI
-		if (distributed_bfgs) {
-			if (prank == 0) {
-				optimizer_reduce_global[0] = bfgs_f;
-				std::memcpy(optimizer_reduce_global.data() + kOptimizerReducePrefix,
-				            &bfgs_g[0],
-				            opt_n * sizeof(double));
+			const std::vector<Neighborhoods>* objective_neighborhoods =
+				cache_training_neighborhoods ? &training_neighborhoods : nullptr;
+			const bool armijo_value_trial =
+				use_armijo_value_line_search && bfgs.ArmijoValueOnlyTrialReady();
+			bool armijo_value_trial_accepted = false;
+			bool armijo_value_trial_rejected = false;
+			if (armijo_value_trial) {
+				ObjectiveFunctionAndCachePredictions(training_set, objective_neighborhoods);
+				loss_ /= K;
+				std_ /= K;
+				stdd_ /= K;
+				mean_1 /= K;
+				mean_2 /= K;
+				mean_3 /= K;
+	#ifdef MLIP_MPI
+				optimizer_reduce_local[0] = loss_;
+				MPI_Reduce(optimizer_reduce_local.data(),
+				           prank == 0 ? optimizer_reduce_global.data() : optimizer_reduce_local.data(),
+				           1,
+				           MPI_DOUBLE,
+				           MPI_SUM,
+				           0,
+				           train_comm);
+				if (prank == 0)
+					bfgs_f = optimizer_reduce_global[0];
+				if (distributed_bfgs)
+					MPI_Bcast(&bfgs_f, 1, MPI_DOUBLE, 0, train_comm);
+	#else
+				bfgs_f = loss_;
+	#endif
+				int armijo_accept_state = 0;
+				if (distributed_bfgs || prank == 0)
+					armijo_accept_state = bfgs.ArmijoValueOnlyAccepts(bfgs_f) ? 1 : 0;
+	#ifdef MLIP_MPI
+				MPI_Bcast(&armijo_accept_state, 1, MPI_INT, 0, train_comm);
+	#endif
+				armijo_value_trial_accepted = (armijo_accept_state != 0);
+				armijo_value_trial_rejected = !armijo_value_trial_accepted;
+				if (armijo_value_trial_rejected
+				    && (distributed_bfgs || prank == 0)) {
+					bfgs.BacktrackArmijoValueOnly(bfgs_f);
+					mask_frozen_coordinates(freeze_species_coeffs);
+				}
 			}
-			MPI_Bcast(optimizer_reduce_global.data(),
-			          opt_n + kOptimizerReducePrefix,
-			          MPI_DOUBLE,
-			          0,
-			          train_comm);
-			if (prank != 0) {
-				bfgs_f = optimizer_reduce_global[0];
-				std::memcpy(&bfgs_g[0],
-				            optimizer_reduce_global.data() + kOptimizerReducePrefix,
-				            opt_n * sizeof(double));
-			}
-		}
-#endif
 
-		if ((distributed_bfgs || prank == 0) && !converge) {
+			if (!armijo_value_trial_rejected) {
+				if (armijo_value_trial)
+					CalcObjectiveFunctionGradFromCachedPredictions(training_set, objective_neighborhoods);
+				else
+					CalcObjectiveFunctionGrad(training_set, objective_neighborhoods);
+
+				loss_ /= K;
+				std_ /= K;
+				stdd_/=K;
+				mean_1 /= K;
+				mean_2 /= K;
+				mean_3 /= K;
+				for (int i = 0; i < n; i++)
+					loss_grad_[i] /= K;
+
+	#ifdef MLIP_MPI
+				optimizer_reduce_local[0] = loss_;
+				for (int active_idx = 0; active_idx < opt_n; ++active_idx)
+					optimizer_reduce_local[kOptimizerReducePrefix + active_idx] =
+						optimizer_gradient_value(active_coeff_indices[active_idx]);
+				MPI_Reduce(optimizer_reduce_local.data(),
+				           prank == 0 ? optimizer_reduce_global.data() : optimizer_reduce_local.data(),
+				           opt_n + kOptimizerReducePrefix,
+				           MPI_DOUBLE,
+				           MPI_SUM,
+				           0,
+				           train_comm);
+				if (prank == 0) {
+					bfgs_f = optimizer_reduce_global[0];
+					std::memcpy(&bfgs_g[0],
+					            optimizer_reduce_global.data() + kOptimizerReducePrefix,
+					            opt_n * sizeof(double));
+				}
+
+	#else
+				bfgs_f = loss_;
+				for (int active_idx = 0; active_idx < opt_n; ++active_idx)
+					bfgs_g[active_idx] = optimizer_gradient_value(active_coeff_indices[active_idx]);
+	#endif
+				if (freeze_species_coeffs) {
+					for (int idx : species_coeff_active_indices)
+						bfgs_g[idx] = 0.0;
+				}
+
+	#ifdef MLIP_MPI
+				if (distributed_bfgs) {
+					if (prank == 0) {
+						optimizer_reduce_global[0] = bfgs_f;
+						std::memcpy(optimizer_reduce_global.data() + kOptimizerReducePrefix,
+						            &bfgs_g[0],
+						            opt_n * sizeof(double));
+					}
+					MPI_Bcast(optimizer_reduce_global.data(),
+					          opt_n + kOptimizerReducePrefix,
+					          MPI_DOUBLE,
+					          0,
+					          train_comm);
+					if (prank != 0) {
+						bfgs_f = optimizer_reduce_global[0];
+						std::memcpy(&bfgs_g[0],
+						            optimizer_reduce_global.data() + kOptimizerReducePrefix,
+						            opt_n * sizeof(double));
+					}
+				}
+	#endif
+			}
+
+			if (!armijo_value_trial_rejected
+			    && (distributed_bfgs || prank == 0) && !converge) {
 			const int bad_grad_active_idx = FirstNonFinite(&bfgs_g[0], opt_n);
 			if (bad_grad_active_idx >= 0 && prank == 0) {
 				const int bad_grad_full_idx = active_coeff_indices[bad_grad_active_idx];
@@ -1601,12 +1653,16 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			}
 		}
 
-		int bfgs_status = 0;
-		if ((distributed_bfgs || prank == 0) && !converge) {
-			auto run_bfgs_iterate = [&]() {
-				mask_frozen_coordinates(freeze_species_coeffs);
-				bfgs.Iterate(bfgs_f, bfgs_g);
-				mask_frozen_coordinates(freeze_species_coeffs);
+			int bfgs_status = 0;
+			if (!armijo_value_trial_rejected
+			    && (distributed_bfgs || prank == 0) && !converge) {
+				auto run_bfgs_iterate = [&]() {
+					mask_frozen_coordinates(freeze_species_coeffs);
+					if (use_armijo_value_line_search)
+						bfgs.IterateArmijoWithGradient(bfgs_f, bfgs_g);
+					else
+						bfgs.Iterate(bfgs_f, bfgs_g);
+					mask_frozen_coordinates(freeze_species_coeffs);
 
 				int scaling_step_reductions = 0;
 				bool scaling_step_too_large = true;
@@ -1766,9 +1822,12 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				if (curr_pot_name != "")
 					p_mlmtpr->Save(curr_pot_name);
 			}
-		} else if (distributed_bfgs || prank == 0) {
-			linesearch = bfgs.is_in_linesearch();
-		}
+			} else if (distributed_bfgs || prank == 0) {
+				if (use_armijo_value_line_search)
+					linesearch = !armijo_value_trial_accepted;
+				else
+					linesearch = bfgs.is_in_linesearch();
+			}
 
 	#ifdef MLIP_MPI
 		if (!distributed_bfgs) {
