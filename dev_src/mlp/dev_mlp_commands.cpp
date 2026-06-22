@@ -254,6 +254,83 @@ struct DevLinearReadoutResult {
 	double worst_force_linear = 0.0;
 };
 
+double DevStrictSpatialAceCGMapCoeff(int l1, int rm1,
+                                     int l2, int rm2,
+                                     int L, int rM)
+{
+	return SphericalHarmonicRealCGCoeff(l1, rm1, l2, rm2, L, rM);
+}
+
+struct DevSpatialAceCGMapResult {
+	int checked_coeffs = 0;
+	int nonzero_coeffs = 0;
+	int odd_parity_nonzero_coeffs = 0;
+	int scalar_gaunt_forbidden_nonzero_coeffs = 0;
+	int worst_l1 = -1;
+	int worst_rm1 = 0;
+	int worst_l2 = -1;
+	int worst_rm2 = 0;
+	int worst_L = -1;
+	int worst_rM = 0;
+	double worst_abs_err = 0.0;
+	double worst_rel_err = 0.0;
+	double worst_reference = 0.0;
+	double worst_spatial = 0.0;
+};
+
+DevSpatialAceCGMapResult CheckStrictSpatialAceCGMap(int lmax,
+                                                    int max_samples)
+{
+	if (lmax < 0)
+		ERROR("--lmax should be non-negative.");
+	if (max_samples <= 0)
+		ERROR("--samples should be positive.");
+	DevSpatialAceCGMapResult result;
+	for (int l1 = 0; l1 <= lmax; ++l1) {
+		for (int l2 = 0; l2 <= lmax; ++l2) {
+			for (int L = std::abs(l1 - l2); L <= std::min(lmax, l1 + l2); ++L) {
+				for (int rm1 = -l1; rm1 <= l1; ++rm1) {
+					for (int rm2 = -l2; rm2 <= l2; ++rm2) {
+						for (int rM = -L; rM <= L; ++rM) {
+							if (result.checked_coeffs >= max_samples)
+								return result;
+							const double reference =
+								SphericalHarmonicRealCGCoeff(l1, rm1, l2, rm2, L, rM);
+							const double spatial =
+								DevStrictSpatialAceCGMapCoeff(l1, rm1, l2, rm2, L, rM);
+							const double abs_err = std::abs(reference - spatial);
+							const double scale = std::max(1.0e-14,
+								std::max(std::abs(reference), std::abs(spatial)));
+							const double rel_err = abs_err / scale;
+							++result.checked_coeffs;
+							if (std::abs(reference) > 1.0e-12) {
+								++result.nonzero_coeffs;
+								if (((l1 + l2 + L) & 1) != 0) {
+									++result.odd_parity_nonzero_coeffs;
+									++result.scalar_gaunt_forbidden_nonzero_coeffs;
+								}
+							}
+							if (abs_err > result.worst_abs_err) {
+								result.worst_abs_err = abs_err;
+								result.worst_rel_err = rel_err;
+								result.worst_l1 = l1;
+								result.worst_rm1 = rm1;
+								result.worst_l2 = l2;
+								result.worst_rm2 = rm2;
+								result.worst_L = L;
+								result.worst_rM = rM;
+								result.worst_reference = reference;
+								result.worst_spatial = spatial;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return result;
+}
+
 struct DevGateFastPathResult {
 	int checked_values = 0;
 	int checked_derivatives = 0;
@@ -1184,6 +1261,55 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			&& result.worst_force_rel_err > rel_tolerance;
 		if (energy_failed || force_failed)
 			exit(1);
+	} END_COMMAND;
+
+	BEGIN_COMMAND("check-sh-spatial-ace-cg-map-dev",
+		"checks strict spatial ACE CG-map coefficients against the current SUS2-SH real CG convention",
+		"mlp-sus2 check-sh-spatial-ace-cg-map-dev --lmax=4 --samples=0 --abs-tolerance=1e-10 --rel-tolerance=1e-9\n"
+	) {
+		if (!args.empty()) {
+			std::cout << "mlp-sus2 check-sh-spatial-ace-cg-map-dev: no positional arguments are expected\n";
+			return 1;
+		}
+		const int lmax = ParseDevIntOption(opts, "lmax", 4);
+		const int samples_opt = ParseDevIntOption(opts, "samples", 0);
+		const int samples = samples_opt <= 0
+			? std::numeric_limits<int>::max()
+			: samples_opt;
+		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-10);
+		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-9);
+
+		const DevSpatialAceCGMapResult result =
+			CheckStrictSpatialAceCGMap(lmax, samples);
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "checked_coeffs=" << result.checked_coeffs
+			          << " nonzero_coeffs=" << result.nonzero_coeffs
+			          << " odd_parity_nonzero_coeffs="
+			          << result.odd_parity_nonzero_coeffs
+			          << " scalar_gaunt_forbidden_nonzero_coeffs="
+			          << result.scalar_gaunt_forbidden_nonzero_coeffs
+			          << " worst_l1=" << result.worst_l1
+			          << " worst_rm1=" << result.worst_rm1
+			          << " worst_l2=" << result.worst_l2
+			          << " worst_rm2=" << result.worst_rm2
+			          << " worst_L=" << result.worst_L
+			          << " worst_rM=" << result.worst_rM
+			          << " reference=" << result.worst_reference
+			          << " spatial=" << result.worst_spatial
+			          << " abs_err=" << result.worst_abs_err
+			          << " rel_err=" << result.worst_rel_err
+			          << std::endl;
+		}
+		if (result.checked_coeffs == 0 || result.nonzero_coeffs == 0)
+			exit(1);
+		if (lmax >= 1 && result.scalar_gaunt_forbidden_nonzero_coeffs == 0)
+			exit(1);
+		if (result.worst_abs_err > abs_tolerance
+		    && result.worst_rel_err > rel_tolerance)
+			exit(1);
+		if (mpi_rank == 0)
+			std::cout << "strict spatial ACE CG-map check passed" << std::endl;
 	} END_COMMAND;
 
 	BEGIN_COMMAND("check-two-layer-gate-fastpath-dev",

@@ -726,6 +726,13 @@ public:
 
 } // namespace
 
+double SphericalHarmonicRealCGCoeff(int l1, int rm1,
+                                    int l2, int rm2,
+                                    int L, int rM)
+{
+	return RealCGCoeff(l1, rm1, l2, rm2, L, rM);
+}
+
 void WriteSphericalHarmonicModel(const std::string& filename,
                                  const std::map<std::string, std::string>& opts)
 {

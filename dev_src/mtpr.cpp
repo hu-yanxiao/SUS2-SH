@@ -1591,12 +1591,16 @@ void MLMTPR::Load(const string& filename)
 			potential_tag = "";
 			is_sh_potential_ = false;
 			ClearZBL();
-			sh_products_.clear();
+		sh_products_.clear();
 		sh_product_rows_.clear();
 		sh_product_row_terms_.clear();
+		sh_strict_spatial_ace_groups_.clear();
+		sh_strict_spatial_ace_terms_.clear();
 		sh_scalar_index_by_moment_.clear();
 		sh_scalar_terminal_product_.clear();
 	sh_product_rows_trace_printed_ = false;
+	sh_strict_spatial_ace_trace_printed_ = false;
+	sh_strict_spatial_ace_gate_trace_printed_ = false;
 	sh_site_der_cache_trace_printed_ = false;
 	has_sh_scalar_info_ = false;
 	sh_scalar_info_.clear();
@@ -1623,9 +1627,11 @@ void MLMTPR::Load(const string& filename)
 	two_layer_gate_required_moments_.clear();
 	two_layer_gate_required_moment_indices_.clear();
 	two_layer_gate_required_basic_indices_.clear();
-	two_layer_gate_required_basic_dense_mu_indices_.clear();
-	two_layer_gate_required_product_indices_.clear();
-	two_layer_gate_required_mu_indices_.clear();
+		two_layer_gate_required_basic_dense_mu_indices_.clear();
+		two_layer_gate_required_product_indices_.clear();
+		two_layer_gate_strict_spatial_ace_groups_.clear();
+		two_layer_gate_strict_spatial_ace_terms_.clear();
+		two_layer_gate_required_mu_indices_.clear();
 	two_layer_gate_mu_dense_index_.clear();
 	two_layer_gate_required_radial_eval_blocks_.clear();
 	two_layer_gate_values_.clear();
@@ -5438,9 +5444,13 @@ void MLMTPR::BuildSHProductProgram()
 {
 	sh_product_rows_.clear();
 	sh_product_row_terms_.clear();
+	sh_strict_spatial_ace_groups_.clear();
+	sh_strict_spatial_ace_terms_.clear();
 	sh_scalar_index_by_moment_.assign(alpha_moments_count, -1);
 	sh_scalar_terminal_product_.assign(alpha_scalar_moments, 0);
 	sh_product_rows_trace_printed_ = false;
+	sh_strict_spatial_ace_trace_printed_ = false;
+	sh_strict_spatial_ace_gate_trace_printed_ = false;
 	sh_site_der_cache_trace_printed_ = false;
 
 	if (!is_sh_potential_ || sh_products_.empty())
@@ -5498,6 +5508,82 @@ void MLMTPR::BuildSHProductProgram()
 			sh_scalar_terminal_product_[row.scalar_index] = 1;
 		sh_product_rows_.push_back(row);
 	}
+
+	std::vector<int> all_products;
+	all_products.reserve(sh_products_.size());
+	for (int p = 0; p < static_cast<int>(sh_products_.size()); ++p)
+		all_products.push_back(p);
+	BuildSHStrictSpatialAceProgramFromProducts(
+		all_products,
+		sh_strict_spatial_ace_groups_,
+		sh_strict_spatial_ace_terms_,
+		true);
+}
+
+void MLMTPR::BuildSHStrictSpatialAceProgramFromProducts(
+	const std::vector<int>& product_indices,
+	std::vector<SHStrictSpatialAceGroup>& groups,
+	std::vector<SHStrictSpatialAceTerm>& terms,
+	bool annotate_terminal_scalars)
+{
+	groups.clear();
+	terms.clear();
+	if (!is_sh_potential_ || product_indices.empty())
+		return;
+
+	std::vector<int> source_count(alpha_moments_count, 0);
+	std::vector<int> group_term_count(alpha_moments_count, 0);
+	std::vector<int> group_last_product(alpha_moments_count, -1);
+	std::vector<std::vector<int>> product_indices_by_target(alpha_moments_count);
+	for (int product_index : product_indices) {
+		if (product_index < 0
+		    || product_index >= static_cast<int>(sh_products_.size()))
+			ERROR("SUS2-SH strict spatial ACE product index is out of range");
+		const SHProduct& product = sh_products_[product_index];
+		++source_count[product.left];
+		++source_count[product.right];
+		++group_term_count[product.target];
+		group_last_product[product.target] = product_index;
+		product_indices_by_target[product.target].push_back(product_index);
+	}
+
+	std::vector<int> group_targets;
+	group_targets.reserve(product_indices.size());
+	for (int target = 0; target < alpha_moments_count; ++target) {
+		if (group_term_count[target] > 0)
+			group_targets.push_back(target);
+	}
+	std::sort(group_targets.begin(), group_targets.end(),
+	          [&](int left, int right) {
+		          return group_last_product[left] < group_last_product[right];
+	          });
+
+	terms.reserve(product_indices.size());
+	groups.reserve(group_targets.size());
+	for (int target : group_targets) {
+		SHStrictSpatialAceGroup group;
+		group.target = target;
+		group.term_begin = static_cast<int>(terms.size());
+		group.term_count = 0;
+		group.scalar_index =
+			target >= 0 && target < static_cast<int>(sh_scalar_index_by_moment_.size())
+				? sh_scalar_index_by_moment_[target]
+				: -1;
+		group.terminal_scalar =
+			annotate_terminal_scalars
+			&& group.scalar_index >= 0
+			&& source_count[target] == 0;
+		for (int product_index : product_indices_by_target[target]) {
+			const SHProduct& product = sh_products_[product_index];
+			SHStrictSpatialAceTerm term;
+			term.left = product.left;
+			term.right = product.right;
+			term.coeff = product.coeff;
+			terms.push_back(term);
+			++group.term_count;
+		}
+		groups.push_back(group);
+	}
 }
 
 void MLMTPR::BuildTwoLayerGateProductProgram()
@@ -5507,6 +5593,8 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 	two_layer_gate_required_basic_indices_.clear();
 	two_layer_gate_required_basic_dense_mu_indices_.clear();
 	two_layer_gate_required_product_indices_.clear();
+	two_layer_gate_strict_spatial_ace_groups_.clear();
+	two_layer_gate_strict_spatial_ace_terms_.clear();
 	two_layer_gate_required_mu_indices_.clear();
 	two_layer_gate_mu_dense_index_.clear();
 	two_layer_gate_required_radial_eval_blocks_.clear();
@@ -5575,6 +5663,11 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 	for (int i = 0; i < alpha_moments_count; ++i)
 		if (two_layer_gate_required_moments_[i])
 			two_layer_gate_required_moment_indices_.push_back(i);
+	BuildSHStrictSpatialAceProgramFromProducts(
+		two_layer_gate_required_product_indices_,
+		two_layer_gate_strict_spatial_ace_groups_,
+		two_layer_gate_strict_spatial_ace_terms_,
+		false);
 }
 
 void MLMTPR::WriteSHProductGraph(std::ofstream& ofs)

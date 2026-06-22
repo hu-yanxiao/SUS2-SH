@@ -1148,6 +1148,17 @@ bool MLMTPR::UseSHProductRows() const
 	return value == "1" || value == "true" || value == "True" || value == "on" || value == "ON";
 }
 
+bool MLMTPR::UseSHStrictSpatialAce() const
+{
+	if (sh_strict_spatial_ace_groups_.empty())
+		return false;
+	const char* env = std::getenv("SUS2_SH_STRICT_SPATIAL_ACE");
+	if (env == nullptr)
+		return false;
+	const std::string value(env);
+	return value == "1" || value == "true" || value == "True" || value == "on" || value == "ON";
+}
+
 bool MLMTPR::UseSHSiteDerivativeCache() const
 {
 	const char* env = std::getenv("SUS2_SH_SITE_DER_CACHE");
@@ -1307,6 +1318,45 @@ void MLMTPR::TraceSHProductProgramOnce()
 	sh_product_rows_trace_printed_ = true;
 }
 
+void MLMTPR::TraceSHStrictSpatialAceOnce()
+{
+	if (sh_strict_spatial_ace_trace_printed_)
+		return;
+	if (!UseSHStrictSpatialAce())
+		return;
+	const char* env = std::getenv("SUS2_SH_STRICT_SPATIAL_ACE_TRACE");
+	if (env == nullptr)
+		return;
+	const std::string value(env);
+	if (value == "0" || value == "false" || value == "False")
+		return;
+
+	std::cout << "SUS2-SH strict spatial ACE backend enabled: "
+	          << "exact_cg_groups=" << sh_strict_spatial_ace_groups_.size()
+	          << " terms=" << sh_strict_spatial_ace_terms_.size()
+	          << " implementation=spatial-grouped-exact" << std::endl;
+	sh_strict_spatial_ace_trace_printed_ = true;
+}
+
+void MLMTPR::TraceSHStrictSpatialAceGateOnce(int product_count)
+{
+	if (sh_strict_spatial_ace_gate_trace_printed_)
+		return;
+	if (!UseSHStrictSpatialAce())
+		return;
+	const char* env = std::getenv("SUS2_SH_STRICT_SPATIAL_ACE_TRACE");
+	if (env == nullptr)
+		return;
+	const std::string value(env);
+	if (value == "0" || value == "false" || value == "False")
+		return;
+
+	std::cout << "SUS2-SH strict spatial ACE gate scalar backend enabled: "
+	          << "required_exact_cg_products=" << product_count
+	          << " implementation=required-product-subset" << std::endl;
+	sh_strict_spatial_ace_gate_trace_printed_ = true;
+}
+
 void MLMTPR::TraceSHSiteDerivativeCacheOnce(int neighbor_count,
                                             int sh_count,
                                             int radial_func_count)
@@ -1337,6 +1387,48 @@ void MLMTPR::ApplySHProductRowsForward()
 			value += term.coeff * moment_vals[term.left] * moment_vals[term.right];
 		}
 		moment_vals[row.target] += value;
+	}
+}
+
+void MLMTPR::ApplySHStrictSpatialAceGroupsForward(
+	const std::vector<SHStrictSpatialAceGroup>& groups,
+	const std::vector<SHStrictSpatialAceTerm>& terms)
+{
+	for (const SHStrictSpatialAceGroup& group : groups) {
+		double value = 0.0;
+		const int end = group.term_begin + group.term_count;
+		for (int t = group.term_begin; t < end; ++t) {
+			const SHStrictSpatialAceTerm& term = terms[t];
+			value += term.coeff * moment_vals[term.left] * moment_vals[term.right];
+		}
+		moment_vals[group.target] += value;
+	}
+}
+
+void MLMTPR::ApplySHStrictSpatialAceForward()
+{
+	TraceSHStrictSpatialAceOnce();
+	ApplySHStrictSpatialAceGroupsForward(
+		sh_strict_spatial_ace_groups_,
+		sh_strict_spatial_ace_terms_);
+}
+
+void MLMTPR::ApplySHStrictSpatialAceGateForward()
+{
+	TraceSHStrictSpatialAceGateOnce(
+		static_cast<int>(two_layer_gate_strict_spatial_ace_terms_.size()));
+	ApplySHStrictSpatialAceGroupsForward(
+		two_layer_gate_strict_spatial_ace_groups_,
+		two_layer_gate_strict_spatial_ace_terms_);
+}
+
+void MLMTPR::ApplySHStrictSpatialAceProducts(const std::vector<int>& product_indices)
+{
+	TraceSHStrictSpatialAceGateOnce(static_cast<int>(product_indices.size()));
+	for (int product_index : product_indices) {
+		const SHProduct& product = sh_products_[product_index];
+		moment_vals[product.target] +=
+			product.coeff * moment_vals[product.left] * moment_vals[product.right];
 	}
 }
 
@@ -1384,6 +1476,52 @@ void MLMTPR::ApplySHProductRowsDers(const Neighborhood& nbh)
 	}
 }
 
+void MLMTPR::ApplySHStrictSpatialAceDers(const Neighborhood& nbh)
+{
+	TraceSHStrictSpatialAceOnce();
+	for (const SHStrictSpatialAceGroup& group : sh_strict_spatial_ace_groups_) {
+		double value = 0.0;
+		const int end = group.term_begin + group.term_count;
+		for (int t = group.term_begin; t < end; ++t) {
+			const SHStrictSpatialAceTerm& term = sh_strict_spatial_ace_terms_[t];
+			value += term.coeff * moment_vals[term.left] * moment_vals[term.right];
+		}
+		moment_vals[group.target] += value;
+
+		if (group.terminal_scalar) {
+			const int basis_index = 1 + group.scalar_index;
+			basis_vals[basis_index] = moment_vals[group.target];
+			for (int j = 0; j < nbh.count; ++j) {
+				for (int a = 0; a < 3; ++a) {
+					double der = 0.0;
+					for (int t = group.term_begin; t < end; ++t) {
+						const SHStrictSpatialAceTerm& term =
+							sh_strict_spatial_ace_terms_[t];
+						der += term.coeff * (
+							moment_ders(term.left, j, a) * moment_vals[term.right]
+							+ moment_vals[term.left] * moment_ders(term.right, j, a));
+					}
+					basis_ders(basis_index, j, a) = der;
+				}
+			}
+		} else {
+			for (int j = 0; j < nbh.count; ++j) {
+				for (int a = 0; a < 3; ++a) {
+					double der = 0.0;
+					for (int t = group.term_begin; t < end; ++t) {
+						const SHStrictSpatialAceTerm& term =
+							sh_strict_spatial_ace_terms_[t];
+						der += term.coeff * (
+							moment_ders(term.left, j, a) * moment_vals[term.right]
+							+ moment_vals[term.left] * moment_ders(term.right, j, a));
+					}
+					moment_ders(group.target, j, a) += der;
+				}
+			}
+		}
+	}
+}
+
 void MLMTPR::AccumulateSHProductRowsForward(const std::vector<double>& input_values,
                                             std::vector<double>& output_values) const
 {
@@ -1400,6 +1538,43 @@ void MLMTPR::AccumulateSHProductRowsForward(const std::vector<double>& input_val
 	}
 }
 
+void MLMTPR::AccumulateSHStrictSpatialAceForward(
+	const std::vector<double>& input_values,
+	std::vector<double>& output_values) const
+{
+	for (const SHStrictSpatialAceGroup& group : sh_strict_spatial_ace_groups_) {
+		double value = 0.0;
+		const int end = group.term_begin + group.term_count;
+		for (int t = group.term_begin; t < end; ++t) {
+			const SHStrictSpatialAceTerm& term = sh_strict_spatial_ace_terms_[t];
+			value += term.coeff * (
+				input_values[term.left] * moment_vals[term.right]
+				+ moment_vals[term.left] * input_values[term.right]);
+		}
+		output_values[group.target] += value;
+	}
+}
+
+void MLMTPR::AccumulateSHStrictSpatialAceMixedReverse(
+	const std::vector<double>& tangent_values,
+	const std::vector<double>& target_adjoints,
+	std::vector<double>& output_adjoints) const
+{
+	for (const SHStrictSpatialAceGroup& group : sh_strict_spatial_ace_groups_) {
+		const double adj_target = target_adjoints[group.target];
+		if (adj_target == 0.0)
+			continue;
+		const int end = group.term_begin + group.term_count;
+		for (int t = group.term_begin; t < end; ++t) {
+			const SHStrictSpatialAceTerm& term = sh_strict_spatial_ace_terms_[t];
+			output_adjoints[term.left] +=
+				tangent_values[term.right] * adj_target * term.coeff;
+			output_adjoints[term.right] +=
+				tangent_values[term.left] * adj_target * term.coeff;
+		}
+	}
+}
+
 void MLMTPR::BackpropSHProductRows(std::vector<double>& adjoints) const
 {
 	for (int r = static_cast<int>(sh_product_rows_.size()) - 1; r >= 0; --r) {
@@ -1411,6 +1586,25 @@ void MLMTPR::BackpropSHProductRows(std::vector<double>& adjoints) const
 			const SHProductRowTerm& term = sh_product_row_terms_[t];
 			adjoints[term.left] += term.coeff * moment_vals[term.right] * adj_target;
 			adjoints[term.right] += term.coeff * moment_vals[term.left] * adj_target;
+		}
+	}
+}
+
+void MLMTPR::BackpropSHStrictSpatialAce(std::vector<double>& adjoints) const
+{
+	for (int g = static_cast<int>(sh_strict_spatial_ace_groups_.size()) - 1;
+	     g >= 0; --g) {
+		const SHStrictSpatialAceGroup& group = sh_strict_spatial_ace_groups_[g];
+		const double adj_target = adjoints[group.target];
+		if (adj_target == 0.0)
+			continue;
+		const int end = group.term_begin + group.term_count;
+		for (int t = group.term_begin; t < end; ++t) {
+			const SHStrictSpatialAceTerm& term = sh_strict_spatial_ace_terms_[t];
+			adjoints[term.left] +=
+				term.coeff * moment_vals[term.right] * adj_target;
+			adjoints[term.right] +=
+				term.coeff * moment_vals[term.left] * adj_target;
 		}
 	}
 }
@@ -1895,12 +2089,16 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 			}
 			}
 			if (prepare_gate_values_from_cache) {
-				for (int product_index : two_layer_gate_required_product_indices_) {
-					const SHProduct& product = sh_products_[product_index];
-				moment_vals[product.target] +=
-					product.coeff * moment_vals[product.left]
-					* moment_vals[product.right];
-			}
+				if (UseSHStrictSpatialAce())
+					ApplySHStrictSpatialAceGateForward();
+				else {
+					for (int product_index : two_layer_gate_required_product_indices_) {
+						const SHProduct& product = sh_products_[product_index];
+						moment_vals[product.target] +=
+							product.coeff * moment_vals[product.left]
+							* moment_vals[product.right];
+					}
+				}
 			double* cached_scalars = two_layer_gate_scalar_values_cache_.data()
 				+ static_cast<size_t>(ind) * gate_count;
 			double* cached_moments = two_layer_gate_moment_values_cache_.data()
@@ -2058,7 +2256,9 @@ void MLMTPR::CalcSHMomentValuesOnly(const Neighborhood& nbh)
 				}
 	}
 
-	if (UseSHProductRows()) {
+	if (UseSHStrictSpatialAce()) {
+		ApplySHStrictSpatialAceForward();
+	} else if (UseSHProductRows()) {
 		ApplySHProductRowsForward();
 	} else {
 		for (size_t p = 0; p < sh_products_.size(); ++p) {
@@ -2198,7 +2398,9 @@ void MLMTPR::CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh)
 			}
 	}
 
-	if (UseSHProductRows()) {
+	if (UseSHStrictSpatialAce()) {
+		ApplySHStrictSpatialAceForward();
+	} else if (UseSHProductRows()) {
 		ApplySHProductRowsForward();
 	} else {
 		for (size_t p = 0; p < sh_products_.size(); ++p) {
@@ -2363,7 +2565,9 @@ void MLMTPR::CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh)
 				}
 	}
 
-	if (UseSHProductRows()) {
+	if (UseSHStrictSpatialAce()) {
+		ApplySHStrictSpatialAceForward();
+	} else if (UseSHProductRows()) {
 		ApplySHProductRowsForward();
 	} else {
 		for (size_t p = 0; p < sh_products_.size(); ++p) {
@@ -2515,8 +2719,11 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 	if (active_two_layer_gate_values_ == nullptr)
 		basis_ders.set(0);
 
-	const bool use_product_rows = UseSHProductRows();
-	if (use_product_rows) {
+	const bool use_strict_spatial_ace = UseSHStrictSpatialAce();
+	const bool use_product_rows = !use_strict_spatial_ace && UseSHProductRows();
+	if (use_strict_spatial_ace) {
+		ApplySHStrictSpatialAceDers(nbh);
+	} else if (use_product_rows) {
 		ApplySHProductRowsDers(nbh);
 	} else {
 		for (size_t p = 0; p < sh_products_.size(); ++p) {
@@ -2532,7 +2739,8 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 	}
 
 	for (int i = 0; i < alpha_scalar_moments; ++i) {
-		if (use_product_rows && sh_scalar_terminal_product_[i])
+		if ((use_strict_spatial_ace || use_product_rows)
+		    && sh_scalar_terminal_product_[i])
 			continue;
 		const int node = alpha_moment_mapping[i];
 		basis_vals[1 + i] = moment_vals[node];
@@ -2647,10 +2855,14 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 		}
 	}
 
-	for (int product_index : two_layer_gate_required_product_indices_) {
-		const SHProduct& product = sh_products_[product_index];
-		moment_vals[product.target] +=
-			product.coeff * moment_vals[product.left] * moment_vals[product.right];
+	if (UseSHStrictSpatialAce())
+		ApplySHStrictSpatialAceGateForward();
+	else {
+		for (int product_index : two_layer_gate_required_product_indices_) {
+			const SHProduct& product = sh_products_[product_index];
+			moment_vals[product.target] +=
+				product.coeff * moment_vals[product.left] * moment_vals[product.right];
+		}
 	}
 
 	gate_scalar_values.assign(TwoLayerGateScalarCount(), 0.0);
@@ -4760,7 +4972,9 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 		site_energy_ders_wrt_moments_[alpha_moment_mapping[i]] += moment_coeff;
 	}
 
-	if (UseSHProductRows()) {
+	if (UseSHStrictSpatialAce()) {
+		BackpropSHStrictSpatialAce(site_energy_ders_wrt_moments_);
+	} else if (UseSHProductRows()) {
 		BackpropSHProductRows(site_energy_ders_wrt_moments_);
 	} else {
 		for (int p = static_cast<int>(sh_products_.size()) - 1; p >= 0; --p) {
@@ -5081,7 +5295,9 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 			const double moment_coeff = linear_coeffs[species_count + i] * linear_mults[i];
 			site_energy_ders_wrt_moments_[node] += moment_coeff;
 		}
-		if (UseSHProductRows()) {
+		if (UseSHStrictSpatialAce()) {
+			BackpropSHStrictSpatialAce(site_energy_ders_wrt_moments_);
+		} else if (UseSHProductRows()) {
 			BackpropSHProductRows(site_energy_ders_wrt_moments_);
 		} else {
 			for (int p = static_cast<int>(sh_products_.size()) - 1; p >= 0; --p) {
@@ -5256,9 +5472,20 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 						}
 		}
 
-	const bool use_product_rows = UseSHProductRows();
-	const bool use_product_hvt_reverse = !use_product_rows && UseSHProductHVTReverse();
-	if (use_product_rows) {
+	const bool use_strict_spatial_ace = UseSHStrictSpatialAce();
+	const bool use_product_rows = !use_strict_spatial_ace && UseSHProductRows();
+	const bool use_product_hvt_reverse =
+		!use_strict_spatial_ace && !use_product_rows && UseSHProductHVTReverse();
+	if (use_strict_spatial_ace) {
+		AccumulateSHStrictSpatialAceForward(
+			grad_dloss_dsenders_,
+			grad_dloss_dsenders_);
+		AccumulateSHStrictSpatialAceMixedReverse(
+			grad_dloss_dsenders_,
+			site_energy_ders_wrt_moments_,
+			grad_dloss_dmom_);
+		BackpropSHStrictSpatialAce(grad_dloss_dmom_);
+	} else if (use_product_rows) {
 		AccumulateSHProductRowsForward(grad_dloss_dsenders_, grad_dloss_dsenders_);
 		for (const SHProductRow& row : sh_product_rows_) {
 			const double adj_target = site_energy_ders_wrt_moments_[row.target];
@@ -5728,8 +5955,10 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 			grad_dloss_dmom_.resize(alpha_moments_count);
 		std::fill(grad_dloss_dsenders_.begin(), grad_dloss_dsenders_.end(), 0.0);
 		std::fill(grad_dloss_dmom_.begin(), grad_dloss_dmom_.end(), 0.0);
-		const bool use_product_rows = UseSHProductRows();
-		const bool use_product_hvt_reverse = !use_product_rows && UseSHProductHVTReverse();
+		const bool use_strict_spatial_ace = UseSHStrictSpatialAce();
+		const bool use_product_rows = !use_strict_spatial_ace && UseSHProductRows();
+		const bool use_product_hvt_reverse =
+			!use_strict_spatial_ace && !use_product_rows && UseSHProductHVTReverse();
 		const bool profile_accum = SHAccumProfileEnabledOnRank0();
 		const double profile_start = profile_accum ? SHAccumProfileNow() : 0.0;
 		if (se_ders_weights != nullptr)
@@ -5746,7 +5975,9 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 				site_energy_ders_wrt_moments_[node] += moment_coeff;
 			}
 
-			if (use_product_rows) {
+			if (use_strict_spatial_ace) {
+				BackpropSHStrictSpatialAce(site_energy_ders_wrt_moments_);
+			} else if (use_product_rows) {
 				BackpropSHProductRows(site_energy_ders_wrt_moments_);
 			} else {
 				for (int p = static_cast<int>(sh_products_.size()) - 1; p >= 0; --p) {
@@ -5864,7 +6095,11 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 				}
 				profile_after_force_cache = profile_accum ? SHAccumProfileNow() : 0.0;
 
-						if (use_product_rows) {
+						if (use_strict_spatial_ace) {
+							AccumulateSHStrictSpatialAceForward(
+								grad_dloss_dsenders_,
+								grad_dloss_dsenders_);
+						} else if (use_product_rows) {
 							AccumulateSHProductRowsForward(grad_dloss_dsenders_, grad_dloss_dsenders_);
 				} else {
 					for (size_t p = 0; p < sh_products_.size(); ++p) {
@@ -5876,7 +6111,12 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 					}
 					profile_after_tangent_forward = profile_accum ? SHAccumProfileNow() : 0.0;
 
-					if (use_product_rows) {
+					if (use_strict_spatial_ace) {
+						AccumulateSHStrictSpatialAceMixedReverse(
+							grad_dloss_dsenders_,
+							site_energy_ders_wrt_moments_,
+							grad_dloss_dmom_);
+					} else if (use_product_rows) {
 						for (const SHProductRow& row : sh_product_rows_) {
 						const double adj_target = site_energy_ders_wrt_moments_[row.target];
 						if (adj_target == 0.0)
@@ -5909,7 +6149,9 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 			grad_dloss_dmom_[i] += se_weight * site_energy_ders_wrt_moments_[i];
 
 			if (se_ders_weights != nullptr) {
-				if (use_product_rows) {
+				if (use_strict_spatial_ace) {
+					BackpropSHStrictSpatialAce(grad_dloss_dmom_);
+				} else if (use_product_rows) {
 					BackpropSHProductRows(grad_dloss_dmom_);
 				} else if (use_product_hvt_reverse) {
 					for (int p = static_cast<int>(sh_products_.size()) - 1; p >= 0; --p) {

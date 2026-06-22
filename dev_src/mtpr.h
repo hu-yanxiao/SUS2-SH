@@ -36,6 +36,20 @@ struct SHProductRow {
 	bool terminal_scalar;
 };
 
+struct SHStrictSpatialAceTerm {
+	int left;
+	int right;
+	double coeff;
+};
+
+struct SHStrictSpatialAceGroup {
+	int target;
+	int term_begin;
+	int term_count;
+	int scalar_index;
+	bool terminal_scalar;
+};
+
 struct SHScalarInfo {
 	int body_order = 0;
 	int q[5] = {-1, -1, -1, -1, -1};
@@ -83,6 +97,8 @@ protected:
 	std::vector<SHProduct> sh_products_;
 	std::vector<SHProductRow> sh_product_rows_;
 	std::vector<SHProductRowTerm> sh_product_row_terms_;
+	std::vector<SHStrictSpatialAceGroup> sh_strict_spatial_ace_groups_;
+	std::vector<SHStrictSpatialAceTerm> sh_strict_spatial_ace_terms_;
 	std::vector<int> sh_scalar_index_by_moment_;
 	std::vector<char> sh_scalar_terminal_product_;
 	std::vector<char> two_layer_gate_required_moments_;
@@ -90,10 +106,14 @@ protected:
 	std::vector<int> two_layer_gate_required_basic_indices_;
 	std::vector<int> two_layer_gate_required_basic_dense_mu_indices_;
 	std::vector<int> two_layer_gate_required_product_indices_;
+	std::vector<SHStrictSpatialAceGroup> two_layer_gate_strict_spatial_ace_groups_;
+	std::vector<SHStrictSpatialAceTerm> two_layer_gate_strict_spatial_ace_terms_;
 	std::vector<int> two_layer_gate_required_mu_indices_;
 	std::vector<int> two_layer_gate_mu_dense_index_;
 	std::vector<int> two_layer_gate_required_radial_eval_blocks_;
 	bool sh_product_rows_trace_printed_ = false;
+	bool sh_strict_spatial_ace_trace_printed_ = false;
+	bool sh_strict_spatial_ace_gate_trace_printed_ = false;
 	bool sh_site_der_cache_trace_printed_ = false;
 	void EnsureSHScalarInfoForGateUpgrade();
 	
@@ -274,6 +294,11 @@ protected:
 	void ReadSHProductGraph(std::ifstream& ifs, std::string& next_token);
 	void WriteSHProductGraph(std::ofstream& ofs);
 	void BuildSHProductProgram();
+	void BuildSHStrictSpatialAceProgramFromProducts(
+		const std::vector<int>& product_indices,
+		std::vector<SHStrictSpatialAceGroup>& groups,
+		std::vector<SHStrictSpatialAceTerm>& terms,
+		bool annotate_terminal_scalars);
 	void BuildTwoLayerGateProductProgram();
 	void ClearTwoLayerEdgePrimitiveCache();
 	void BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
@@ -286,18 +311,36 @@ protected:
 										int neighbor_index) const;
 	int TwoLayerGateMuDenseIndex(int mu) const;
 	bool UseSHProductRows() const;
+	bool UseSHStrictSpatialAce() const;
 	bool UseSHSiteDerivativeCache() const;
 	bool UseSHAccumSkipSiteDers() const;
 	bool UseSHProductHVTReverse() const;
 	void TraceSHProductProgramOnce();
+	void TraceSHStrictSpatialAceOnce();
+	void TraceSHStrictSpatialAceGateOnce(int product_count);
 	void TraceSHSiteDerivativeCacheOnce(int neighbor_count,
-										int sh_count,
-										int radial_func_count);
+	                                    int sh_count,
+	                                    int radial_func_count);
 	void ApplySHProductRowsForward();
+	void ApplySHStrictSpatialAceForward();
+	void ApplySHStrictSpatialAceProducts(const std::vector<int>& product_indices);
+	void ApplySHStrictSpatialAceGroupsForward(
+		const std::vector<SHStrictSpatialAceGroup>& groups,
+		const std::vector<SHStrictSpatialAceTerm>& terms);
+	void ApplySHStrictSpatialAceGateForward();
 	void ApplySHProductRowsDers(const Neighborhood& nbh);
+	void ApplySHStrictSpatialAceDers(const Neighborhood& nbh);
 	void AccumulateSHProductRowsForward(const std::vector<double>& input_values,
 										std::vector<double>& output_values) const;
+	void AccumulateSHStrictSpatialAceForward(
+		const std::vector<double>& input_values,
+		std::vector<double>& output_values) const;
+	void AccumulateSHStrictSpatialAceMixedReverse(
+		const std::vector<double>& tangent_values,
+		const std::vector<double>& target_adjoints,
+		std::vector<double>& output_adjoints) const;
 	void BackpropSHProductRows(std::vector<double>& adjoints) const;
+	void BackpropSHStrictSpatialAce(std::vector<double>& adjoints) const;
 
 	std::vector<int> radial_eval_to_basis_k_;
 
