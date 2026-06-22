@@ -175,6 +175,7 @@ require_strict_trace() {
   fi
   if [[ "$mode" == "gate" ]]; then
     grep -q "SUS2-SH strict spatial ACE gate scalar backend enabled" "$log"
+    grep -q "implementation=spatial-grouped-exact-subset" "$log"
   fi
   echo "$case_name: strict backend trace verified"
 }

@@ -317,7 +317,7 @@ protected:
 	bool UseSHProductHVTReverse() const;
 	void TraceSHProductProgramOnce();
 	void TraceSHStrictSpatialAceOnce();
-	void TraceSHStrictSpatialAceGateOnce(int product_count);
+	void TraceSHStrictSpatialAceGateOnce(int term_count);
 	void TraceSHSiteDerivativeCacheOnce(int neighbor_count,
 	                                    int sh_count,
 	                                    int radial_func_count);
@@ -328,19 +328,49 @@ protected:
 		const std::vector<SHStrictSpatialAceGroup>& groups,
 		const std::vector<SHStrictSpatialAceTerm>& terms);
 	void ApplySHStrictSpatialAceGateForward();
+	void ApplySHStrictSpatialAceGroupsDers(
+		const std::vector<SHStrictSpatialAceGroup>& groups,
+		const std::vector<SHStrictSpatialAceTerm>& terms,
+		int neighbor_count,
+		int moment_stride,
+		double* moment_ders);
+	void ApplySHStrictSpatialAceGateDers(const Neighborhood& nbh);
 	void ApplySHProductRowsDers(const Neighborhood& nbh);
 	void ApplySHStrictSpatialAceDers(const Neighborhood& nbh);
 	void AccumulateSHProductRowsForward(const std::vector<double>& input_values,
 										std::vector<double>& output_values) const;
+	void AccumulateSHStrictSpatialAceGroupsForward(
+		const std::vector<SHStrictSpatialAceGroup>& groups,
+		const std::vector<SHStrictSpatialAceTerm>& terms,
+		const std::vector<double>& input_values,
+		std::vector<double>& output_values) const;
 	void AccumulateSHStrictSpatialAceForward(
 		const std::vector<double>& input_values,
 		std::vector<double>& output_values) const;
+	void AccumulateSHStrictSpatialAceGateForward(
+		const std::vector<double>& input_values,
+		std::vector<double>& output_values) const;
+	void AccumulateSHStrictSpatialAceGroupsMixedReverse(
+		const std::vector<SHStrictSpatialAceGroup>& groups,
+		const std::vector<SHStrictSpatialAceTerm>& terms,
+		const std::vector<double>& tangent_values,
+		const std::vector<double>& target_adjoints,
+		std::vector<double>& output_adjoints) const;
 	void AccumulateSHStrictSpatialAceMixedReverse(
 		const std::vector<double>& tangent_values,
 		const std::vector<double>& target_adjoints,
 		std::vector<double>& output_adjoints) const;
+	void AccumulateSHStrictSpatialAceGateMixedReverse(
+		const std::vector<double>& tangent_values,
+		const std::vector<double>& target_adjoints,
+		std::vector<double>& output_adjoints) const;
 	void BackpropSHProductRows(std::vector<double>& adjoints) const;
+	void BackpropSHStrictSpatialAceGroups(
+		const std::vector<SHStrictSpatialAceGroup>& groups,
+		const std::vector<SHStrictSpatialAceTerm>& terms,
+		std::vector<double>& adjoints) const;
 	void BackpropSHStrictSpatialAce(std::vector<double>& adjoints) const;
+	void BackpropSHStrictSpatialAceGate(std::vector<double>& adjoints) const;
 
 	std::vector<int> radial_eval_to_basis_k_;
 

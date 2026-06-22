@@ -112,6 +112,7 @@ PY
   fi
   if [[ "$mode" == "gate" ]]; then
     grep -q "SUS2-SH strict spatial ACE gate scalar backend enabled" "$strict_log"
+    grep -q "implementation=spatial-grouped-exact-subset" "$strict_log"
   fi
   compare_numeric_cfgs "$base_out" "$strict_out"
 }

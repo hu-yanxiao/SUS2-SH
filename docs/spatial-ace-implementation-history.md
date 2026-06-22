@@ -342,6 +342,134 @@ l3k3_gate strict spatial ACE FD matrix passed
 l4k4_gate strict spatial ACE FD matrix passed
 ```
 
+## 2026-06-22 Gate Grouped Derivative/Reverse Completion
+
+The initial grouped executor already used grouped exact CG programs for ordinary
+SH forward/reverse paths and for gate scalar forward values.  A follow-up audit
+found that several gate derivative and mixed-reverse paths still had direct
+fallback loops over `two_layer_gate_required_product_indices_`.  Those loops
+were numerically exact, but they did not exercise the grouped graph layout in
+all strict spatial ACE paths.
+
+The strict gate subset now has grouped wrappers for:
+
+```text
+ApplySHStrictSpatialAceGateDers
+AccumulateSHStrictSpatialAceGateForward
+AccumulateSHStrictSpatialAceGateMixedReverse
+BackpropSHStrictSpatialAceGate
+```
+
+The wrappers reuse the same exact `SHStrictSpatialAceGroup` /
+`SHStrictSpatialAceTerm` graph as the strict forward path, but bind it to
+`two_layer_gate_strict_spatial_ace_groups_` and
+`two_layer_gate_strict_spatial_ace_terms_`.  Non-strict execution keeps the
+original product-index fallback.
+
+Added source-level guard:
+
+```text
+bash dev_test/sh_spatial_ace_gate_grouped_source_check.sh
+```
+
+The gate trace now reports:
+
+```text
+implementation=spatial-grouped-exact-subset
+```
+
+and the equivalence, benchmark, and FD harnesses require that trace for gate
+cases.
+
+Local verification after the change:
+
+```text
+make mlp -j2 USE_MPI=0 CXX_EXE=g++ CC_EXE=gcc FC_EXE=true \
+  CXXFLAGS='-std=c++11 -O0 -DMLIP_DEV' CPPFLAGS='-O0 -I./cblas' \
+  LDFLAGS='-framework Accelerate' TARGET_PRERQ=
+bash dev_test/sh_spatial_ace_gate_grouped_source_check.sh
+bash dev_test/sh_spatial_ace_strict_backend_equivalence_check.sh ./bin/mlp-sus2
+SUS2_SH_SPATIAL_ACE_FD_COEFF_WINDOW=4 \
+  bash dev_test/sh_spatial_ace_fd_matrix_check.sh ./bin/mlp-sus2
+SUS2_SH_SPATIAL_ACE_CASES=l2k2_gate,l3k3_gate,l4k4_gate \
+  bash dev_test/sh_spatial_ace_fd_matrix_check.sh ./bin/mlp-sus2
+SUS2_SH_STRICT_SPATIAL_ACE=1 SUS2_SH_STRICT_SPATIAL_ACE_TRACE=1 \
+  bash dev_test/sh_two_layer_gate_force_fd_check.sh
+SUS2_SH_STRICT_SPATIAL_ACE=1 SUS2_SH_STRICT_SPATIAL_ACE_TRACE=1 \
+  bash dev_test/sh_two_layer_gate_loss_gradient_check.sh
+```
+
+All six strict equivalence cases passed with `max_abs=0.000e+00`.  The FD
+matrix passed for all six cases with coefficient window 4, and the three gate
+cases passed again with the default coefficient window 8.  The two legacy
+two-layer gate force and loss-gradient checks also passed under strict spatial
+ACE mode.
+
+Remote sync note: the first `rsync` attempt omitted `-R`, creating stray
+root-level `mtpr.h` and `mtpr_sh.cpp` files in the server worktree.  The build
+then tried to compile the root-level `mtpr_sh.cpp` and failed to resolve
+`../src/basic_mlip.h`.  The stray files were removed, the files were synced
+again with `rsync -R`, and the remote build was redone from a clean `obj` and
+`bin/mlp-sus2`.
+
+Remote independent spatial ACE binary after the clean rebuild:
+
+```text
+/work/phy-weigw/20260321_Test/SUS2-SH-spatial-ace-work-codex/bin/mlp-sus2
+sha256: 7f3fe3a4d1a0cb7e02d0419277c0ac6b6bf400b81e51b67fc667c0db38710911
+```
+
+Remote verification after the clean rebuild:
+
+```text
+bash dev_test/sh_spatial_ace_gate_grouped_source_check.sh
+bash dev_test/sh_spatial_ace_strict_backend_equivalence_check.sh ./bin/mlp-sus2
+SUS2_SH_SPATIAL_ACE_FD_COEFF_WINDOW=4 \
+  bash dev_test/sh_spatial_ace_fd_matrix_check.sh ./bin/mlp-sus2
+SUS2_SH_SPATIAL_ACE_CASES=l2k2_gate,l3k3_gate,l4k4_gate \
+  bash dev_test/sh_spatial_ace_fd_matrix_check.sh ./bin/mlp-sus2
+```
+
+Remote results: source check passed; all six equivalence cases passed with
+`max_abs=0.000e+00`; all six FD cases passed with coefficient window 4; all
+three gate FD cases passed again with the default coefficient window 8.
+
+Remote full-dataset repeat-3 benchmark:
+
+```text
+/work/phy-weigw/hyx/xxx-b/spatial_ace/bench_gate_grouped_helpers_r3/timings.csv
+/work/phy-weigw/hyx/xxx-b/spatial_ace/bench_gate_grouped_helpers_r3/equivalence.csv
+```
+
+Equivalence summary:
+
+```text
+l2k2_plain repeats=3 max_abs=0 numeric_tokens=613395
+l3k3_plain repeats=3 max_abs=0 numeric_tokens=613395
+l4k4_plain repeats=3 max_abs=0 numeric_tokens=613395
+l2k2_gate  repeats=3 max_abs=0 numeric_tokens=613395
+l3k3_gate  repeats=3 max_abs=0 numeric_tokens=613395
+l4k4_gate  repeats=3 max_abs=0 numeric_tokens=613395
+```
+
+Timing summary:
+
+```text
+case        main_mean  main_std  spatial_mean  spatial_std  main/spatial
+l2k2_plain  15.532438  1.305758  14.830382     1.127725     1.0473
+l3k3_plain  26.454729  1.146882  25.379644     0.163448     1.0424
+l4k4_plain  57.110072  1.899219  56.841282     0.708627     1.0047
+l2k2_gate   14.356189  1.037744  13.795561     0.053166     1.0406
+l3k3_gate   24.712192  0.338870  25.170943     0.190535     0.9818
+l4k4_gate   72.941528  0.371729  69.805734     1.666287     1.0449
+```
+
+The grouped exact layout remains mathematically equivalent to main for all
+tested outputs.  The repeat-3 timing suggests small speedups in most cases,
+with `l3k3_gate` slightly slower in this run.  Larger timing separation will
+probably require deeper contraction scheduling or memory-flow work beyond the
+current exact grouped graph cleanup.
+
 ### Strict Spatial Grouped Executor
 
 - Replaced the initial strict `product-row-scaffold` with an independent exact

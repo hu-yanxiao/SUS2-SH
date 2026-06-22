@@ -116,6 +116,9 @@ run_case() {
     echo "$case_name: strict backend is still using the product-row scaffold" >&2
     exit 1
   fi
+  if [[ "$mode" == "gate" ]]; then
+    grep -q "implementation=spatial-grouped-exact-subset" "$efs_log"
+  fi
   grep -q "force_components=6" "$efs_log"
   grep -q "stress_components=9" "$efs_log"
 
@@ -139,6 +142,9 @@ run_case() {
 
   grep -q "SUS2-SH strict spatial ACE backend enabled" "$grad_log"
   grep -q "implementation=spatial-grouped-exact" "$grad_log"
+  if [[ "$mode" == "gate" ]]; then
+    grep -q "implementation=spatial-grouped-exact-subset" "$grad_log"
+  fi
   grep -q "checked_coeffs=" "$grad_log"
   echo "$case_name strict spatial ACE FD matrix passed"
 }
