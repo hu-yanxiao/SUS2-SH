@@ -749,6 +749,67 @@ public:
 		products_.swap(compact);
 	}
 
+	void PruneUnreachableGraph()
+	{
+		std::vector<char> required_moments(node_count_, 0);
+		for (int scalar : scalars_)
+			if (scalar >= 0 && scalar < node_count_)
+				required_moments[scalar] = 1;
+
+		std::vector<char> required_products(products_.size(), 0);
+		for (int p = static_cast<int>(products_.size()) - 1; p >= 0; --p) {
+			const Product& product = products_[p];
+			if (!required_moments[product.target])
+				continue;
+			required_products[p] = 1;
+			required_moments[product.left] = 1;
+			required_moments[product.right] = 1;
+		}
+
+		std::vector<int> remap(node_count_, -1);
+		std::vector<BasicIndex> compact_basic;
+		compact_basic.reserve(basic_.size());
+		for (int i = 0; i < static_cast<int>(basic_.size()); ++i) {
+			if (!required_moments[i])
+				continue;
+			remap[i] = static_cast<int>(compact_basic.size());
+			compact_basic.push_back(basic_[i]);
+		}
+
+		int next_node = static_cast<int>(compact_basic.size());
+		for (int i = static_cast<int>(basic_.size()); i < node_count_; ++i) {
+			if (required_moments[i])
+				remap[i] = next_node++;
+		}
+
+		for (int& scalar : scalars_) {
+			if (scalar < 0 || scalar >= node_count_ || remap[scalar] < 0)
+				ERROR("SUS2-SH scalar graph pruning lost a scalar moment.");
+			scalar = remap[scalar];
+		}
+
+		std::vector<Product> compact_products;
+		compact_products.reserve(products_.size());
+		for (int p = 0; p < static_cast<int>(products_.size()); ++p) {
+			if (!required_products[p])
+				continue;
+			Product product = products_[p];
+			if (remap[product.left] < 0
+			    || remap[product.right] < 0
+			    || remap[product.target] < 0)
+				ERROR("SUS2-SH scalar graph pruning lost a required product endpoint.");
+			product.left = remap[product.left];
+			product.right = remap[product.right];
+			product.target = remap[product.target];
+			compact_products.push_back(product);
+		}
+
+		basic_.swap(compact_basic);
+		products_.swap(compact_products);
+		node_count_ = next_node;
+		product_lookup_.clear();
+	}
+
 	void AddScalars(int body_order, const std::vector<int>& body_lmax)
 	{
 		body_lmax_ = body_lmax;
@@ -764,6 +825,7 @@ public:
 				}
 			}
 			CompressProducts();
+			PruneUnreachableGraph();
 		}
 
 	int AddNode()

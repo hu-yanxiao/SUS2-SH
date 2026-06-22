@@ -335,6 +335,12 @@ protected:
 		int neighbor_count,
 		int moment_stride,
 		double* moment_ders);
+	void ApplySHStrictSpatialAceGroupsDersTermMajor(
+		const std::vector<SHStrictSpatialAceGroup>& groups,
+		const std::vector<SHStrictSpatialAceTerm>& terms,
+		int neighbor_count,
+		int moment_stride,
+		double* moment_ders);
 	void ApplySHStrictSpatialAceGateDers(const Neighborhood& nbh);
 	void ApplySHProductRowsDers(const Neighborhood& nbh);
 	void ApplySHStrictSpatialAceDers(const Neighborhood& nbh);

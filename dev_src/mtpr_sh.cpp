@@ -1464,7 +1464,7 @@ void MLMTPR::ApplySHStrictSpatialAceGateDers(const Neighborhood& nbh)
 {
 	TraceSHStrictSpatialAceGateOnce(
 		static_cast<int>(two_layer_gate_strict_spatial_ace_terms_.size()));
-	ApplySHStrictSpatialAceGroupsDers(
+	ApplySHStrictSpatialAceGroupsDersTermMajor(
 		two_layer_gate_strict_spatial_ace_groups_,
 		two_layer_gate_strict_spatial_ace_terms_,
 		nbh.count,
@@ -1566,6 +1566,40 @@ void MLMTPR::ApplySHStrictSpatialAceDers(const Neighborhood& nbh)
 							+ moment_vals[term.left] * moment_ders(term.right, j, a));
 					}
 					moment_ders(group.target, j, a) += der;
+				}
+			}
+		}
+	}
+}
+
+void MLMTPR::ApplySHStrictSpatialAceGroupsDersTermMajor(
+	const std::vector<SHStrictSpatialAceGroup>& groups,
+	const std::vector<SHStrictSpatialAceTerm>& terms,
+	int neighbor_count,
+	int moment_stride,
+	double* moment_ders)
+{
+	const int coord_stride = 3 * moment_stride;
+	for (const SHStrictSpatialAceGroup& group : groups) {
+		double value = 0.0;
+		const int end = group.term_begin + group.term_count;
+		for (int t = group.term_begin; t < end; ++t) {
+			const SHStrictSpatialAceTerm& term = terms[t];
+			value += term.coeff * moment_vals[term.left] * moment_vals[term.right];
+		}
+		moment_vals[group.target] += value;
+
+		for (int t = group.term_begin; t < end; ++t) {
+			const SHStrictSpatialAceTerm& term = terms[t];
+			const double left_scale = term.coeff * moment_vals[term.right];
+			const double right_scale = term.coeff * moment_vals[term.left];
+			for (int j = 0; j < neighbor_count; ++j) {
+				double* moment_der =
+					moment_ders + static_cast<size_t>(j) * coord_stride;
+				for (int a = 0; a < 3; ++a) {
+					moment_der[a * moment_stride + group.target] +=
+						left_scale * moment_der[a * moment_stride + term.left]
+						+ right_scale * moment_der[a * moment_stride + term.right];
 				}
 			}
 		}

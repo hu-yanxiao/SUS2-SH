@@ -766,3 +766,133 @@ l2k2_gate strict spatial ACE FD matrix passed
 l3k3_gate strict spatial ACE FD matrix passed
 l4k4_gate strict spatial ACE FD matrix passed
 ```
+
+## 2026-06-22 Reachability Pruning and Gate-Derivative Scheduling
+
+This update adds two exact spatial ACE engineering changes:
+
+1. `SHGraphBuilder::PruneUnreachableGraph()` removes products and non-basic
+   moments that cannot reach any final scalar moment after product compression.
+   It walks the product DAG backward from `alpha_moment_mapping` scalars, then
+   remaps only reachable basic and non-basic nodes.  Scalar ordering and product
+   topological order are preserved.
+2. The two-layer-gate strict spatial ACE derivative path now uses a
+   term-major helper, `ApplySHStrictSpatialAceGroupsDersTermMajor()`.  The
+   normal plain derivative path keeps the original coordinate-major helper.
+   The mathematical derivative is unchanged:
+
+```text
+d(c x_l x_r) = c (dx_l x_r + x_l dx_r)
+```
+
+The split helper was kept intentionally.  A first all-path term-major prototype
+made the plain path slower under the Intel/MKL build, while the gate path kept a
+stable speedup.  The final implementation therefore restricts the scheduling
+change to gate derivatives.
+
+Local verification:
+
+```text
+make mlp -j2 USE_MPI=0 CXX_EXE=g++ CC_EXE=gcc FC_EXE=true \
+  CXXFLAGS='-std=c++11 -O0 -DMLIP_DEV' CPPFLAGS='-O0 -I./cblas' \
+  LDFLAGS='-framework Accelerate' TARGET_PRERQ=
+bash dev_test/sh_product_graph_reachability_prune_check.sh ./bin/mlp-sus2
+bash dev_test/sh_spatial_ace_strict_backend_equivalence_check.sh ./bin/mlp-sus2
+SUS2_SH_SPATIAL_ACE_FD_COEFF_WINDOW=4 \
+  bash dev_test/sh_spatial_ace_fd_matrix_check.sh ./bin/mlp-sus2
+```
+
+Local result:
+
+```text
+SUS2-SH product graph reachability pruning check passed
+strict spatial ACE equivalence passed, max_abs=0.000e+00  # six cases
+l2k2_plain strict spatial ACE FD matrix passed
+l3k3_plain strict spatial ACE FD matrix passed
+l4k4_plain strict spatial ACE FD matrix passed
+l2k2_gate strict spatial ACE FD matrix passed
+l3k3_gate strict spatial ACE FD matrix passed
+l4k4_gate strict spatial ACE FD matrix passed
+```
+
+Remote Intel/MKL build and verification:
+
+```text
+cd /work/phy-weigw/20260321_Test/SUS2-SH-spatial-ace-work-codex
+make mlp -j8
+bash dev_test/sh_product_graph_reachability_prune_check.sh ./bin/mlp-sus2
+bash dev_test/sh_spatial_ace_strict_backend_equivalence_check.sh ./bin/mlp-sus2
+SUS2_SH_SPATIAL_ACE_FD_COEFF_WINDOW=4 \
+  bash dev_test/sh_spatial_ace_fd_matrix_check.sh ./bin/mlp-sus2
+```
+
+Remote result:
+
+```text
+SUS2-SH product graph reachability pruning check passed
+strict spatial ACE equivalence passed, max_abs=0.000e+00  # six cases
+l2k2_plain strict spatial ACE FD matrix passed
+l3k3_plain strict spatial ACE FD matrix passed
+l4k4_plain strict spatial ACE FD matrix passed
+l2k2_gate strict spatial ACE FD matrix passed
+l3k3_gate strict spatial ACE FD matrix passed
+l4k4_gate strict spatial ACE FD matrix passed
+```
+
+Remote benchmark setup:
+
+```text
+before binary:
+/work/phy-weigw/20260321_Test/SUS2-SH-spatial-ace-work-codex/.codex_tmp/reachability_prune_bench/mlp-sus2-before-prune
+sha256 1199487f04cf3dcd27c0ce404c8e017faa2dfab33519310c82a0e79d3b6ed8dc
+
+after binary:
+/work/phy-weigw/20260321_Test/SUS2-SH-spatial-ace-work-codex/bin/mlp-sus2
+sha256 2c1ba2439bb552efe9e5363f670b4a0565a71c67104839eeab0c693962b6ecec
+
+CFG:
+/work/phy-weigw/hyx/xxx-b/spatial_ace/train_first80.cfg
+
+Output:
+/work/phy-weigw/hyx/xxx-b/spatial_ace/bench_spatial_ace_splitgate_r4_first80
+```
+
+Full benchmark, fixed before-then-after order, four repeats:
+
+```text
+case                  before_s  after_s   speedup  products_before products_after
+std_l2k2_plain          2.9761   3.0751   0.9678   27              27
+std_l3k3_plain          5.1316   5.2179   0.9835   1041            1041
+std_l4k4_plain         12.0330  12.1526   0.9902   67753           67327
+std_l3k3_gate           5.9879   5.8404   1.0253   1041            1041
+std_l4k4_gate          15.5413  15.0775   1.0308   67753           67327
+direct_l3k3_b6_plain    6.6373   6.5842   1.0081   25754           25259
+direct_l4k4_b5_plain   11.0632  11.2476   0.9836   50451           50451
+```
+
+All full benchmark output comparisons had `max_abs=0.000e+00`.
+
+Because the fixed-order benchmark always runs `before` before `after`, a smaller
+alternating-order check was also run for the key plain/gate l3k3 cases:
+
+```text
+Output:
+/work/phy-weigw/hyx/xxx-b/spatial_ace/bench_spatial_ace_splitgate_alt_order_r6_first80
+
+case             before_s  after_s  speedup
+std_l3k3_plain     5.1582   5.2010  0.9918
+std_l3k3_gate      5.9587   5.8341  1.0214
+```
+
+Interpretation:
+
+- Gate derivative scheduling is the useful runtime optimization here.  It gives
+  about `2.1%` on the alternating l3k3 gate check and `2.5-3.1%` on the fixed
+  order l3k3/l4k4 gate cases.
+- The plain path should be treated as neutral to slightly noisy, not improved.
+  The split helper avoids the larger plain regression seen in the initial
+  all-path term-major prototype.
+- Reachability pruning is exact and reduces larger graphs, but its runtime
+  effect is workload dependent.  The clearest count reduction in this benchmark
+  is `direct_l3k3_b6_plain`, where products drop from `25754` to `25259`
+  (`-1.92%`) and moments drop from `6826` to `6727` (`-1.45%`).
