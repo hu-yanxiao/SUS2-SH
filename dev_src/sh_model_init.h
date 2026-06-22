@@ -11,5 +11,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 double SphericalHarmonicRealCGCoeff(int l1, int rm1,
                                     int l2, int rm2,
                                     int L, int rM);
+double SphericalHarmonicRealGauntCoeff(int l1, int rm1,
+                                       int l2, int rm2,
+                                       int L, int rM);
 
 #endif

@@ -93,6 +93,7 @@ protected:
 	int sh_k_max_ = 1;
 	int sh_body_order_ = 0;
 	std::string sh_parity_;
+	std::string sh_coupling_ = "so3-cg";
 	std::vector<int> sh_body_l_max_;
 	std::vector<SHProduct> sh_products_;
 	std::vector<SHProductRow> sh_product_rows_;

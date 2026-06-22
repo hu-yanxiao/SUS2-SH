@@ -342,6 +342,120 @@ l3k3_gate strict spatial ACE FD matrix passed
 l4k4_gate strict spatial ACE FD matrix passed
 ```
 
+## 2026-06-22 Direct Gaunt spatial ACE opt-in
+
+This step adds a deliberately non-equivalent direct spatial ACE coupling option
+for model initialization:
+
+```text
+mlp-sus2 init-sh direct.mtp ... --sh-coupling=direct-gaunt
+```
+
+The default remains the historical SO3 Clebsch-Gordan graph.  Default models do
+not write a new `sh_coupling` marker, so old readers keep the same header shape.
+Direct models write:
+
+```text
+sh_coupling = direct-gaunt
+```
+
+The direct option replaces the graph-construction coefficient with the real-basis
+Gaunt product coefficient
+
+```text
+<Y_LM^real | Y_l1m1^real Y_l2m2^real>
+```
+
+and keeps the runtime unchanged: the evaluator still computes the stored
+`sh_products` graph.  Therefore strict spatial ACE acceleration remains exact
+for the loaded graph, but a direct-Gaunt model is not mathematically equivalent
+to the default SO3-CG model.
+
+Implementation files:
+
+```text
+dev_src/sh_model_init.{h,cpp}
+dev_src/mtpr.{h,cpp}
+dev_src/mlp/dev_mlp_commands.cpp
+dev_test/sh_direct_spatial_ace_init_check.sh
+```
+
+Local verification:
+
+```text
+make mlp -j2 USE_MPI=0 CXX_EXE=g++ CC_EXE=gcc FC_EXE=true \
+  CXXFLAGS='-std=c++11 -O0 -DMLIP_DEV' CPPFLAGS='-O0 -I./cblas' \
+  LDFLAGS='-framework Accelerate' TARGET_PRERQ=
+
+SUS2_SH_DIRECT_SPATIAL_ACE_SKIP_FD=1 \
+  bash dev_test/sh_direct_spatial_ace_init_check.sh ./bin/mlp-sus2
+bash dev_test/sh_spatial_ace_gate_grouped_source_check.sh
+bash dev_test/sh_spatial_ace_strict_backend_equivalence_check.sh ./bin/mlp-sus2
+SUS2_SH_SPATIAL_ACE_FD_COEFF_WINDOW=4 \
+  bash dev_test/sh_spatial_ace_fd_matrix_check.sh ./bin/mlp-sus2
+```
+
+Local result:
+
+```text
+direct spatial ACE init metadata OK so3_products=182 direct_products=182
+direct spatial ACE init check passed
+strict spatial ACE gate grouped source check: PASS
+six strict equivalence cases passed with max_abs=0
+six strict FD matrix cases passed
+```
+
+Server rebuild:
+
+```text
+module load gcc/11.2.0
+cd /work/phy-weigw/20260321_Test/SUS2-SH-spatial-ace-work-codex
+rm -rf obj bin/mlp-sus2
+mkdir -p bin
+make mlp -j4
+```
+
+Server direct binary SHA-256:
+
+```text
+1199487f04cf3dcd27c0ce404c8e017faa2dfab33519310c82a0e79d3b6ed8dc
+```
+
+Compute-node FD validation:
+
+```text
+Job <3817148> in queue <33>, host <b08u03a>
+bash dev_test/sh_direct_spatial_ace_init_check.sh ./bin/mlp-sus2
+```
+
+Compute-node result:
+
+```text
+checked_coeffs=13075
+cg_nonzero_coeffs=2052
+gaunt_nonzero_coeffs=1158
+differing_coeffs=2052
+odd_parity_gaunt_nonzero=0
+odd_parity_cg_nonzero_gaunt_zero=894
+y00_identity_worst_abs_err=5.55111512313e-17
+y00_identity_nonzero_cross_terms=0
+force_components=6
+force_abs_err=5.68561637605e-11
+stress_components=9
+stress_abs_err=5.7228759544e-11
+```
+
+Remote strict-regression result after the direct option was added:
+
+```text
+bash dev_test/sh_spatial_ace_strict_backend_equivalence_check.sh ./bin/mlp-sus2
+SUS2_SH_SPATIAL_ACE_FD_COEFF_WINDOW=4 \
+  bash dev_test/sh_spatial_ace_fd_matrix_check.sh ./bin/mlp-sus2
+
+six strict equivalence cases passed with max_abs=0
+six strict FD matrix cases passed
+```
+
 ## 2026-06-22 Gate Grouped Derivative/Reverse Completion
 
 The initial grouped executor already used grouped exact CG programs for ordinary

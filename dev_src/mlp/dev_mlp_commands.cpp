@@ -331,6 +331,94 @@ DevSpatialAceCGMapResult CheckStrictSpatialAceCGMap(int lmax,
 	return result;
 }
 
+struct DevDirectSpatialAceGauntResult {
+	int checked_coeffs = 0;
+	int gaunt_nonzero_coeffs = 0;
+	int cg_nonzero_coeffs = 0;
+	int odd_parity_checked = 0;
+	int odd_parity_gaunt_nonzero = 0;
+	int odd_parity_cg_nonzero_gaunt_zero = 0;
+	int differing_coeffs = 0;
+	int worst_l1 = -1;
+	int worst_rm1 = 0;
+	int worst_l2 = -1;
+	int worst_rm2 = 0;
+	int worst_L = -1;
+	int worst_rM = 0;
+	double worst_abs_diff = 0.0;
+	double worst_cg = 0.0;
+	double worst_gaunt = 0.0;
+	double y00_identity_worst_abs_err = 0.0;
+	int y00_identity_nonzero_cross_terms = 0;
+};
+
+DevDirectSpatialAceGauntResult CheckDirectSpatialAceGaunt(int lmax)
+{
+	if (lmax < 0)
+		ERROR("--lmax should be non-negative.");
+	DevDirectSpatialAceGauntResult result;
+	for (int l1 = 0; l1 <= lmax; ++l1) {
+		for (int l2 = 0; l2 <= lmax; ++l2) {
+			for (int L = std::abs(l1 - l2); L <= std::min(lmax, l1 + l2); ++L) {
+				const bool odd_parity = ((l1 + l2 + L) & 1) != 0;
+				for (int rm1 = -l1; rm1 <= l1; ++rm1) {
+					for (int rm2 = -l2; rm2 <= l2; ++rm2) {
+						for (int rM = -L; rM <= L; ++rM) {
+							const double cg =
+								SphericalHarmonicRealCGCoeff(l1, rm1, l2, rm2, L, rM);
+							const double gaunt =
+								SphericalHarmonicRealGauntCoeff(l1, rm1, l2, rm2, L, rM);
+							const double abs_diff = std::abs(cg - gaunt);
+							++result.checked_coeffs;
+							if (std::abs(cg) > 1.0e-12)
+								++result.cg_nonzero_coeffs;
+							if (std::abs(gaunt) > 1.0e-12)
+								++result.gaunt_nonzero_coeffs;
+							if (abs_diff > 1.0e-12)
+								++result.differing_coeffs;
+							if (odd_parity) {
+								++result.odd_parity_checked;
+								if (std::abs(gaunt) > 1.0e-12)
+									++result.odd_parity_gaunt_nonzero;
+								if (std::abs(cg) > 1.0e-12
+								    && std::abs(gaunt) <= 1.0e-12)
+									++result.odd_parity_cg_nonzero_gaunt_zero;
+							}
+							if (abs_diff > result.worst_abs_diff) {
+								result.worst_abs_diff = abs_diff;
+								result.worst_l1 = l1;
+								result.worst_rm1 = rm1;
+								result.worst_l2 = l2;
+								result.worst_rm2 = rm2;
+								result.worst_L = L;
+								result.worst_rM = rM;
+								result.worst_cg = cg;
+								result.worst_gaunt = gaunt;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	const double y00_factor = 1.0 / std::sqrt(4.0 * std::acos(-1.0));
+	for (int l = 0; l <= lmax; ++l) {
+		for (int rm = -l; rm <= l; ++rm) {
+			for (int rM = -l; rM <= l; ++rM) {
+				const double gaunt =
+					SphericalHarmonicRealGauntCoeff(0, 0, l, rm, l, rM);
+				const double expected = (rm == rM) ? y00_factor : 0.0;
+				const double abs_err = std::abs(gaunt - expected);
+				result.y00_identity_worst_abs_err =
+					std::max(result.y00_identity_worst_abs_err, abs_err);
+				if (rm != rM && std::abs(gaunt) > 1.0e-12)
+					++result.y00_identity_nonzero_cross_terms;
+			}
+		}
+	}
+	return result;
+}
+
 struct DevGateFastPathResult {
 	int checked_values = 0;
 	int checked_derivatives = 0;
@@ -1312,6 +1400,58 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			std::cout << "strict spatial ACE CG-map check passed" << std::endl;
 	} END_COMMAND;
 
+	BEGIN_COMMAND("check-sh-direct-spatial-ace-dev",
+		"checks the direct Gaunt spatial ACE coupling boundary against the current real CG convention",
+		"mlp-sus2 check-sh-direct-spatial-ace-dev --lmax=4\n"
+	) {
+		if (!args.empty()) {
+			std::cout << "mlp-sus2 check-sh-direct-spatial-ace-dev: no positional arguments are expected\n";
+			return 1;
+		}
+		const int lmax = ParseDevIntOption(opts, "lmax", 4);
+		const DevDirectSpatialAceGauntResult result =
+			CheckDirectSpatialAceGaunt(lmax);
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "checked_coeffs=" << result.checked_coeffs
+			          << " cg_nonzero_coeffs=" << result.cg_nonzero_coeffs
+			          << " gaunt_nonzero_coeffs=" << result.gaunt_nonzero_coeffs
+			          << " differing_coeffs=" << result.differing_coeffs
+			          << " odd_parity_checked=" << result.odd_parity_checked
+			          << " odd_parity_gaunt_nonzero="
+			          << result.odd_parity_gaunt_nonzero
+			          << " odd_parity_cg_nonzero_gaunt_zero="
+			          << result.odd_parity_cg_nonzero_gaunt_zero
+			          << " worst_l1=" << result.worst_l1
+			          << " worst_rm1=" << result.worst_rm1
+			          << " worst_l2=" << result.worst_l2
+			          << " worst_rm2=" << result.worst_rm2
+			          << " worst_L=" << result.worst_L
+			          << " worst_rM=" << result.worst_rM
+			          << " worst_cg=" << result.worst_cg
+			          << " worst_gaunt=" << result.worst_gaunt
+			          << " worst_abs_diff=" << result.worst_abs_diff
+			          << " y00_identity_worst_abs_err="
+			          << result.y00_identity_worst_abs_err
+			          << " y00_identity_nonzero_cross_terms="
+			          << result.y00_identity_nonzero_cross_terms
+			          << std::endl;
+		}
+		if (result.checked_coeffs == 0 || result.cg_nonzero_coeffs == 0)
+			exit(1);
+		if (result.gaunt_nonzero_coeffs == 0 || result.differing_coeffs == 0)
+			exit(1);
+		if (result.odd_parity_gaunt_nonzero != 0)
+			exit(1);
+		if (lmax >= 1 && result.odd_parity_cg_nonzero_gaunt_zero == 0)
+			exit(1);
+		if (result.y00_identity_worst_abs_err > 1.0e-12
+		    || result.y00_identity_nonzero_cross_terms != 0)
+			exit(1);
+		if (mpi_rank == 0)
+			std::cout << "direct spatial ACE Gaunt check passed" << std::endl;
+	} END_COMMAND;
+
 	BEGIN_COMMAND("check-two-layer-gate-fastpath-dev",
 		"checks two-layer gate pruned SH value/derivative paths against full SH",
 		"mlp-sus2 check-two-layer-gate-fastpath-dev model.mtp cfg --max-configs=1 --max-atoms=1 --abs-tolerance=1e-10 --rel-tolerance=1e-9\n"
@@ -1438,6 +1578,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 			"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
 				"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
+				"         --sh-coupling=so3-cg|direct-gaunt (default=so3-cg),\n"
 				"         --two-layer-gate (uses exact body-order k+1 scalar buckets),\n"
 				"         --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full (default=mu-body-linear-combo),\n"
 				"         --two-layer-gate-tanh-amplitude=<double> (default=0.8),\n"

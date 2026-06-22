@@ -1650,6 +1650,7 @@ void MLMTPR::Load(const string& filename)
 		active_two_layer_gate_adjoints_ = nullptr;
 		ClearTwoLayerEdgePrimitiveCache();
 		sh_body_l_max_.assign(7, 0);
+		sh_coupling_ = "so3-cg";
 			if (tmpstr == "potential_tag")
 			{
 				getline(ifs, tmpstr);
@@ -1730,6 +1731,15 @@ void MLMTPR::Load(const string& filename)
 		ifs.ignore(2);
 		ifs >> sh_parity_;
 		ifs >> tmpstr;
+			sh_coupling_ = "so3-cg";
+			if (tmpstr == "sh_coupling") {
+				ifs.ignore(2);
+				ifs >> sh_coupling_;
+				if (sh_coupling_ != "so3-cg"
+				    && sh_coupling_ != "direct-gaunt")
+					ERROR("SUS2-SH sh_coupling should be so3-cg or direct-gaunt");
+				ifs >> tmpstr;
+			}
 			if (tmpstr == "sh_body_l_max") {
 				std::vector<int> body_values;
 				const int body_lmax_count = sh_body_order_ >= 6 ? 5 : 4;
@@ -2603,6 +2613,8 @@ void MLMTPR::Save(const string& filename)
 		ofs << "sh_k_max = " << sh_k_max_ << endl;
 		ofs << "sh_body_order = " << sh_body_order_ << endl;
 		ofs << "sh_parity = " << sh_parity_ << endl;
+		if (sh_coupling_ != "so3-cg")
+			ofs << "sh_coupling = " << sh_coupling_ << endl;
 		std::vector<int> body_lmax = sh_body_l_max_;
 		if (body_lmax.size() < 7)
 			body_lmax.assign(7, sh_l_max_);

@@ -22,6 +22,11 @@ enum class SHFactorPruning {
 	QTotal
 };
 
+enum class SHCouplingKind {
+	SO3CG,
+	DirectGaunt
+};
+
 struct Product {
 	int left;
 	int right;
@@ -211,6 +216,22 @@ SHFactorPruning ParseFactorPruning(const std::map<std::string, std::string>& opt
 	return SHFactorPruning::Legacy;
 }
 
+SHCouplingKind ParseSHCoupling(const std::map<std::string, std::string>& opts)
+{
+	const std::string value = StringOpt(opts, "sh-coupling", "so3-cg");
+	if (value == "so3-cg" || value == "cg" || value == "strict")
+		return SHCouplingKind::SO3CG;
+	if (value == "direct-gaunt" || value == "gaunt")
+		return SHCouplingKind::DirectGaunt;
+	ERROR("--sh-coupling should be so3-cg or direct-gaunt.");
+	return SHCouplingKind::SO3CG;
+}
+
+std::string SHCouplingName(SHCouplingKind coupling)
+{
+	return coupling == SHCouplingKind::DirectGaunt ? "direct-gaunt" : "so3-cg";
+}
+
 std::vector<int> ParseBodyLMax(const std::map<std::string, std::string>& opts,
                                int global_lmax,
                                int body_order)
@@ -356,6 +377,60 @@ double RealCGCoeff(int l1, int rm1, int l2, int rm2, int L, int rM)
 	return sum.real();
 }
 
+double ComplexGauntCoeff(int l1, int m1, int l2, int m2, int L, int M)
+{
+	if (M != m1 + m2)
+		return 0.0;
+	if (!Triangle(l1, l2, L))
+		return 0.0;
+	const double c00 = ClebschGordan(l1, 0, l2, 0, L, 0);
+	if (std::abs(c00) < 1.0e-14)
+		return 0.0;
+	const double cm = ClebschGordan(l1, m1, l2, m2, L, M);
+	if (std::abs(cm) < 1.0e-14)
+		return 0.0;
+	const double pi = std::acos(-1.0);
+	const double prefactor = std::sqrt(
+		(2.0 * l1 + 1.0) * (2.0 * l2 + 1.0)
+		/ (4.0 * pi * (2.0 * L + 1.0)));
+	return prefactor * c00 * cm;
+}
+
+double RealGauntCoeff(int l1, int rm1, int l2, int rm2, int L, int rM)
+{
+	std::complex<double> sum(0.0, 0.0);
+	for (int M = -L; M <= L; ++M) {
+		const std::complex<double> out_u = std::conj(RealFromComplexCoeff(rM, M));
+		if (std::abs(out_u) == 0.0)
+			continue;
+		for (int m1 = -l1; m1 <= l1; ++m1) {
+			const std::complex<double> in1 = RealFromComplexCoeff(rm1, m1);
+			if (std::abs(in1) == 0.0)
+				continue;
+			for (int m2 = -l2; m2 <= l2; ++m2) {
+				const std::complex<double> in2 = RealFromComplexCoeff(rm2, m2);
+				if (std::abs(in2) == 0.0)
+					continue;
+				const double gaunt = ComplexGauntCoeff(l1, m1, l2, m2, L, M);
+				if (std::abs(gaunt) < 1.0e-14)
+					continue;
+				sum += out_u * gaunt * in1 * in2;
+			}
+		}
+	}
+	if (std::abs(sum.imag()) > 1.0e-10)
+		ERROR("real spherical harmonic Gaunt transform produced a non-real coefficient.");
+	return sum.real();
+}
+
+double SHCouplingCoeff(SHCouplingKind coupling,
+                       int l1, int rm1, int l2, int rm2, int L, int rM)
+{
+	if (coupling == SHCouplingKind::DirectGaunt)
+		return RealGauntCoeff(l1, rm1, l2, rm2, L, rM);
+	return RealCGCoeff(l1, rm1, l2, rm2, L, rM);
+}
+
 std::string TensorKey(const std::string& left, const std::string& right, int L)
 {
 	std::ostringstream oss;
@@ -365,8 +440,13 @@ std::string TensorKey(const std::string& left, const std::string& right, int L)
 
 class SHGraphBuilder {
 public:
-	SHGraphBuilder(int lmax, int kmax, SHFactorPruning factor_pruning)
-		: lmax_(lmax), kmax_(kmax), factor_pruning_(factor_pruning)
+	SHGraphBuilder(int lmax, int kmax,
+	               SHFactorPruning factor_pruning,
+	               SHCouplingKind coupling)
+		: lmax_(lmax),
+		  kmax_(kmax),
+		  factor_pruning_(factor_pruning),
+		  coupling_(coupling)
 	{
 	}
 
@@ -437,7 +517,9 @@ public:
 		for (int rm1 = -left_copy.l; rm1 <= left_copy.l; ++rm1) {
 			for (int rm2 = -right_copy.l; rm2 <= right_copy.l; ++rm2) {
 				for (int rM = -L; rM <= L; ++rM) {
-					const double coeff = RealCGCoeff(left_copy.l, rm1, right_copy.l, rm2, L, rM);
+					const double coeff =
+						SHCouplingCoeff(coupling_, left_copy.l, rm1,
+						                right_copy.l, rm2, L, rM);
 					if (std::abs(coeff) < 1.0e-12)
 						continue;
 					add_local_product(left_copy.node[rm1 + left_copy.l],
@@ -710,6 +792,7 @@ public:
 	int lmax_;
 	int kmax_;
 	SHFactorPruning factor_pruning_;
+	SHCouplingKind coupling_;
 	int node_count_ = 0;
 	std::vector<int> body_lmax_;
 	std::vector<QIndex> q_;
@@ -733,6 +816,13 @@ double SphericalHarmonicRealCGCoeff(int l1, int rm1,
 	return RealCGCoeff(l1, rm1, l2, rm2, L, rM);
 }
 
+double SphericalHarmonicRealGauntCoeff(int l1, int rm1,
+                                       int l2, int rm2,
+                                       int L, int rM)
+{
+	return RealGauntCoeff(l1, rm1, l2, rm2, L, rM);
+}
+
 void WriteSphericalHarmonicModel(const std::string& filename,
                                  const std::map<std::string, std::string>& opts)
 {
@@ -746,6 +836,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const double scaling = DoubleOpt(opts, "scaling", 0.01);
 	const std::string rbasis = CanonicalRadialBasisType(StringOpt(opts, "radial-basis-type", "RBChebyshev_sss"));
 	const SHFactorPruning factor_pruning = ParseFactorPruning(opts);
+	const SHCouplingKind sh_coupling = ParseSHCoupling(opts);
 	const bool two_layer_gate = HasOpt(opts, "two-layer-gate");
 	const bool two_layer_gate_shared_radial =
 		HasOpt(opts, "two-layer-gate-shared-radial");
@@ -801,7 +892,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (rbasis == "RBJacobi_sss" && kmax > 6)
 		ERROR("init-sh with RBJacobi_sss supports --k-max up to 6 because Jacobi blocks are indexed as k=0..5.");
 
-	SHGraphBuilder graph(lmax, kmax, factor_pruning);
+	SHGraphBuilder graph(lmax, kmax, factor_pruning, sh_coupling);
 	graph.Build();
 	graph.AddScalars(body_order, body_lmax);
 
@@ -824,6 +915,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	ofs << "sh_k_max = " << kmax << "\n";
 	ofs << "sh_body_order = " << body_order << "\n";
 	ofs << "sh_parity = even\n";
+	if (sh_coupling == SHCouplingKind::DirectGaunt)
+		ofs << "sh_coupling = " << SHCouplingName(sh_coupling) << "\n";
 	ofs << "sh_body_l_max = {" << body_lmax[2] << ", " << body_lmax[3]
 	    << ", " << body_lmax[4] << ", " << body_lmax[5];
 	if (body_order >= 6)
