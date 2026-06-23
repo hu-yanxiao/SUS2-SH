@@ -1707,6 +1707,38 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	} END_COMMAND;
 
+	BEGIN_COMMAND("calc-eij",
+		"calculates effective-pair (EP) energies of configurations",
+		"mlp-sus2 calc-eij pot.mtp in.cfg out.eij:\n"
+		"calculates effective-pair energies from in.cfg and writes rows\n"
+		"type_i type_j distance EP_energy to out.eij\n"
+		) {
+
+		if (args.size() != 3) {
+			std::cout << "\tError: 3 arguments required\n";
+			return 1;
+		}
+
+		const string mtp_filename = args[0];
+		const string input_filename = args[1];
+		const string output_filename = args[2];
+
+		MLMTPR mtpr(mtp_filename);
+
+		ifstream ifs(input_filename, std::ios::binary);
+		ofstream ofs(output_filename, std::ios::binary);
+		ofs.setf(std::ios::scientific);
+		ofs.precision(15);
+		Configuration cfg;
+		while (cfg.Load(ifs)) {
+			mtpr.CalcEij(cfg, ofs);
+		}
+
+		ifs.close();
+		ofs.close();
+
+	} END_COMMAND;
+
 	BEGIN_COMMAND("calc-efs",
 		"calculates energies, forces, and stresses (efs) of configurations",
 		"mlp-sus2 calc-efs pot.mtp in.cfg out.cfg:\n"

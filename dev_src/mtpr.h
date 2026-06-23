@@ -298,6 +298,16 @@ protected:
 	void AccumulateSHProductRowsForward(const std::vector<double>& input_values,
 										std::vector<double>& output_values) const;
 	void BackpropSHProductRows(std::vector<double>& adjoints) const;
+	void CalcSHEdgeBasicValues(const Neighborhood& nbh,
+	                           int neighbor_index,
+	                           std::vector<double>& edge_basic_values);
+	double CalcSHScalarFirstFactorProjection(
+		const SHScalarInfo& scalar_info,
+		const std::vector<double>& edge_basic_values) const;
+	double CalcSHDirectedEffectivePairEnergy(
+		const Neighborhood& nbh,
+		int neighbor_index,
+		std::vector<double>& edge_basic_values);
 
 	std::vector<int> radial_eval_to_basis_k_;
 
@@ -517,6 +527,7 @@ public:
 	~MLMTPR();
         void CalcDescriptors(Configuration& cfg, std::ofstream &ofs);
         void CalcpartialE(Configuration& cfg, std::ofstream &ofs);
+        void CalcEij(Configuration& cfg, std::ofstream &ofs);
 	void ReadMTPBasis(std::ifstream& ifs);		// Read MTP basis from file	
 	void WriteMTPBasis(std::ofstream& ofs);		// Write MTP basis for file
 

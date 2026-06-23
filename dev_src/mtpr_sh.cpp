@@ -76,6 +76,151 @@ double RealSHDer(const double* ders, int l, int m, int a)
 	return ders[3 * SHFlatIndex(l, m) + a];
 }
 
+double SHCGFactorial(int n)
+{
+	if (n < 0)
+		return 0.0;
+	double value = 1.0;
+	for (int i = 2; i <= n; ++i)
+		value *= static_cast<double>(i);
+	return value;
+}
+
+bool SHTriangle(int l1, int l2, int l3)
+{
+	return std::abs(l1 - l2) <= l3 && l3 <= l1 + l2;
+}
+
+double SHClebschGordan(int j1, int m1, int j2, int m2, int j, int m)
+{
+	if (m != m1 + m2)
+		return 0.0;
+	if (!SHTriangle(j1, j2, j))
+		return 0.0;
+	if (std::abs(m1) > j1 || std::abs(m2) > j2 || std::abs(m) > j)
+		return 0.0;
+
+	const double pref1 = std::sqrt((2.0 * j + 1.0)
+		* SHCGFactorial(j1 + j2 - j)
+		* SHCGFactorial(j1 - j2 + j)
+		* SHCGFactorial(-j1 + j2 + j)
+		/ SHCGFactorial(j1 + j2 + j + 1));
+	const double pref2 = std::sqrt(SHCGFactorial(j1 + m1)
+		* SHCGFactorial(j1 - m1)
+		* SHCGFactorial(j2 + m2)
+		* SHCGFactorial(j2 - m2)
+		* SHCGFactorial(j + m)
+		* SHCGFactorial(j - m));
+
+	double sum = 0.0;
+	for (int k = 0; k <= 64; ++k) {
+		const int a = j1 + j2 - j - k;
+		const int b = j1 - m1 - k;
+		const int c = j2 + m2 - k;
+		const int d = j - j2 + m1 + k;
+		const int e = j - j1 - m2 + k;
+		if (a < 0 || b < 0 || c < 0 || d < 0 || e < 0)
+			continue;
+		const double term = ((k % 2) ? -1.0 : 1.0)
+			/ (SHCGFactorial(k) * SHCGFactorial(a)
+			   * SHCGFactorial(b) * SHCGFactorial(c)
+			   * SHCGFactorial(d) * SHCGFactorial(e));
+		sum += term;
+	}
+	return pref1 * pref2 * sum;
+}
+
+std::complex<double> SHRealFromComplexCoeff(int real_m, int complex_m)
+{
+	const double inv_sqrt2 = 1.0 / std::sqrt(2.0);
+	if (real_m == 0)
+		return complex_m == 0 ? std::complex<double>(1.0, 0.0)
+		                      : std::complex<double>(0.0, 0.0);
+	const int a = std::abs(real_m);
+	if (std::abs(complex_m) != a)
+		return std::complex<double>(0.0, 0.0);
+	if (real_m > 0) {
+		if (complex_m == a)
+			return inv_sqrt2 * ParitySign(a);
+		return inv_sqrt2;
+	}
+	if (complex_m == a)
+		return std::complex<double>(0.0, -inv_sqrt2 * ParitySign(a));
+	return std::complex<double>(0.0, inv_sqrt2);
+}
+
+std::complex<double> SHRealCouplingPhase(int l1, int l2, int L)
+{
+	switch ((l1 + l2 - L) & 3) {
+	case 0:
+		return std::complex<double>(1.0, 0.0);
+	case 1:
+		return std::complex<double>(0.0, 1.0);
+	case 2:
+		return std::complex<double>(-1.0, 0.0);
+	default:
+		return std::complex<double>(0.0, -1.0);
+	}
+}
+
+double SHRealCouplingCoeff(int l1, int rm1, int l2, int rm2, int L, int rM)
+{
+	std::complex<double> sum(0.0, 0.0);
+	for (int M = -L; M <= L; ++M) {
+		const std::complex<double> out_u =
+			std::conj(SHRealFromComplexCoeff(rM, M));
+		if (std::abs(out_u) == 0.0)
+			continue;
+		for (int m1 = -l1; m1 <= l1; ++m1) {
+			const std::complex<double> in1 = SHRealFromComplexCoeff(rm1, m1);
+			if (std::abs(in1) == 0.0)
+				continue;
+			for (int m2 = -l2; m2 <= l2; ++m2) {
+				const std::complex<double> in2 =
+					SHRealFromComplexCoeff(rm2, m2);
+				if (std::abs(in2) == 0.0)
+					continue;
+				const double cg = SHClebschGordan(l1, m1, l2, m2, L, M);
+				if (std::abs(cg) < 1.0e-14)
+					continue;
+				sum += out_u * cg * in1 * in2;
+			}
+		}
+	}
+	sum *= SHRealCouplingPhase(l1, l2, L);
+	if (std::abs(sum.imag()) > 1.0e-10)
+		ERROR("SUS2-SH effective-pair CG transform produced a non-real coefficient.");
+	return sum.real();
+}
+
+std::vector<double> CoupleSHTensors(const std::vector<double>& left,
+                                    int l_left,
+                                    const std::vector<double>& right,
+                                    int l_right,
+                                    int l_out)
+{
+	std::vector<double> out(2 * l_out + 1, 0.0);
+	for (int m_left = -l_left; m_left <= l_left; ++m_left) {
+		const double left_value = left[m_left + l_left];
+		if (left_value == 0.0)
+			continue;
+		for (int m_right = -l_right; m_right <= l_right; ++m_right) {
+			const double right_value = right[m_right + l_right];
+			if (right_value == 0.0)
+				continue;
+			const double product = left_value * right_value;
+			for (int m_out = -l_out; m_out <= l_out; ++m_out) {
+				const double coeff = SHRealCouplingCoeff(
+					l_left, m_left, l_right, m_right, l_out, m_out);
+				if (std::abs(coeff) < 1.0e-12)
+					continue;
+				out[m_out + l_out] += coeff * product;
+			}
+		}
+	}
+	return out;
+}
+
 bool SHUsesPrecomputedLmpTable(AnyRadialBasis* radial_basis)
 {
 	if (radial_basis == nullptr)
@@ -2071,6 +2216,261 @@ void MLMTPR::CalcSHMomentValuesOnly(const Neighborhood& nbh)
 	basis_vals[0] = 1.0;
 	for (int i = 0; i < alpha_scalar_moments; ++i)
 		basis_vals[1 + i] = moment_vals[alpha_moment_mapping[i]];
+}
+
+void MLMTPR::CalcSHEdgeBasicValues(const Neighborhood& nbh,
+                                   int neighbor_index,
+                                   std::vector<double>& edge_basic_values)
+{
+	if (!is_sh_potential_)
+		ERROR("calc-eij currently supports SUS2-SH models only");
+	if (neighbor_index < 0 || neighbor_index >= nbh.count)
+		ERROR("calc-eij neighbor index is out of range");
+	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
+		ERROR("SUS2-SH evaluator currently supports sh_l_max in [0,6].");
+
+	edge_basic_values.assign(alpha_moments_count, 0.0);
+
+	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
+	const int C = species_count;
+	const int R = p_RadialBasis->rb_size;
+	const int type_central = nbh.my_type;
+	if (type_central >= species_count)
+		throw MlipException("Too few species count in the MTP potential!");
+
+	const Vector3& rvec = nbh.vecs[neighbor_index];
+	const double r = nbh.dists[neighbor_index];
+	const int type_outer = nbh.types[neighbor_index];
+	double sh_values[kMaxSHComponents];
+	std::vector<double>& rb_vals = radial_vals_buffer_;
+	std::vector<double>& radial_values = grad_mu_contract_vals_;
+	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
+	const int mu_stride = radial_func_count;
+	const int radial_coeff_base = C + 2 * C * C * K_;
+	const int shared_type_offset = radial_coeff_base + R;
+
+	const double* sh_values_use = sh_values;
+	const double* radial_values_use = radial_values.data();
+	if (HasTwoLayerEdgePrimitiveCache(-1, false)) {
+		const size_t edge = TwoLayerEdgePrimitiveOffset(-1, neighbor_index);
+		sh_values_use =
+			two_layer_edge_sh_values_cache_.data() + edge * sh_count;
+		radial_values_use =
+			two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
+	} else {
+		EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+
+		if (use_lmp_table) {
+			InterpolateSHLmpMuTable(radial_list,
+			                         radial_der_list,
+			                         inv_dr,
+			                         C,
+			                         type_central,
+			                         type_outer,
+			                         r,
+			                         radial_func_count,
+			                         radial_values.data(),
+			                         nullptr);
+		} else {
+			for (int eval_block = 0;
+			     eval_block < static_cast<int>(radial_eval_to_scaling_block_.size());
+			     ++eval_block) {
+				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+				const int basis_k = radial_eval_to_basis_k_[eval_block];
+				p_RadialBasis->RB_CalcValsOnly(
+					r,
+					regression_coeffs[C + 2 * scaling_block * C * C
+					                  + C * type_central + type_outer],
+					regression_coeffs[C + 2 * scaling_block * C * C
+					                  + C * C + C * type_central + type_outer],
+					basis_k);
+				for (int xi = 0; xi < R; ++xi)
+					rb_vals[eval_block * R + xi] =
+						p_RadialBasis->rb_vals[xi] * scaling;
+			}
+			for (int mu = 0; mu < radial_func_count; ++mu) {
+				const int radial_base = mu_to_radial_eval_block_[mu] * R;
+				const int radial_offset = radial_coeff_base + mu * (R + C);
+				double radial_value = 0.0;
+				for (int xi = 0; xi < R; ++xi)
+					radial_value +=
+						regression_coeffs[radial_offset + xi]
+						* rb_vals[radial_base + xi];
+				radial_values[mu] = radial_value;
+			}
+		}
+	}
+
+	const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
+	const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
+	const double* active_gate_values_data =
+		active_two_layer_gate_values_ == nullptr
+			? nullptr
+			: active_two_layer_gate_values_->data();
+	const int gate_center_atom_index = active_two_layer_edge_cache_atom_index_;
+	const double* gate_signal_by_mu =
+		active_gate_values_data == nullptr
+			? nullptr
+			: active_gate_values_data
+				+ static_cast<size_t>(nbh.inds[neighbor_index]) * radial_func_count;
+	const double* center_gate_signal_by_mu =
+		(active_gate_values_data == nullptr || gate_center_atom_index < 0)
+			? nullptr
+			: active_gate_values_data
+				+ static_cast<size_t>(gate_center_atom_index) * radial_func_count;
+	PrepareTwoLayerGatePairMuBuffers(
+		type_central, type_outer, center_type_coeff, outer_type_coeff,
+		center_gate_signal_by_mu, gate_center_atom_index,
+		gate_signal_by_mu, nbh.inds[neighbor_index],
+		kGateMuBufferTypeScale);
+
+	const double* gate_type_scale_by_mu =
+		two_layer_gate_type_scale_mu_buffer_.data();
+	double* gate_scaled_radial_by_mu =
+		two_layer_gate_scaled_mu_vals_buffer_.data();
+	for (int mu = 0; mu < radial_func_count; ++mu)
+		gate_scaled_radial_by_mu[mu] =
+			gate_type_scale_by_mu[mu] * radial_values_use[mu];
+
+	for (int i = 0; i < alpha_index_basic_count; ++i) {
+		const int mu = basic_mu_cache_[i];
+		const int sh_index = basic_sh_index_cache_[i];
+		edge_basic_values[i] =
+			gate_scaled_radial_by_mu[mu] * sh_values_use[sh_index];
+	}
+}
+
+double MLMTPR::CalcSHScalarFirstFactorProjection(
+	const SHScalarInfo& scalar_info,
+	const std::vector<double>& edge_basic_values) const
+{
+	if (edge_basic_values.size() < static_cast<size_t>(alpha_index_basic_count))
+		ERROR("calc-eij internal edge basic buffer is too small");
+	if (scalar_info.body_order < 2 || scalar_info.body_order > 6)
+		ERROR("calc-eij found an invalid SH scalar body order");
+
+	auto q_index_to_l_mu = [&](int q_index, int& l, int& mu) {
+		if (q_index < 0 || q_index >= sh_k_max_ * (sh_l_max_ + 1))
+			ERROR("calc-eij found an invalid SH scalar q index");
+		int cursor = 0;
+		for (int l_iter = sh_l_max_; l_iter >= 0; --l_iter) {
+			for (int k_iter = sh_k_max_ - 1; k_iter >= 0; --k_iter) {
+				if (cursor == q_index) {
+					l = l_iter;
+					mu = k_iter * (sh_l_max_ + 1) + l_iter;
+					return;
+				}
+				++cursor;
+			}
+		}
+		ERROR("calc-eij failed to map SH scalar q index");
+	};
+
+	auto tensor_values = [&](int q_index, bool edge) {
+		int l = 0;
+		int mu = 0;
+		q_index_to_l_mu(q_index, l, mu);
+		std::vector<double> values(2 * l + 1, 0.0);
+		for (int m = -l; m <= l; ++m) {
+			int node = -1;
+			for (int i = 0; i < alpha_index_basic_count; ++i) {
+				if (alpha_index_basic_.comp0[i] == mu
+				    && alpha_index_basic_.comp1[i] == l
+				    && alpha_index_basic_.comp2[i] == m) {
+					node = i;
+					break;
+				}
+			}
+			if (node < 0)
+				ERROR("calc-eij could not find a required SH basic tensor component");
+			values[m + l] = edge ? edge_basic_values[node] : moment_vals[node];
+		}
+		return values;
+	};
+
+	auto q_l = [&](int q_index) {
+		int l = 0;
+		int mu = 0;
+		q_index_to_l_mu(q_index, l, mu);
+		return l;
+	};
+
+	const int q0 = scalar_info.q[0];
+	const int l0 = q_l(q0);
+	const std::vector<double> t0_edge = tensor_values(q0, true);
+	if (scalar_info.body_order == 2)
+		return t0_edge[0];
+
+	const int q1 = scalar_info.q[1];
+	const int l1 = q_l(q1);
+	const std::vector<double> t1_full = tensor_values(q1, false);
+	if (scalar_info.body_order == 3) {
+		const std::vector<double> scalar =
+			CoupleSHTensors(t0_edge, l0, t1_full, l1, 0);
+		return scalar[0];
+	}
+
+	const int q2 = scalar_info.q[2];
+	const int l2 = q_l(q2);
+	const std::vector<double> t2_full = tensor_values(q2, false);
+	const int intermediate_l = scalar_info.intermediate_l;
+	if (intermediate_l < 0 || intermediate_l > 2 * sh_l_max_)
+		ERROR("calc-eij found an invalid SH intermediate l");
+
+	const std::vector<double> left =
+		CoupleSHTensors(t0_edge, l0, t1_full, l1, intermediate_l);
+	if (scalar_info.body_order == 4) {
+		const std::vector<double> scalar =
+			CoupleSHTensors(left, intermediate_l, t2_full, l2, 0);
+		return scalar[0];
+	}
+
+	const int q3 = scalar_info.q[3];
+	const int l3 = q_l(q3);
+	const std::vector<double> t3_full = tensor_values(q3, false);
+	const std::vector<double> right_pair =
+		CoupleSHTensors(t2_full, l2, t3_full, l3, intermediate_l);
+	if (scalar_info.body_order == 5) {
+		const std::vector<double> scalar =
+			CoupleSHTensors(left, intermediate_l, right_pair, intermediate_l, 0);
+		return scalar[0];
+	}
+
+	const int q4 = scalar_info.q[4];
+	const int l4 = q_l(q4);
+	const std::vector<double> t4_full = tensor_values(q4, false);
+	const std::vector<double> right =
+		CoupleSHTensors(right_pair, intermediate_l, t4_full, l4, intermediate_l);
+	const std::vector<double> scalar =
+		CoupleSHTensors(left, intermediate_l, right, intermediate_l, 0);
+	return scalar[0];
+}
+
+double MLMTPR::CalcSHDirectedEffectivePairEnergy(
+	const Neighborhood& nbh,
+	int neighbor_index,
+	std::vector<double>& edge_basic_values)
+{
+	if (!is_sh_potential_)
+		ERROR("calc-eij currently supports SUS2-SH models only");
+	if (!has_sh_scalar_info_)
+		ERROR("calc-eij requires sh_scalar_info metadata; initialize or rewrite the model with --write-sh-scalar-info");
+	if (TwoLayerResidualEnabled())
+		ERROR("calc-eij does not support two-layer residual models");
+
+	CalcSHEdgeBasicValues(nbh, neighbor_index, edge_basic_values);
+	const double center_linear = linear_coeffs[nbh.my_type];
+	double energy = 0.0;
+	for (int i = 0; i < alpha_scalar_moments; ++i) {
+		const double scalar_projection =
+			CalcSHScalarFirstFactorProjection(sh_scalar_info_[i],
+			                                  edge_basic_values);
+		energy += center_linear
+			* linear_coeffs[species_count + i]
+			* linear_mults[i]
+			* scalar_projection;
+	}
+	return energy;
 }
 
 void MLMTPR::CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh)

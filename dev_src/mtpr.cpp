@@ -2553,6 +2553,117 @@ void MLMTPR::CalcpartialE(Configuration& cfg, ofstream& ofs)
 	}
 }
 
+void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
+{
+	if (!is_sh_potential_)
+		ERROR("calc-eij currently supports SUS2-SH models only");
+	if (!has_sh_scalar_info_)
+		ERROR("calc-eij requires sh_scalar_info metadata; initialize or rewrite the model with --write-sh-scalar-info");
+	if (TwoLayerResidualEnabled())
+		ERROR("calc-eij does not support two-layer residual models");
+
+	struct DirectedPair {
+		int center = -1;
+		int neighbor = -1;
+		int type_center = -1;
+		int type_neighbor = -1;
+		Vector3 vec;
+		double dist = 0.0;
+		double energy = 0.0;
+	};
+
+	Neighborhoods neighborhoods(cfg, CutOff());
+	PrepareEvalCaches();
+
+	const bool use_two_layer_gate = RequiresTwoLayerGateEvaluation();
+	if (!use_two_layer_gate) {
+		two_layer_full_edge_cache_for_next_calc_ = false;
+		two_layer_reuse_full_edge_cache_once_ = false;
+		two_layer_forward_final_moment_cache_ready_ = false;
+		active_two_layer_gate_values_ = nullptr;
+		active_two_layer_gate_adjoints_ = nullptr;
+		active_two_layer_edge_cache_atom_index_ = -1;
+	} else {
+		two_layer_full_edge_cache_for_next_calc_ = false;
+		two_layer_reuse_full_edge_cache_once_ = false;
+		two_layer_forward_final_moment_cache_ready_ = false;
+		BuildTwoLayerEdgePrimitiveCache(neighborhoods, false);
+		PrepareTwoLayerGateValues(cfg, neighborhoods);
+		active_two_layer_gate_values_ = &two_layer_gate_values_;
+		active_two_layer_gate_adjoints_ = nullptr;
+	}
+
+	std::vector<DirectedPair> directed_pairs;
+	std::vector<double> edge_basic_values;
+	for (int ind = 0; ind < cfg.size(); ++ind) {
+		if (use_two_layer_gate)
+			active_two_layer_edge_cache_atom_index_ = ind;
+		const Neighborhood& nbh = neighborhoods[ind];
+		CalcSHMomentValuesOnly(nbh);
+		for (int j = 0; j < nbh.count; ++j) {
+			DirectedPair pair;
+			pair.center = ind;
+			pair.neighbor = nbh.inds[j];
+			pair.type_center = nbh.my_type;
+			pair.type_neighbor = nbh.types[j];
+			pair.vec = nbh.vecs[j];
+			pair.dist = nbh.dists[j];
+			pair.energy = CalcSHDirectedEffectivePairEnergy(
+				nbh, j, edge_basic_values);
+			directed_pairs.push_back(pair);
+		}
+	}
+
+	active_two_layer_edge_cache_atom_index_ = -1;
+	if (use_two_layer_gate)
+		active_two_layer_gate_values_ = nullptr;
+	active_two_layer_gate_adjoints_ = nullptr;
+
+	std::vector<char> used(directed_pairs.size(), 0);
+	const double base_tol = 1.0e-8;
+	for (size_t i = 0; i < directed_pairs.size(); ++i) {
+		if (used[i])
+			continue;
+		used[i] = 1;
+		const DirectedPair& first = directed_pairs[i];
+		double pair_energy = first.energy;
+
+		if (first.center != first.neighbor) {
+			int reverse_index = -1;
+			for (size_t k = i + 1; k < directed_pairs.size(); ++k) {
+				if (used[k])
+					continue;
+				const DirectedPair& candidate = directed_pairs[k];
+				if (candidate.center != first.neighbor
+				    || candidate.neighbor != first.center)
+					continue;
+				const double dist_tol =
+					base_tol * std::max(1.0, std::max(first.dist, candidate.dist));
+				if (std::abs(candidate.dist - first.dist) > dist_tol)
+					continue;
+				double vec_err = 0.0;
+				for (int a = 0; a < 3; ++a) {
+					const double sum = candidate.vec[a] + first.vec[a];
+					vec_err += sum * sum;
+				}
+				if (std::sqrt(vec_err) > dist_tol)
+					continue;
+				reverse_index = static_cast<int>(k);
+				break;
+			}
+			if (reverse_index >= 0) {
+				used[reverse_index] = 1;
+				pair_energy += directed_pairs[reverse_index].energy;
+			}
+		}
+
+		const int type0 = std::min(first.type_center, first.type_neighbor);
+		const int type1 = std::max(first.type_center, first.type_neighbor);
+		ofs << type0 << ' ' << type1 << ' '
+		    << first.dist << ' ' << pair_energy << '\n';
+	}
+}
+
 
 
 
