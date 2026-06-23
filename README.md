@@ -228,6 +228,47 @@ For current production work, use `--two-layer-gate
 --two-layer-gate-shared-radial` with the tanh additive form above. Legacy direct
 gate modes are retained only for model compatibility and testing.
 
+## Effective Pair Energy CLI
+
+`calc-eij` writes the effective-pair (EP) projection of the SUS2-SH scalar
+energy for each unordered neighbor image in a CFG file:
+
+```bash
+bin/mlp-sus2 calc-eij pot.mtp in.cfg out.eij
+```
+
+Each output row has four whitespace-separated columns:
+
+```text
+type_i type_j distance EP_energy
+```
+
+The two type columns are sorted so that `type_i <= type_j`. The distance is the
+length of that specific neighbor image. If a small periodic cell contains more
+than one image of the same atom pair within the cutoff, those images are written
+as separate rows rather than merged by atom index.
+
+The EP energy omits one-body element terms such as `shift_coeffs` and
+`species_coeffs`. It is the pair projection of the SH scalar linear head:
+
+```text
+E_EP(I,j) =
+  u_ZI sum_q v_q lambda_q
+    sum_m C_q(m) A_{I<-j,mu_1,m_1}
+      prod_{nu=2..n_q} A_{I,mu_nu,m_nu}
+```
+
+The unordered row for an `I,J` image sums the two directed projections
+`E_EP(I,J) + E_EP(J,I)` when both directions are present. The command supports
+plain SH, single-site gate, and double-site gate models, and uses the same gate
+factors as ordinary `calc-efs`.
+
+`calc-eij` requires `sh_scalar_info` metadata in the `.mtp` file. New gate
+models write this metadata automatically; for plain SH models, initialize or
+rewrite the model with `--write-sh-scalar-info` before using this command. This
+diagnostic reports the SUS2-SH scalar projection and does not add ZBL pair
+terms.
+
 ## ZBL CLI
 
 ZBL is a fixed short-range repulsive term stored inside the `.mtp` file. Once a
