@@ -53,6 +53,32 @@ constexpr int kAcceptedDiagDoubleCount = 11;
 constexpr int kAcceptedDiagCountCount = 3;
 constexpr int kTraceFlushInterval = 16;
 
+std::size_t UpperTrianglePackedSize(int n)
+{
+	return static_cast<std::size_t>(n) * static_cast<std::size_t>(n + 1) / 2;
+}
+
+void PackUpperTriangle(const double* matrix, int n, std::vector<double>& packed)
+{
+	packed.resize(UpperTrianglePackedSize(n));
+	std::size_t pos = 0;
+	for (int i = 0; i < n; ++i) {
+		const double* row = matrix + static_cast<std::size_t>(i) * n;
+		for (int j = i; j < n; ++j)
+			packed[pos++] = row[j];
+	}
+}
+
+void UnpackUpperTriangle(const std::vector<double>& packed, int n, double* matrix)
+{
+	std::size_t pos = 0;
+	for (int i = 0; i < n; ++i) {
+		double* row = matrix + static_cast<std::size_t>(i) * n;
+		for (int j = i; j < n; ++j)
+			row[j] = packed[pos++];
+	}
+}
+
 double EstimateConfigurationVolume(const Configuration& cfg)
 {
 	double volume = std::abs(cfg.lattice.det());
@@ -713,9 +739,10 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 		lin_active_row_.resize(n);
 		ProjectLinearRowToActive(energy_cmpnts, 1, energy_rhs, lin_active_row_.data());
 		energy_cmpnts = lin_active_row_.data();
-		cblas_dger(CBLAS_ORDER::CblasRowMajor, n, n,
+		cblas_dsyr(CBLAS_ORDER::CblasRowMajor,
+			CBLAS_UPLO::CblasUpper,
+			n,
 			alpha,
-			energy_cmpnts, 1,
 			energy_cmpnts, 1,
 			quad_opt_matr, n);
 		cblas_daxpy(n, alpha * energy_rhs, energy_cmpnts, 1, quad_opt_vec, 1);
@@ -743,12 +770,11 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 					                         &lin_force_block_[static_cast<size_t>(row) * n]);
 				}
 			}
-			cblas_dgemm(CBLAS_ORDER::CblasRowMajor,
+			cblas_dsyrk(CBLAS_ORDER::CblasRowMajor,
+				CBLAS_UPLO::CblasUpper,
 				CBLAS_TRANSPOSE::CblasTrans,
-				CBLAS_TRANSPOSE::CblasNoTrans,
-				n, n, force_rows,
+				n, force_rows,
 				alpha,
-				lin_force_block_.data(), n,
 				lin_force_block_.data(), n,
 				1.0,
 				quad_opt_matr, n);
@@ -774,9 +800,10 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 					ProjectLinearRowToActive(force_cmp, 3, force_rhs, lin_projected_row_.data());
 					const double* force_row = lin_projected_row_.data();
 					const int force_stride = 1;
-					cblas_dger(CBLAS_ORDER::CblasRowMajor, n, n,
+					cblas_dsyr(CBLAS_ORDER::CblasRowMajor,
+						CBLAS_UPLO::CblasUpper,
+						n,
 						alpha,
-						force_row, force_stride,
 						force_row, force_stride,
 						quad_opt_matr, n);
 					cblas_daxpy(n, alpha * force_rhs, force_row, force_stride, quad_opt_vec, 1);
@@ -810,12 +837,11 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 					                         &lin_stress_block_[static_cast<size_t>(row) * n]);
 					row++;
 				}
-			cblas_dgemm(CBLAS_ORDER::CblasRowMajor,
+			cblas_dsyrk(CBLAS_ORDER::CblasRowMajor,
+				CBLAS_UPLO::CblasUpper,
 				CBLAS_TRANSPOSE::CblasTrans,
-				CBLAS_TRANSPOSE::CblasNoTrans,
-				n, n, stress_rows,
+				n, stress_rows,
 				alpha,
-				lin_stress_block_.data(), n,
 				lin_stress_block_.data(), n,
 				1.0,
 				quad_opt_matr, n);
@@ -838,9 +864,10 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 					ProjectLinearRowToActive(stress_cmp, 9, stress_rhs, lin_projected_row_.data());
 					const double* stress_row = lin_projected_row_.data();
 					const int stress_stride = 1;
-					cblas_dger(CBLAS_ORDER::CblasRowMajor, n, n,
+					cblas_dsyr(CBLAS_ORDER::CblasRowMajor,
+						CBLAS_UPLO::CblasUpper,
+						n,
 						alpha,
-						stress_row, stress_stride,
 						stress_row, stress_stride,
 						quad_opt_matr, n);
 					cblas_daxpy(n, alpha * stress_rhs, stress_row, stress_stride, quad_opt_vec, 1);
@@ -926,6 +953,11 @@ void MTPR_trainer::TrainLinear(int prank,
 	int linear_status = 0;
 	std::string linear_error;
 	double reduce_start = MPI_Wtime();
+	const std::size_t packed_matrix_size = UpperTrianglePackedSize(n);
+	if (packed_matrix_size > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+		ERROR(prefix + " normal matrix is too large for packed MPI reduction.");
+	std::vector<double> packed_upper_matrix;
+	PackUpperTriangle(quad_opt_matr, n, packed_upper_matrix);
 	if (mpi_rank == 0) {
 		std::cout << "[" << CurrentTimestamp() << "] TrainLinear build done"
 		          << " ctx=" << prefix
@@ -938,7 +970,14 @@ void MTPR_trainer::TrainLinear(int prank,
 		          << std::endl;
 	}
 	if (mpi_rank == 0) {
-		MPI_Reduce(MPI_IN_PLACE, quad_opt_matr, n*n, MPI_DOUBLE, MPI_SUM, 0, train_comm);
+		MPI_Reduce(MPI_IN_PLACE,
+		           packed_upper_matrix.data(),
+		           static_cast<int>(packed_matrix_size),
+		           MPI_DOUBLE,
+		           MPI_SUM,
+		           0,
+		           train_comm);
+		UnpackUpperTriangle(packed_upper_matrix, n, quad_opt_matr);
 		MPI_Reduce(MPI_IN_PLACE, quad_opt_vec, n, MPI_DOUBLE, MPI_SUM, 0, train_comm);
 		MPI_Reduce(MPI_IN_PLACE, &quad_opt_scalar, 1, MPI_DOUBLE, MPI_SUM, 0, train_comm);
 		const double reduce_seconds = MPI_Wtime() - reduce_start;
@@ -990,7 +1029,13 @@ void MTPR_trainer::TrainLinear(int prank,
 			          << " reason=" << linear_error << std::endl;
 		}
 	} else {
-		MPI_Reduce(quad_opt_matr, quad_opt_matr, n*n, MPI_DOUBLE, MPI_SUM, 0, train_comm);
+		MPI_Reduce(packed_upper_matrix.data(),
+		           packed_upper_matrix.data(),
+		           static_cast<int>(packed_matrix_size),
+		           MPI_DOUBLE,
+		           MPI_SUM,
+		           0,
+		           train_comm);
 		MPI_Reduce(quad_opt_vec, quad_opt_vec, n, MPI_DOUBLE, MPI_SUM, 0, train_comm);
 		MPI_Reduce(&quad_opt_scalar, &quad_opt_scalar, 1, MPI_DOUBLE, MPI_SUM, 0, train_comm);
 	}
