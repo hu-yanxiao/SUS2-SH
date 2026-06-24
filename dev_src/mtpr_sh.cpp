@@ -1,7 +1,6 @@
 /* SUS2-SH real spherical-harmonic evaluation and analytic coefficient gradients. */
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -2496,9 +2495,7 @@ void MLMTPR::CalcSHDirectedEffectivePairWeights(
 
 	const int q_count = sh_k_max_ * (sh_l_max_ + 1);
 	std::vector<int> q_l(q_count, 0);
-	std::vector<std::array<int, kMaxSHComponents> > q_nodes(q_count);
-	for (int q = 0; q < q_count; ++q)
-		q_nodes[q].fill(-1);
+	std::vector<int> q_nodes(static_cast<size_t>(q_count) * kMaxSHComponents, -1);
 
 	int cursor = 0;
 	for (int l_iter = sh_l_max_; l_iter >= 0; --l_iter) {
@@ -2518,7 +2515,8 @@ void MLMTPR::CalcSHDirectedEffectivePairWeights(
 				}
 				if (node < 0)
 					ERROR("calc-eij could not find a required SH basic tensor component");
-				q_nodes[q_index][m + l_iter] = node;
+				q_nodes[static_cast<size_t>(q_index) * kMaxSHComponents
+					+ static_cast<size_t>(m + l_iter)] = node;
 			}
 		}
 	}
@@ -2529,26 +2527,26 @@ void MLMTPR::CalcSHDirectedEffectivePairWeights(
 		return q_index;
 	};
 
-	auto load_center_tensor = [&](int q_index,
-	                              std::array<double, kMaxSHComponents>& tensor) {
-		tensor.fill(0.0);
+	auto load_center_tensor = [&](int q_index, double* tensor) {
+		std::fill(tensor, tensor + kMaxSHComponents, 0.0);
 		const int l = q_l[q_index];
 		for (int m = -l; m <= l; ++m) {
-			const int node = q_nodes[q_index][m + l];
+			const int node = q_nodes[static_cast<size_t>(q_index) * kMaxSHComponents
+				+ static_cast<size_t>(m + l)];
 			tensor[m + l] = moment_vals[node];
 		}
 	};
 
 	const double center_linear = linear_coeffs[nbh.my_type];
-	std::array<double, kMaxSHComponents> t0;
-	std::array<double, kMaxSHComponents> t1;
-	std::array<double, kMaxSHComponents> t2;
-	std::array<double, kMaxSHComponents> t3;
-	std::array<double, kMaxSHComponents> t4;
-	std::array<double, kMaxSHComponents> left;
-	std::array<double, kMaxSHComponents> right_pair;
-	std::array<double, kMaxSHComponents> right;
-	std::array<double, kMaxSHComponents> scalar;
+	double t0[kMaxSHComponents];
+	double t1[kMaxSHComponents];
+	double t2[kMaxSHComponents];
+	double t3[kMaxSHComponents];
+	double t4[kMaxSHComponents];
+	double left[kMaxSHComponents];
+	double right_pair[kMaxSHComponents];
+	double right[kMaxSHComponents];
+	double scalar[kMaxSHComponents];
 
 	for (int i = 0; i < alpha_scalar_moments; ++i) {
 		const SHScalarInfo& scalar_info = sh_scalar_info_[i];
@@ -2589,45 +2587,43 @@ void MLMTPR::CalcSHDirectedEffectivePairWeights(
 			l3 = q_l[q3];
 			load_center_tensor(q3, t3);
 			CoupleSHTensorArrays(
-				t2.data(), l2, t3.data(), l3, intermediate_l, right_pair.data());
+				t2, l2, t3, l3, intermediate_l, right_pair);
 		}
 		if (scalar_info.body_order >= 6) {
 			q4 = require_q(scalar_info.q[4]);
 			l4 = q_l[q4];
 			load_center_tensor(q4, t4);
 			CoupleSHTensorArrays(
-				right_pair.data(), intermediate_l, t4.data(), l4,
-				intermediate_l, right.data());
+				right_pair, intermediate_l, t4, l4, intermediate_l, right);
 		}
 
 		for (int m0 = -l0; m0 <= l0; ++m0) {
-			const int node = q_nodes[q0][m0 + l0];
+			const int node = q_nodes[static_cast<size_t>(q0) * kMaxSHComponents
+				+ static_cast<size_t>(m0 + l0)];
 			double projection = 0.0;
 			if (scalar_info.body_order == 2) {
 				projection = (m0 == -l0) ? 1.0 : 0.0;
 			} else if (scalar_info.body_order == 3) {
-				t0.fill(0.0);
+				std::fill(t0, t0 + kMaxSHComponents, 0.0);
 				t0[m0 + l0] = 1.0;
-				CoupleSHTensorArrays(t0.data(), l0, t1.data(), l1, 0, scalar.data());
+				CoupleSHTensorArrays(t0, l0, t1, l1, 0, scalar);
 				projection = scalar[0];
 			} else {
-				t0.fill(0.0);
+				std::fill(t0, t0 + kMaxSHComponents, 0.0);
 				t0[m0 + l0] = 1.0;
 				CoupleSHTensorArrays(
-					t0.data(), l0, t1.data(), l1, intermediate_l, left.data());
+					t0, l0, t1, l1, intermediate_l, left);
 				if (scalar_info.body_order == 4) {
 					CoupleSHTensorArrays(
-						left.data(), intermediate_l, t2.data(), l2, 0, scalar.data());
+						left, intermediate_l, t2, l2, 0, scalar);
 					projection = scalar[0];
 				} else if (scalar_info.body_order == 5) {
 					CoupleSHTensorArrays(
-						left.data(), intermediate_l, right_pair.data(),
-						intermediate_l, 0, scalar.data());
+						left, intermediate_l, right_pair, intermediate_l, 0, scalar);
 					projection = scalar[0];
 				} else {
 					CoupleSHTensorArrays(
-						left.data(), intermediate_l, right.data(),
-						intermediate_l, 0, scalar.data());
+						left, intermediate_l, right, intermediate_l, 0, scalar);
 					projection = scalar[0];
 				}
 			}
