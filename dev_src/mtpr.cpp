@@ -2595,11 +2595,15 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 
 	std::vector<DirectedPair> directed_pairs;
 	std::vector<double> edge_basic_values;
+	std::vector<double> edge_basic_weights;
+	const bool use_fast_projection = UseFastCalcEijProjection();
 	for (int ind = 0; ind < cfg.size(); ++ind) {
 		if (use_two_layer_gate)
 			active_two_layer_edge_cache_atom_index_ = ind;
 		const Neighborhood& nbh = neighborhoods[ind];
 		CalcSHMomentValuesOnly(nbh);
+		if (use_fast_projection)
+			CalcSHDirectedEffectivePairWeights(nbh, edge_basic_weights);
 		for (int j = 0; j < nbh.count; ++j) {
 			DirectedPair pair;
 			pair.center = ind;
@@ -2608,8 +2612,11 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 			pair.type_neighbor = nbh.types[j];
 			pair.vec = nbh.vecs[j];
 			pair.dist = nbh.dists[j];
-			pair.energy = CalcSHDirectedEffectivePairEnergy(
-				nbh, j, edge_basic_values);
+			pair.energy = use_fast_projection
+				? CalcSHDirectedEffectivePairEnergyFromWeights(
+					nbh, j, edge_basic_values, edge_basic_weights)
+				: CalcSHDirectedEffectivePairEnergy(
+					nbh, j, edge_basic_values);
 			directed_pairs.push_back(pair);
 		}
 	}

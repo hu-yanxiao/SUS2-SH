@@ -304,6 +304,15 @@ protected:
 	double CalcSHScalarFirstFactorProjection(
 		const SHScalarInfo& scalar_info,
 		const std::vector<double>& edge_basic_values) const;
+	bool UseFastCalcEijProjection() const;
+	void CalcSHDirectedEffectivePairWeights(
+		const Neighborhood& nbh,
+		std::vector<double>& edge_basic_weights) const;
+	double CalcSHDirectedEffectivePairEnergyFromWeights(
+		const Neighborhood& nbh,
+		int neighbor_index,
+		std::vector<double>& edge_basic_values,
+		const std::vector<double>& edge_basic_weights);
 	double CalcSHDirectedEffectivePairEnergy(
 		const Neighborhood& nbh,
 		int neighbor_index,

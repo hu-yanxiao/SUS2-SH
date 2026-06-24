@@ -1,6 +1,7 @@
 /* SUS2-SH real spherical-harmonic evaluation and analytic coefficient gradients. */
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -219,6 +220,34 @@ std::vector<double> CoupleSHTensors(const std::vector<double>& left,
 		}
 	}
 	return out;
+}
+
+void CoupleSHTensorArrays(const double* left,
+                          int l_left,
+                          const double* right,
+                          int l_right,
+                          int l_out,
+                          double* out)
+{
+	std::fill(out, out + 2 * l_out + 1, 0.0);
+	for (int m_left = -l_left; m_left <= l_left; ++m_left) {
+		const double left_value = left[m_left + l_left];
+		if (left_value == 0.0)
+			continue;
+		for (int m_right = -l_right; m_right <= l_right; ++m_right) {
+			const double right_value = right[m_right + l_right];
+			if (right_value == 0.0)
+				continue;
+			const double product = left_value * right_value;
+			for (int m_out = -l_out; m_out <= l_out; ++m_out) {
+				const double coeff = SHRealCouplingCoeff(
+					l_left, m_left, l_right, m_right, l_out, m_out);
+				if (std::abs(coeff) < 1.0e-12)
+					continue;
+				out[m_out + l_out] += coeff * product;
+			}
+		}
+	}
 }
 
 bool SHUsesPrecomputedLmpTable(AnyRadialBasis* radial_basis)
@@ -2444,6 +2473,183 @@ double MLMTPR::CalcSHScalarFirstFactorProjection(
 	const std::vector<double> scalar =
 		CoupleSHTensors(left, intermediate_l, right, intermediate_l, 0);
 	return scalar[0];
+}
+
+bool MLMTPR::UseFastCalcEijProjection() const
+{
+	const char* env = std::getenv("SUS2_SH_CALC_EIJ_FAST");
+	return env == nullptr || std::strcmp(env, "0") != 0;
+}
+
+void MLMTPR::CalcSHDirectedEffectivePairWeights(
+	const Neighborhood& nbh,
+	std::vector<double>& edge_basic_weights) const
+{
+	if (!is_sh_potential_)
+		ERROR("calc-eij currently supports SUS2-SH models only");
+	if (!has_sh_scalar_info_)
+		ERROR("calc-eij requires sh_scalar_info metadata; initialize or rewrite the model with --write-sh-scalar-info");
+	if (TwoLayerResidualEnabled())
+		ERROR("calc-eij does not support two-layer residual models");
+
+	edge_basic_weights.assign(alpha_index_basic_count, 0.0);
+
+	const int q_count = sh_k_max_ * (sh_l_max_ + 1);
+	std::vector<int> q_l(q_count, 0);
+	std::vector<std::array<int, kMaxSHComponents> > q_nodes(q_count);
+	for (int q = 0; q < q_count; ++q)
+		q_nodes[q].fill(-1);
+
+	int cursor = 0;
+	for (int l_iter = sh_l_max_; l_iter >= 0; --l_iter) {
+		for (int k_iter = sh_k_max_ - 1; k_iter >= 0; --k_iter) {
+			const int q_index = cursor++;
+			const int mu = k_iter * (sh_l_max_ + 1) + l_iter;
+			q_l[q_index] = l_iter;
+			for (int m = -l_iter; m <= l_iter; ++m) {
+				int node = -1;
+				for (int i = 0; i < alpha_index_basic_count; ++i) {
+					if (alpha_index_basic_.comp0[i] == mu
+					    && alpha_index_basic_.comp1[i] == l_iter
+					    && alpha_index_basic_.comp2[i] == m) {
+						node = i;
+						break;
+					}
+				}
+				if (node < 0)
+					ERROR("calc-eij could not find a required SH basic tensor component");
+				q_nodes[q_index][m + l_iter] = node;
+			}
+		}
+	}
+
+	auto require_q = [&](int q_index) {
+		if (q_index < 0 || q_index >= q_count)
+			ERROR("calc-eij found an invalid SH scalar q index");
+		return q_index;
+	};
+
+	auto load_center_tensor = [&](int q_index,
+	                              std::array<double, kMaxSHComponents>& tensor) {
+		tensor.fill(0.0);
+		const int l = q_l[q_index];
+		for (int m = -l; m <= l; ++m) {
+			const int node = q_nodes[q_index][m + l];
+			tensor[m + l] = moment_vals[node];
+		}
+	};
+
+	const double center_linear = linear_coeffs[nbh.my_type];
+	std::array<double, kMaxSHComponents> t0;
+	std::array<double, kMaxSHComponents> t1;
+	std::array<double, kMaxSHComponents> t2;
+	std::array<double, kMaxSHComponents> t3;
+	std::array<double, kMaxSHComponents> t4;
+	std::array<double, kMaxSHComponents> left;
+	std::array<double, kMaxSHComponents> right_pair;
+	std::array<double, kMaxSHComponents> right;
+	std::array<double, kMaxSHComponents> scalar;
+
+	for (int i = 0; i < alpha_scalar_moments; ++i) {
+		const SHScalarInfo& scalar_info = sh_scalar_info_[i];
+		if (scalar_info.body_order < 2 || scalar_info.body_order > 6)
+			ERROR("calc-eij found an invalid SH scalar body order");
+		const double scalar_coeff = center_linear
+			* linear_coeffs[species_count + i]
+			* linear_mults[i];
+		if (scalar_coeff == 0.0)
+			continue;
+
+		const int q0 = require_q(scalar_info.q[0]);
+		const int l0 = q_l[q0];
+		int q1 = -1;
+		int q2 = -1;
+		int q3 = -1;
+		int q4 = -1;
+		int l1 = 0;
+		int l2 = 0;
+		int l3 = 0;
+		int l4 = 0;
+		int intermediate_l = 0;
+		if (scalar_info.body_order >= 3) {
+			q1 = require_q(scalar_info.q[1]);
+			l1 = q_l[q1];
+			load_center_tensor(q1, t1);
+		}
+		if (scalar_info.body_order >= 4) {
+			q2 = require_q(scalar_info.q[2]);
+			l2 = q_l[q2];
+			load_center_tensor(q2, t2);
+			intermediate_l = scalar_info.intermediate_l;
+			if (intermediate_l < 0 || intermediate_l > 2 * sh_l_max_)
+				ERROR("calc-eij found an invalid SH intermediate l");
+		}
+		if (scalar_info.body_order >= 5) {
+			q3 = require_q(scalar_info.q[3]);
+			l3 = q_l[q3];
+			load_center_tensor(q3, t3);
+			CoupleSHTensorArrays(
+				t2.data(), l2, t3.data(), l3, intermediate_l, right_pair.data());
+		}
+		if (scalar_info.body_order >= 6) {
+			q4 = require_q(scalar_info.q[4]);
+			l4 = q_l[q4];
+			load_center_tensor(q4, t4);
+			CoupleSHTensorArrays(
+				right_pair.data(), intermediate_l, t4.data(), l4,
+				intermediate_l, right.data());
+		}
+
+		for (int m0 = -l0; m0 <= l0; ++m0) {
+			const int node = q_nodes[q0][m0 + l0];
+			double projection = 0.0;
+			if (scalar_info.body_order == 2) {
+				projection = (m0 == -l0) ? 1.0 : 0.0;
+			} else if (scalar_info.body_order == 3) {
+				t0.fill(0.0);
+				t0[m0 + l0] = 1.0;
+				CoupleSHTensorArrays(t0.data(), l0, t1.data(), l1, 0, scalar.data());
+				projection = scalar[0];
+			} else {
+				t0.fill(0.0);
+				t0[m0 + l0] = 1.0;
+				CoupleSHTensorArrays(
+					t0.data(), l0, t1.data(), l1, intermediate_l, left.data());
+				if (scalar_info.body_order == 4) {
+					CoupleSHTensorArrays(
+						left.data(), intermediate_l, t2.data(), l2, 0, scalar.data());
+					projection = scalar[0];
+				} else if (scalar_info.body_order == 5) {
+					CoupleSHTensorArrays(
+						left.data(), intermediate_l, right_pair.data(),
+						intermediate_l, 0, scalar.data());
+					projection = scalar[0];
+				} else {
+					CoupleSHTensorArrays(
+						left.data(), intermediate_l, right.data(),
+						intermediate_l, 0, scalar.data());
+					projection = scalar[0];
+				}
+			}
+			edge_basic_weights[node] += scalar_coeff * projection;
+		}
+	}
+}
+
+double MLMTPR::CalcSHDirectedEffectivePairEnergyFromWeights(
+	const Neighborhood& nbh,
+	int neighbor_index,
+	std::vector<double>& edge_basic_values,
+	const std::vector<double>& edge_basic_weights)
+{
+	if (edge_basic_weights.size() < static_cast<size_t>(alpha_index_basic_count))
+		ERROR("calc-eij internal edge basic weight buffer is too small");
+
+	CalcSHEdgeBasicValues(nbh, neighbor_index, edge_basic_values);
+	double energy = 0.0;
+	for (int i = 0; i < alpha_index_basic_count; ++i)
+		energy += edge_basic_weights[i] * edge_basic_values[i];
+	return energy;
 }
 
 double MLMTPR::CalcSHDirectedEffectivePairEnergy(
