@@ -1223,6 +1223,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                  zbl_options.typewise,
 		                  zbl_options.typewise_factor);
 	}
+	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
 	const bool requested_two_layer_gate = opts["two-layer-gate"] != "";
 	const bool requested_two_layer_gate_shared_radial =
 		opts["two-layer-gate-shared-radial"] != "";
@@ -1565,6 +1566,30 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 #endif
 	}
          trainer.shift(do_shift);
+	const bool run_initial_untrained_linear_warmup =
+		!loaded_complete_parameters && maxits > 0 && !two_layer_residual_staged;
+	if (run_initial_untrained_linear_warmup) {
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "Initial untrained model warmup Rescale start"
+			          << std::endl;
+		if (trainer.TrainRankActive())
+			Rescale(trainer, mtpr, linear_training_neighborhoods_ptr);
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "Initial untrained model warmup linear solve start"
+			          << std::endl;
+		if (trainer.TrainRankActive())
+			trainer.TrainLinear(prank,
+			                    training_set,
+			                    linear_training_neighborhoods_ptr,
+			                    "initial untrained model warmup");
+		trainer.BroadcastCoeffsWorld();
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "Initial untrained model warmup rescale+linear solve done"
+			          << std::endl;
+	}
 	if (!mtpr.inited && maxits > 0 && !skip_preinit && !two_layer_residual_staged) {
 		trainer.max_step_count = 75;
 //		trainer.random_sample(prank, training_set);

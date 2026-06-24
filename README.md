@@ -130,6 +130,7 @@ Common training options:
 | `--do-lin-rescale` | Run the subset rescale pass before the full-data `TrainLinear` solve used by `--do-lin`. |
 | `--do-lin-steps=<int>` | Number of accepted BFGS steps for which `--do-lin` stays active, default `1000`. |
 | `--do-lin-freq=<int>` | Run `TrainLinear` every N accepted BFGS steps while `--do-lin` is active, default `50`. |
+| implicit initial linear warmup | Untrained or incomplete initial models run one rescale plus full-data `TrainLinear` warmup before BFGS even without `--do-lin`; complete trained models do not unless requested by explicit options. |
 | `--fine-tune` | Continue from a complete trained model, freeze scaling coefficients, and run one initial rescale plus linear solve before BFGS. |
 | `--do-samp` | Disable random sampling used in pre-training. |
 | `--skip-preinit` | Skip the 75 preliminary iterations used when parameters are not given. |
