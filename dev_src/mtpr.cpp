@@ -2587,7 +2587,7 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 		two_layer_full_edge_cache_for_next_calc_ = false;
 		two_layer_reuse_full_edge_cache_once_ = false;
 		two_layer_forward_final_moment_cache_ready_ = false;
-		BuildTwoLayerEdgePrimitiveCache(neighborhoods, false);
+		BuildTwoLayerEdgePrimitiveCache(neighborhoods, false, false);
 		PrepareTwoLayerGateValues(cfg, neighborhoods);
 		active_two_layer_gate_values_ = &two_layer_gate_values_;
 		active_two_layer_gate_adjoints_ = nullptr;

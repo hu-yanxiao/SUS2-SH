@@ -2251,7 +2251,7 @@ void MLMTPR::CalcSHEdgeBasicValues(const Neighborhood& nbh,
 
 	const double* sh_values_use = sh_values;
 	const double* radial_values_use = radial_values.data();
-	if (HasTwoLayerEdgePrimitiveCache(-1, false)) {
+	if (HasTwoLayerEdgePrimitiveCache(-1, false, false)) {
 		const size_t edge = TwoLayerEdgePrimitiveOffset(-1, neighbor_index);
 		sh_values_use =
 			two_layer_edge_sh_values_cache_.data() + edge * sh_count;
