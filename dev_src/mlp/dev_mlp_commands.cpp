@@ -1316,7 +1316,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"         --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full (default=mu-body-linear-combo),\n"
 				"         --two-layer-gate-tanh-amplitude=<double> (default=0.8),\n"
 			"         --two-layer-gate-site-mode=neighbor|double (default=neighbor),\n"
-			"         --two-layer-gate-shared-radial,\n"
+			"         --two-layer-gate-shared-radial (default for gate models),\n"
 			"         --two-layer-residual (rejected by mu-body-order gate models),\n"
 			"         --zbl-elements=<...>, --zbl-inner=<r>, --zbl-outer=<r>,\n"
 			"         --zbl-typewise-cutoff-factor=<factor>\n"

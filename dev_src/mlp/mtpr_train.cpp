@@ -1247,7 +1247,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ERROR("--two-layer-residual is not supported by mu-body-order gate models");
 		if (opts["two-layer-gate-body-order"] != "")
 			ERROR("--two-layer-gate-body-order is not used by mu-body-order gate models; use --body-order >= --k-max + 1.");
-		plain_to_gate_independent_radial = requested_two_layer_gate_shared_radial;
+		plain_to_gate_independent_radial = true;
 		mtpr.UpgradePlainSHToTwoLayerGate(plain_to_gate_body_order,
 		                                  plain_to_gate_independent_radial,
 		                                  two_layer_gate_site_mode,

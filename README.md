@@ -166,9 +166,9 @@ M_i,mu,m^main =
 ```
 
 `A` is controlled by `--two-layer-gate-tanh-amplitude` and defaults to `0.8`.
-The additive coefficients `a_Z,mu` are initialized to `1.0`. With
-`--two-layer-gate-shared-radial`, the gate residual layer uses its own trained
-radial contraction coefficients for the first-layer `B_i^gate`. In code `k_mu`
+The additive coefficients `a_Z,mu` are initialized to `1.0`. Gate models use
+their own trained radial contraction coefficients for the first-layer
+`B_i^gate` by default. In code `k_mu`
 is zero-based, so the exact scalar body order is `k_internal + 2`; therefore
 `--two-layer-gate` requires `--body-order >= --k-max + 1`.
 
@@ -186,7 +186,6 @@ bin/mlp-sus2 train train.cfg --init-sh \
   --radial-basis-size=10 \
   --radial-basis-type=RBLaguerre_log1p \
   --two-layer-gate \
-  --two-layer-gate-shared-radial \
   --two-layer-gate-tanh-amplitude=0.8 \
   --energy-weight=1 \
   --force-weight=0.01 \
@@ -203,7 +202,6 @@ Continue a trained or partially trained plain SH model as a gate model:
 ```bash
 bin/mlp-sus2 train plain_sh.mtp train.cfg \
   --two-layer-gate \
-  --two-layer-gate-shared-radial \
   --curr-pot-name=current_gate.mtp \
   --trained-pot-name=gate.mtp
 ```
@@ -215,7 +213,7 @@ Gate-specific options:
 | `--two-layer-gate` | Add two-layer gate metadata to a new SH model, or upgrade a plain SH model before continuing training. |
 | `--two-layer-gate-body-order=<int>` | Not supported in mu-body-order mode; passing it explicitly is an error. The gate scalar body orders are fixed by `k_internal + 2`. |
 | `--two-layer-gate-site-mode=neighbor|double` | Select neighbor-only gate factors or the double-site gate \(g_i g_j\); default `neighbor`. |
-| `--two-layer-gate-shared-radial` | Train an independent first-layer gate radial contraction table instead of reusing the main radial coefficients. |
+| `--two-layer-gate-shared-radial` | Compatibility switch for the default behavior: gate models use an independent first-layer radial contraction table. |
 | `--two-layer-gate-tanh-amplitude=<double>` | Bounded additive amplitude `A` in `[1 + A tanh(a f)]`; default `0.8`, accepted range `[0,1]`. |
 | `--inline-sh-model=<path>` | In `train train.cfg --init-sh`, create this file if missing or continue from it if it already exists. |
 | `--two-layer-residual` | Experimental residual two-layer mode `E=E0+E1`; not the current production gate path. |
@@ -224,8 +222,8 @@ Gate-specific options:
 | `--stage-b-steps=<int>` | BFGS steps for residual stage B. |
 | `--stage-c-steps=<int>` | BFGS steps for residual stage C. |
 
-For current production work, use `--two-layer-gate
---two-layer-gate-shared-radial` with the tanh additive form above. Legacy direct
+For current production work, use `--two-layer-gate`
+with the tanh additive form above. Legacy direct
 gate modes are retained only for model compatibility and testing.
 
 ## Effective Pair Energy CLI

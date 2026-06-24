@@ -740,8 +740,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const std::string rbasis = CanonicalRadialBasisType(StringOpt(opts, "radial-basis-type", "RBChebyshev_sss"));
 	const SHFactorPruning factor_pruning = ParseFactorPruning(opts);
 	const bool two_layer_gate = HasOpt(opts, "two-layer-gate");
-	const bool two_layer_gate_shared_radial =
+	const bool requested_two_layer_gate_shared_radial =
 		HasOpt(opts, "two-layer-gate-shared-radial");
+	const bool two_layer_gate_shared_radial = two_layer_gate;
 	const bool two_layer_residual = HasOpt(opts, "two-layer-residual");
 	const int two_layer_gate_body_order = kmax + 1;
 	const double two_layer_gate_tanh_amplitude =
@@ -783,7 +784,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-site-mode should be 'neighbor' or 'double'.");
 	if (HasOpt(opts, "two-layer-gate-site-mode") && !two_layer_gate)
 		ERROR("--two-layer-gate-site-mode requires --two-layer-gate.");
-	if (two_layer_gate_shared_radial && !two_layer_gate)
+	if (requested_two_layer_gate_shared_radial && !two_layer_gate)
 		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate.");
 	if (two_layer_residual && !two_layer_gate)
 		ERROR("--two-layer-residual requires --two-layer-gate.");

@@ -611,7 +611,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 					"    --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full: gate scalar parameterization. Default=mu-body-linear-combo\n"
 					"    --two-layer-gate-tanh-amplitude=<double>: bounded additive gate amplitude. Default=0.8\n"
 				"    --two-layer-gate-site-mode=neighbor|double: gate on neighbor j only, or on center i and neighbor j. Default=neighbor\n"
-				"    --two-layer-gate-shared-radial: give the gate independent radial contraction coefficients.\n"
+				"    --two-layer-gate-shared-radial: keep the default independent gate radial contraction coefficients.\n"
 					"    --two-layer-residual: rejected by mu-body-order gate models.\n"
 			"    --two-layer-residual-staged: train residual two-layer model in A(E0), B(E1 residual), C(full) phases.\n"
 			"    --stage-a-steps=<int>: BFGS steps for residual stage A. Default=0\n"
