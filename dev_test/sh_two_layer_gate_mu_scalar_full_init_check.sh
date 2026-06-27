@@ -60,18 +60,25 @@ if not idx_match:
 scalar_count = len([x for x in idx_match.group(1).split(",") if x.strip()])
 
 additive_count = int_value("two_layer_gate_additive_coeff_count")
+type_count = int_value("two_layer_gate_type_coeff_count")
 weight_count = int_value("two_layer_gate_weight_count")
 weights = float_list("two_layer_gate_weights")
 mix_count_match = re.search(r"^two_layer_gate_body_mix_weight_count\s*=", text, re.M)
 mix_weights = float_list("two_layer_gate_body_mix_weights", required=False)
 additive = float_list("two_layer_gate_additive_coeffs")
+type_coeffs = float_list("two_layer_gate_type_coeffs")
 
-if additive_count != species:
-    raise SystemExit(f"expected additive count {species}, got {additive_count}")
+expected_additive_count = species * radial_func_count
+if additive_count != expected_additive_count:
+    raise SystemExit(f"expected type/mu additive count {expected_additive_count}, got {additive_count}")
 if len(additive) != additive_count:
     raise SystemExit("additive list length mismatch")
 if any(abs(x - 1.0) > 1e-14 for x in additive):
     raise SystemExit("additive coefficients should initialize to 1")
+if type_count != species:
+    raise SystemExit(f"expected gate type coeff count {species}, got {type_count}")
+if len(type_coeffs) != type_count:
+    raise SystemExit("gate type coeff list length mismatch")
 
 expected_weight_count = radial_func_count * scalar_count
 if weight_count != expected_weight_count:
