@@ -927,7 +927,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		for (int i = 0; i < gate_additive_count; ++i) {
 			if (i != 0)
 				ofs << ", ";
-				ofs << 1.0;
+				ofs << (1.0 / 12.0);
 			}
 			ofs << "}\n";
 			ofs << "two_layer_gate_type_coeff_count = " << species_count << "\n";
@@ -954,7 +954,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		for (int i = 0; i < gate_weight_count; ++i) {
 			if (i != 0)
 				ofs << ", ";
-			ofs << (two_layer_gate_mode == "mu-scalar-full" ? 1.0 : 0.0);
+			ofs << 1.0e-1;
 		}
 		ofs << "}\n";
 			if (two_layer_gate_mode == "mu-body-linear-combo") {

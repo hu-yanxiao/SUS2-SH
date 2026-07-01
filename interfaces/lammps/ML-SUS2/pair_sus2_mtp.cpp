@@ -8093,7 +8093,7 @@ access to the buffer size that is not provided in PFR.
         keyword = first_keyword(post_scalar_line);
       } else {
         two_layer_gate_additive_coeffs.assign(
-            static_cast<size_t>(species_count) * radial_func_count, 1.0);
+            static_cast<size_t>(species_count) * radial_func_count, 1.0 / 12.0);
       }
       if (keyword == "two_layer_gate_type_coeff_count") {
         const int gate_type_count = parse_int_assignment(post_scalar_line);

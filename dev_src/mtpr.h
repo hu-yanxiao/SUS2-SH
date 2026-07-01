@@ -702,7 +702,7 @@ public:
 			std::vector<double>& body_scratch) const;
 		double TwoLayerResidualE0Coeff(int scalar_index) const;
 		void InitializeTwoLayerGateRadialCoeffsFromBase();
-		void InitializeTwoLayerGateAdditiveCoeffs(double value = 1.0);
+		void InitializeTwoLayerGateAdditiveCoeffs(double value = 1.0 / 12.0);
 		void InitializeTwoLayerGateTypeCoeffsFromBase();
 		int EnforcePositiveRadialFirstCoeffs(double min_value = 1.0e-12);
 	bool IsRadialFirstCoeff(int coeff_index) const;

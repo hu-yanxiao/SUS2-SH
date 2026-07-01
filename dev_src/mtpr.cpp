@@ -931,9 +931,7 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 	two_layer_gate_bias_ = 1.0;
 	InitializeTwoLayerGateAdditiveCoeffs();
 	InitializeTwoLayerGateTypeCoeffsFromBase();
-	two_layer_gate_weights_.assign(
-		TwoLayerGateWeightCount(),
-		TwoLayerGateUsesFullScalarWeights() ? 1.0 : 0.0);
+	two_layer_gate_weights_.assign(TwoLayerGateWeightCount(), 1.0e-1);
 	two_layer_gate_body_mix_weights_.assign(TwoLayerGateBodyMixWeightCount(), 1.0);
 	two_layer_residual_e0_coeffs_.clear();
 
