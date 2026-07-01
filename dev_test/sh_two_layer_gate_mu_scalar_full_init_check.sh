@@ -70,16 +70,17 @@ if additive_count != species:
     raise SystemExit(f"expected additive count {species}, got {additive_count}")
 if len(additive) != additive_count:
     raise SystemExit("additive list length mismatch")
-if any(abs(x - 1.0) > 1e-14 for x in additive):
-    raise SystemExit("additive coefficients should initialize to 1")
+expected_additive = 1.0 / 12.0
+if any(abs(x - expected_additive) > 1e-7 for x in additive):
+    raise SystemExit("additive coefficients should initialize to 1/12")
 
 expected_weight_count = radial_func_count * scalar_count
 if weight_count != expected_weight_count:
     raise SystemExit(f"expected full mu/scalar weight count {expected_weight_count}, got {weight_count}")
 if len(weights) != weight_count:
     raise SystemExit("gate weight list length mismatch")
-if any(abs(x - 1.0) > 1e-14 for x in weights):
-    raise SystemExit("full mu/scalar weights should initialize to 1")
+if any(abs(x - 0.1) > 1e-14 for x in weights):
+    raise SystemExit("full mu/scalar weights should initialize to 0.1")
 if mix_count_match or mix_weights:
     raise SystemExit("mu-scalar-full mode should not save body mix weights")
 

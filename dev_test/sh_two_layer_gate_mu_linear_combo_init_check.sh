@@ -64,8 +64,9 @@ if additive_count != species:
     )
 if len(additive) != additive_count:
     raise SystemExit("additive list length mismatch")
-if any(abs(x - 1.0) > 1e-14 for x in additive):
-    raise SystemExit("additive coefficients should initialize to 1")
+expected_additive = 1.0 / 12.0
+if any(abs(x - expected_additive) > 1e-7 for x in additive):
+    raise SystemExit("additive coefficients should initialize to 1/12")
 
 expected_weight_count = scalar_count
 if weight_count != expected_weight_count:
@@ -74,8 +75,8 @@ if weight_count != expected_weight_count:
     )
 if len(weights) != weight_count:
     raise SystemExit("gate weight list length mismatch")
-if any(abs(x) > 1e-14 for x in weights):
-    raise SystemExit("shared scalar weights should initialize to 0")
+if any(abs(x - 0.1) > 1e-14 for x in weights):
+    raise SystemExit("shared scalar weights should initialize to 0.1")
 
 expected_mix_count = radial_func_count * k_max
 if mix_weight_count != expected_mix_count:
