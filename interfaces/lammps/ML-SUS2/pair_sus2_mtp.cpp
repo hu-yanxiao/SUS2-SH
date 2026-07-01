@@ -7490,7 +7490,7 @@ access to the buffer size that is not provided in PFR.
         post_scalar_line = std::string(tfr.next_line());
         keyword = first_keyword(post_scalar_line);
       } else {
-        two_layer_gate_additive_coeffs.assign(species_count, 1.0);
+        two_layer_gate_additive_coeffs.assign(species_count, 1.0 / 12.0);
       }
       if (keyword != "two_layer_gate_weight_count")
         error->one(FLERR, "SUS2-SH two-layer gate is missing two_layer_gate_weight_count.");
